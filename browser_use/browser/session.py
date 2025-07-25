@@ -1179,6 +1179,13 @@ class BrowserSession(BaseModel):
 						for arg in chrome_args:
 							if not arg.startswith('--remote-debugging-port='):
 								final_args.append(arg)
+						if self.browser_profile.proxy:
+							px = self.browser_profile.proxy.get('server')
+							final_args.append(f'--proxy-server={px}')
+						if self.browser_profile.headless:
+							final_args.append('--headless=new')
+						if self.browser_profile.keep_alive:
+							final_args.append('--remote-debugging-pipe')
 						final_args.extend(
 							[
 								f'--remote-debugging-port={debug_port}',
