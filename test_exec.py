@@ -1,6 +1,7 @@
 import os
 import asyncio
 import sys
+import yaml
  
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -27,6 +28,11 @@ class TestRunConfig:
     proxy_host: str | None
     llm_api_key: str | None
     llm_model: str
+
+def load_test_from_yaml(file_path: str):
+    with open(file_path, 'r') as file:
+        test_data = yaml.safe_load(file)
+    return test_data['test']
  
 def create_test_run_agent(config: TestRunConfig, use_proxy: bool = False) -> Agent:
     
@@ -60,7 +66,6 @@ def create_test_run_agent(config: TestRunConfig, use_proxy: bool = False) -> Age
                     * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped. Can use {{is_load_complete}} tool\n
                     * Scrolling smoothy\n
                 - Step 9: Finally, use the {{screenshot}} tool to capture full-page screenshot and save as 'screenshot_px.png'.\n
- 
         '''
     else:
         browser_session = BrowserSession(
@@ -177,5 +182,9 @@ async def main():
     except Exception as e:
         print(e)
  
+def main2():
+    tests = load_test_from_yaml('test_scripts.yaml')
+    for test in tests:
+        steps = test['TestSteps']
 if __name__ == "__main__":
     asyncio.run(main())

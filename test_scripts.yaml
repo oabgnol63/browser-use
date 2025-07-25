@@ -1,0 +1,47 @@
+shared_params:
+  &default_waits
+  short: 10
+  medium: 30
+  long: 60
+
+  &proxy
+  url: http://proxy.surfcrew.com:3129
+  username: msc@capp.com
+  password: 1
+
+  &tools
+  screenshot: screenshot
+  is_load_complete: is_load_complete
+
+tests:
+- TestName: load_page_proxy
+  TestID: 1
+  TestParams:
+    <<: [*default_waits, *proxy, *tools]
+    url: https://nbcnews.com
+  TestSteps:
+    - Step 1: Go to '{TestParams.url}'
+    - Step 2: Wait 10 seconds. If a window prompted for proxy authentication: input {TestParams.proxy.username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4
+    - Step 3: Wait 10 seconds for the password page loaded. Input {TestParams.proxy.password} for password and click "Log in"
+    - Step 4: Wait for 20 seconds for browser to redirect to the website
+    - Step 5: After the website is loaded, wait 60 seconds for all elements loaded completely. If not, reload the page and repeat this step, max 2 times
+    - Step 6: Scroll down till the end of the page and up to top 2 times to make sure it smoothly
+    - Step 7: Evaluate if the website is fully loaded or not using {TestParams.tools.is_load_complete} tool.If not loaded fully, wait for more 60 seconds, max 1 time
+    - Step 8: Evalute the result: The test pass if it meets criteria:
+        * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped. Can use {TestParams.tools.is_load_complete} tool
+        * Scrolling smoothy
+    - Step 9: Finally, use the {TestParams.tools.screenshot} tool to capture full-page screenshot and save as 'screenshot_px.png'.
+
+- TestName: load_page_no_proxy
+  TestID: 2
+  TestParams:
+    <<: [*default_waits, *proxy, *tools]
+    url: https://nbcnews.com
+  TestSteps:
+    - Step 1: Go to '{TestParams.url}'
+    - Step 2: Wait for 20 seconds for browser to redirect to the website
+    - Step 3: After the website is loaded, wait 60 seconds for all elements loaded completely.
+    - Step 4: Scroll down till the end of the page and up again a 2 times to make sure it work perfectly
+    - Step 5: Evaluate if the website is fully loaded or not using {TestParams.tools.is_load_complete} tool.If not loaded fully, wait for more 60 seconds, max 1 time
+    - Step 6: Finally, use the {TestParams.tools.screenshot} tool to capture full-page screenshot and save as 'screenshot_no_px.png'.
+
