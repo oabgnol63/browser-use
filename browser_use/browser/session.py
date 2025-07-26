@@ -1182,6 +1182,7 @@ class BrowserSession(BaseModel):
 						if self.browser_profile.proxy:
 							px = self.browser_profile.proxy.get('server')
 							final_args.append(f'--proxy-server={px}')
+							final_args.append('--ignore-certificate-errors')
 						if self.browser_profile.headless:
 							final_args.append('--headless=new')
 						if self.browser_profile.keep_alive:
