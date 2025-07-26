@@ -3,7 +3,7 @@ import asyncio
 import sys
 import yaml
 
-from typing import Optional, Any
+from typing import Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from browser_use.browser import BrowserSession, BrowserProfile
@@ -18,32 +18,34 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
  
 if not os.getenv('GOOGLE_API_KEY'):
     raise ValueError('GOOGLE_API_KEY is not set. Please add it to your environment variables.')
- 
+PROXY_HOST = os.getenv('PROXY_HOST', "http://proxy.surfcrew.com:3129")
 @dataclass
 class TestRunConfig:
-    proxy_username: Optional[str]
-    proxy_pwd: Optional[str]
-    proxy_host: Optional[str]
-    llm_api_key: Optional[str]
-    llm_model: Optional[str]
     task: str
+    proxy_host: str = PROXY_HOST
+    proxy_username: Optional[str] = None
+    proxy_pwd: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_model: Optional[str] = "gemini-2.5-flash"
+    use_proxy: bool = False
 
 def load_test_from_yaml(file_path: str):
     with open(file_path, 'r') as file:
         test_data = yaml.safe_load(file)
     return test_data['tests']
  
-def create_test_run_agent(config: TestRunConfig, use_proxy: bool = False) -> Agent:
+def create_test_run_agent(config: TestRunConfig) -> Agent:
     
-    if use_proxy:
+    if config.use_proxy:
         proxy_settings: ProxySettings = {
-            "server": config.proxy_host if config.proxy_host else "http://proxy.surfcrew.com"
+            "server": config.proxy_host
         }
         br_profile = BrowserProfile(
             headless=False,
             proxy=proxy_settings,
             # Using user_data_dir=None ensures a clean, temporary profile for the test.
             user_data_dir=None,
+            # keep_alive=True,
         )
         browser_session = BrowserSession(
             browser_profile=br_profile,
@@ -126,39 +128,36 @@ def create_test_run_agent(config: TestRunConfig, use_proxy: bool = False) -> Age
     return agent
  
 async def main():
-    tests = load_test_from_yaml('test_scripts.yaml')
-    for test in tests:
-        print(test)
-        steps_dict = test['TestSteps']
-        param = test['TestParams']
-        steps_string = '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**param)
-        print(steps_string)
-        use_proxy = test['TestParams'].get('use_proxy', False)
-        if use_proxy:
-            test_run_config = TestRunConfig(
+    try:
+        tests = load_test_from_yaml('test_scripts.yaml')
+        for test in tests:
+            px_steps_dict = test['TestStepsPXY']
+            npx_steps_dict = test.get('TestSteps', None)
+            params = test['TestParams']
+            px_steps_string = '\n'.join(key + ': ' + value for key, value in px_steps_dict.items()).format(**params)
+            npx_steps_string = '\n'.join(key + ': ' + value for key, value in npx_steps_dict.items()).format(**params)
+            px_test_run_config = TestRunConfig(
                 proxy_username=os.getenv("PROXY_USERNAME"),
                 proxy_pwd=os.getenv("PROXY_PWD"),
-                proxy_host=os.getenv("PROXY_HOST"),
+                proxy_host=PROXY_HOST,
                 llm_api_key=os.getenv("GOOGLE_API_KEY"),
                 llm_model="gemini-2.5-pro", 
-                task=steps_string
+                task=px_steps_string,
+                use_proxy=True
             )
-            agent_px = create_test_run_agent(test_run_config, use_proxy=True)
-       
-        else: 
-            test_run_config = TestRunConfig(
-                proxy_username=None,
-                proxy_pwd=None,
-                proxy_host=None,
-                llm_api_key=os.getenv("GOOGLE_API_KEY"),
-                llm_model="gemini-2.5-flash",
-                task=steps_string
-            )
-            agent_no_px = create_test_run_agent(test_run_config, use_proxy=False)
-
-    await asyncio.gather(agent_px.run(), agent_no_px.run())
-    await agent_px.close()
-    await agent_no_px.close()
+            agent_px = create_test_run_agent(px_test_run_config)
+            if npx_steps_dict:
+                npx_test_run_config = TestRunConfig(
+                    llm_api_key=os.getenv("GOOGLE_API_KEY"),
+                    llm_model="gemini-2.5-flash",
+                    task=npx_steps_string
+                )
+                agent_no_px = create_test_run_agent(npx_test_run_config)
+            await asyncio.gather(agent_px.run(), agent_no_px.run())
+            await agent_px.close()
+            await agent_no_px.close()
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -16,13 +16,12 @@ tools:
   tool_is_load_complete: is_load_complete
 
 tests:
-- TestName: load_page_proxy
+- TestName: load_page
   TestID: 1
   TestParams:
     <<: [*default_waits, *proxy, *tools]
     url: https://nbcnews.com
-    use_proxy: true
-  TestSteps:
+  TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'Wait 10 seconds. If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Wait 10 seconds for the password page loaded. Input {proxy_password} for password and click "Log in"'
@@ -34,13 +33,6 @@ tests:
         * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped. Can use {tool_is_load_complete} tool
         * Scrolling smoothy'
     Step 9: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "screenshot_px.png"'
-
-- TestName: load_page_no_proxy
-  TestID: 2
-  TestParams:
-    <<: [*default_waits, *proxy, *tools]
-    url: https://nbcnews.com
-    use_proxy: false
   TestSteps:
     Step 1: Go to {url}
     Step 2: Wait for 20 seconds for browser to redirect to the website
