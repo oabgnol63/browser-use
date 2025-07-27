@@ -4,12 +4,6 @@ waittime:
   wait_medium: 30
   wait_long: 60
 
-proxy:
-  &proxy
-  proxy_url: 'http://proxy.surfcrew.com:3129'
-  proxy_username: msc@capp.com
-  proxy_password: 1
-
 tools:
   &tools
   tool_screenshot: screenshot
@@ -19,25 +13,66 @@ tests:
 - TestName: load_page
   TestID: 1
   TestParams:
-    <<: [*default_waits, *proxy, *tools]
+    <<: [*default_waits, *tools]
     url: https://nbcnews.com
   TestStepsPXY:
     Step 1: 'Go to {url}' 
-    Step 2: 'Wait 10 seconds. If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
-    Step 3: 'Wait 10 seconds for the password page loaded. Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait for 20 seconds for browser to redirect to the website'
-    Step 5: 'After the website is loaded, wait 60 seconds for all elements loaded completely. If not, reload the page and repeat this step, max 2 times'
-    Step 6: 'Scroll down till the end of the page and up to top 2 times to make sure it smoothly'
-    Step 7: 'Evaluate if the website is fully loaded or not using {tool_is_load_complete} tool.If not loaded fully, wait for more 60 seconds, max 1 time'
-    Step 8: 'Evalute the result: The test pass if it meets criteria:
-        * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped. Can use {tool_is_load_complete} tool
+    Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait for the website to load completely'
+    Step 5: 'Scroll down till the end of the page and up to top 2 times to make sure it smoothly'
+    Step 6: 'Evaluate if the website is fully loaded or not. If not loaded fully, wait. Max 1 time'
+    Step 7: 'Evalute the result. The test pass/fail following criteria:
+        * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped.
         * Scrolling smoothy'
-    Step 9: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "screenshot_px.png"'
+    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
   TestSteps:
     Step 1: Go to {url}
-    Step 2: Wait for 20 seconds for browser to redirect to the website
-    Step 3: After the website is loaded, wait 60 seconds for all elements loaded completely.
-    Step 4: Scroll down till the end of the page and up again a 2 times to make sure it work perfectly
-    Step 5: Evaluate if the website is fully loaded or not using {tool_is_load_complete} tool.If not loaded fully, wait for more 60 seconds, max 1 time
-    Step 6: Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "screenshot_no_px.png".
+    Step 2: After the website is loaded, wait for all elements loaded completely.
+    Step 3: Scroll down till the end of the page and up again a 2 times to make sure it work perfectly
+    Step 4: Evaluate if the website is fully loaded or not using {tool_is_load_complete} tool.If not loaded fully, wait for more 60 seconds, max 1 time
+    Step 5: Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png".
 
+- TestName: mouse_event
+  TestID: 2
+  TestParams:
+    <<: [*default_waits, *tools]
+    url: https://nbcnews.com
+  TestStepsPXY:
+    Step 1: 'Go to {url}' 
+    Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait all elements loaded completely. If not complete, reload the page and repeat this step, max 2 times'
+    Step 5: 'On the homepage, locate and click on the dropdown menu button'
+    Step 6: 'Locate and click on **World** section'
+    Step 7: 'Evalute the result: Return passed/failed following criteria:
+        * The menus should respond to on click event and support navigation to the required entry'
+    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+  TestSteps:
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait all elements loaded completely. If not complete, reload the page and repeat this step, max 2 times'
+    Step 3: 'On the homepage, locate and click on the dropdown menu button'
+    Step 4: 'Locate and click on **World** section'
+    Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+
+- TestName: nbcnews_com_navigation_5
+  TestID: 3
+  TestParams:
+    <<: [*default_waits, *tools]
+    url: https://nbcnews.com
+  TestStepsPXY:
+    Step 1: 'Go to {url}' 
+    Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait 10 seconds for the webpage to load. If not, reload the page and repeat this step, max 2 times'
+    Step 5: 'Identify and click any news link under the header "Most Popular".'
+    Step 6: 'Click "back" button, wait for the page to load, click "forward" button, wait for the load, click the back button again'
+    Step 7: 'Evalute the result: Return passed/failed following criteria:
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
+    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+  TestSteps:
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait the website to load.'
+    Step 3: 'Identify and click any news link under the header "Most Popular".'
+    Step 4: 'Click "back" button, wait for the page to load, click "forward" button, wait for the load, click the back button again'
+    Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
