@@ -8,9 +8,10 @@ tools:
   &tools
   tool_screenshot: screenshot
   tool_is_load_complete: is_load_complete
+  tool_go_forward: go_forward
 
 tests:
-- TestName: load_page
+- TestName: nbcnews_com_initial_page_load_5
   TestID: 1
   TestParams:
     <<: [*default_waits, *tools]
@@ -21,7 +22,7 @@ tests:
     Step 3: 'Input {proxy_password} for password and click "Log in"'
     Step 4: 'Wait for the website to load completely'
     Step 5: 'Scroll down till the end of the page and up to top 2 times to make sure it smoothly'
-    Step 6: 'Evaluate if the website is fully loaded or not. If not loaded fully, wait. Max 1 time'
+    Step 6: 'If web elements are not loaded completely, wait them. Maximum wait time is 60 seconds'
     Step 7: 'Evalute the result. The test pass/fail following criteria:
         * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped.
         * Scrolling smoothy'
@@ -30,10 +31,10 @@ tests:
     Step 1: Go to {url}
     Step 2: After the website is loaded, wait for all elements loaded completely.
     Step 3: Scroll down till the end of the page and up again a 2 times to make sure it work perfectly
-    Step 4: Evaluate if the website is fully loaded or not using {tool_is_load_complete} tool.If not loaded fully, wait for more 60 seconds, max 1 time
+    Step 4: If web elements are not loaded completely, wait them. Maximum wait time is 60 seconds
     Step 5: Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png".
 
-- TestName: mouse_event
+- TestName: nbcnews_com_mouse_event_5
   TestID: 2
   TestParams:
     <<: [*default_waits, *tools]
@@ -42,17 +43,17 @@ tests:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait all elements loaded completely. If not complete, reload the page and repeat this step, max 2 times'
+    Step 4: 'Wait for the website to load completely'
     Step 5: 'On the homepage, locate and click on the dropdown menu button'
-    Step 6: 'Locate and click on **World** section'
+    Step 6: 'Locate and click on **World** section. Wait for the new page to load'
     Step 7: 'Evalute the result: Return passed/failed following criteria:
         * The menus should respond to on click event and support navigation to the required entry'
     Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
   TestSteps:
     Step 1: 'Go to {url}'
-    Step 2: 'Wait all elements loaded completely. If not complete, reload the page and repeat this step, max 2 times'
+    Step 2: 'Wait for the website to load completely'
     Step 3: 'On the homepage, locate and click on the dropdown menu button'
-    Step 4: 'Locate and click on **World** section'
+    Step 4: 'Locate and click on **World** section.  Wait for the new page to load'
     Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
 
 - TestName: nbcnews_com_navigation_5
@@ -64,15 +65,61 @@ tests:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait 10 seconds for the webpage to load. If not, reload the page and repeat this step, max 2 times'
-    Step 5: 'Identify and click any news link under the header "Most Popular".'
-    Step 6: 'Click "back" button, wait for the page to load, click "forward" button, wait for the load, click the back button again'
-    Step 7: 'Evalute the result: Return passed/failed following criteria:
+    Step 4: 'Wait for the website to load completely'
+    Step 5: 'Identify and click any news link under the header "Most Popular". Wait for the new page to load completely'
+    Step 6: 'Click "go back" button, wait for the page to load completely'
+    Step 7: 'Click "go forward" button using {tool_go_forward}, wait for the page to load completely'
+    Step 8: 'Click "go back" button again, wait for the page to load completely'
+    Step 9: 'Evalute the result: Return passed/failed following criteria:
         * At the end of back-forward-back button testing cycle, the homepage should be displayed'
-    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 10: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait the website to load.'
     Step 3: 'Identify and click any news link under the header "Most Popular".'
     Step 4: 'Click "back" button, wait for the page to load, click "forward" button, wait for the load, click the back button again'
     Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+
+- TestName: nbcnews_com_keyboard_input_5
+  TestID: 4
+  TestParams:
+    <<: [*default_waits, *tools]
+    url: https://nbcnews.com
+  TestStepsPXY:
+    Step 1: 'Go to {url}' 
+    Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait for the website to load completely'
+    Step 5: 'On the homepage, locate and click on the dropdown menu button'
+    Step 6: 'Locate the search box and search for "Money". Wait for the new page to load completely'
+    Step 7: 'Evalute the result: Return passed/failed following criteria:
+        * The search results context should contain "Money"'
+    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+  TestSteps:
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait for the website to load completely'
+    Step 3: 'On the homepage, locate and click on the dropdown menu button'
+    Step 4: 'Locate the search box and search for "Money". Wait for the new page to load completely'
+    Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+
+# - TestName: nbcnews_com_html5_video_playback_2
+#   TestID: 5
+#   TestParams:
+#     <<: [*default_waits, *tools]
+#     url: https://nbcnews.com
+#   TestStepsPXY:
+#     Step 1: 'Go to {url}' 
+#     Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+#     Step 3: 'Input {proxy_password} for password and click "Log in"'
+#     Step 4: 'Wait for the website to load completely'
+#     Step 5: 'On the home page, looking for any video (not live) with advertisement. Click on the video to play it'
+#     Step 6: 'Let the advertisement play completely, validate that the video is playing and the sound is on'
+#     Step 7: 'Evalute the result: Return passed/failed following criteria:
+#         * The video should be playing with sound on'
+#     Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+#   TestSteps:
+#     Step 1: 'Go to {url}'
+#     Step 2: 'Wait for the website to load completely'
+#     Step 3: 'On the home page, looking for any video (not live) with advertisement. Click on the video to play it'
+#     Step 4: 'Let the advertisement play completely, validate that the video is playing and the sound is on'
+#     Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'

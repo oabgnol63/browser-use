@@ -29,6 +29,7 @@ class TestRunConfig:
     llm_api_key: Optional[str] = None
     llm_model: Optional[str] = "gemini-2.5-flash"
     use_proxy: bool = False
+    real_browser: bool = False
 
 def load_test_from_yaml(file_path: str):
     with open(file_path, 'r') as file:
@@ -47,7 +48,7 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
             # Using user_data_dir=None ensures a clean, temporary profile for the test.
             user_data_dir=None,
             minimum_wait_page_load_time=10,
-            maximum_wait_page_load_time=60
+            maximum_wait_page_load_time=60,
             # keep_alive=True,
         )
         browser_session = BrowserSession(
@@ -56,6 +57,10 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
         
     else:
         browser_session = BrowserSession()
+
+    if config.real_browser:
+        browser_session.browser_profile.executable_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"  # Path to Chrome executable
+        print("Using real browser for testing.")
 
     task = config.task
 
@@ -81,6 +86,15 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
         except Exception as e:
             return ActionResult(error=f"Failed to save screenshot: {e}")
         
+    @controller.action("Simulate the go forward button in the browser.")
+    async def go_forward(browser_session: BrowserSession) -> ActionResult:
+        try:
+            page = await browser_session.get_current_page()
+            await page.go_forward()
+            return ActionResult(extracted_content=f"Successfully navigated forward in the browser history.")
+        except Exception as e:
+            return ActionResult(error=f"Failed to navigate forward: {e}")
+
     # @controller.action("Evaluate if a page is fully loaded")
     # async def is_load_complete(browser_session: BrowserSession) -> ActionResult:
     #     script = '''
@@ -120,13 +134,15 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
     #     except Exception as e:
     #         return ActionResult(error=f"Failed to evaluate page load state: {e}")
     
-    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=1)
+    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=1,)
     agent = Agent(task=task,
                   llm=llm,
                   use_thinking=True,
                   browser_session=browser_session,
                   controller=controller,
                   enable_cloud_sync=False,
+                  calculate_cost=True,
+                  max_remote_calls=15,
                   )
     return agent
  
@@ -137,6 +153,7 @@ async def main():
         parser.add_argument('--proxy_username', action='store', required=True, help="Proxy username for authentication.")
         parser.add_argument('--proxy_password', action='store', required=True, help="Proxy password for authentication.")
         parser.add_argument('--test_id', action='store', required=False, help="ID of the test to run. If not provided, all tests will be executed.")
+        parser.add_argument('--use_real_browser', action='store', type=bool, required=False, help="Use real browser for testing.")
         args = vars(parser.parse_args())
         tests = load_test_from_yaml('test_scripts.yaml')
         if args['test_id']:
@@ -160,14 +177,16 @@ async def main():
                 llm_api_key=os.getenv("GOOGLE_API_KEY"),
                 llm_model="gemini-2.5-flash-lite", 
                 task=px_steps_string,
-                use_proxy=True
+                use_proxy=True,
+                real_browser=params.get('use_real_browser', False)
             )
             agent_pxy = create_test_run_agent(px_test_run_config)
             if npxy_steps_dict:
                 npx_test_run_config = TestRunConfig(
                     llm_api_key=os.getenv("GOOGLE_API_KEY"),
                     llm_model="gemini-2.5-flash-lite",
-                    task=npx_steps_string
+                    task=npx_steps_string,
+                    real_browser=params.get('use_real_browser', False)
                 )
                 agent_no_pxy = create_test_run_agent(npx_test_run_config)
                 await asyncio.gather(agent_pxy.run(), agent_no_pxy.run())
