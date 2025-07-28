@@ -3,8 +3,10 @@ import asyncio
 import sys
 import yaml
 import argparse
+import json
 
-from typing import Optional
+from typing import Optional, Dict
+from pydantic import BaseModel, Field
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from browser_use.browser import BrowserSession, BrowserProfile
@@ -20,6 +22,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 if not os.getenv('GOOGLE_API_KEY'):
     raise ValueError('GOOGLE_API_KEY is not set. Please add it to your environment variables.')
 
+class AgentStructuredOutput(BaseModel):
+    result: str = Field(description="Pass or Fail: The result of the test case")
+    describe: str = Field(description="The web state evaluated by test steps")
+    screenshot_path: str = Field(description="Path to the screenshot captured")
+
+
 @dataclass
 class TestRunConfig:
     task: str
@@ -32,7 +40,7 @@ class TestRunConfig:
     real_browser: bool = False
 
 def load_test_from_yaml(file_path: str):
-    with open(file_path, 'r') as file:
+    with open(file_path, "r") as file:
         test_data = yaml.safe_load(file)
     return test_data['tests']
  
@@ -50,7 +58,7 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
             # keep_alive=True,
-        )
+        )        
         browser_session = BrowserSession(
             browser_profile=br_profile,
         )        
@@ -63,8 +71,8 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
         print("Using real browser for testing.")
 
     task = config.task
-
-    controller = Controller()
+    output_schema = AgentStructuredOutput
+    controller = Controller(output_model=output_schema)
    
     @controller.action("Takes a screenshot of the current page and saves it to a file.")
     async def screenshot(browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
@@ -134,16 +142,19 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
     #     except Exception as e:
     #         return ActionResult(error=f"Failed to evaluate page load state: {e}")
     
-    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=1,)
+    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.5)
+    page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash-lite", temperature=0)
     agent = Agent(task=task,
                   llm=llm,
-                  use_thinking=True,
+                  page_extraction_llm=page_extraction_llm,
+                  flash_mode=True,
+                #   use_thinking=True,
                   browser_session=browser_session,
                   controller=controller,
                   enable_cloud_sync=False,
                   calculate_cost=True,
-                  max_remote_calls=15,
                   )
+
     return agent
  
 async def main():
@@ -157,43 +168,84 @@ async def main():
         args = vars(parser.parse_args())
         tests = load_test_from_yaml('test_scripts.yaml')
         if args['test_id']:
-            tests = [test for test in tests if str(test['TestID']) == str(args['test_id'])]
+            tests = [
+                test for test in tests if str(test['TestID']) == str(args['test_id'])
+            ]
             if not tests:
                 print(f"No test found with ID: {args['test_id']}")
                 return
+
         for test in tests:
+            final_result: Dict = {}
             pxy_steps_dict = test['TestStepsPXY']
             npxy_steps_dict = test.get('TestSteps', None)
             params = test['TestParams']
             params['TestName'] = test['TestName']
             params.update(args)
+
             px_steps_string = 'Execute the test cases with the following steps:\n' + \
                             '\n'.join(key + ': ' + value for key, value in pxy_steps_dict.items()).format(**params)
-            npx_steps_string = '\n'.join(key + ': ' + value for key, value in npxy_steps_dict.items()).format(**params)
+            
+            npx_steps_string = ''
+            if npxy_steps_dict:
+                npx_steps_string = '\n'.join(key + ': ' + value for key, value in npxy_steps_dict.items()).format(**params)
+
             px_test_run_config = TestRunConfig(
                 proxy_username=params['proxy_username'],
                 proxy_pwd=params['proxy_password'],
                 proxy_host=params['proxy_url'],
                 llm_api_key=os.getenv("GOOGLE_API_KEY"),
-                llm_model="gemini-2.5-flash-lite", 
+                llm_model="gemini-2.5-pro",
                 task=px_steps_string,
                 use_proxy=True,
                 real_browser=params.get('use_real_browser', False)
             )
+
             agent_pxy = create_test_run_agent(px_test_run_config)
+
             if npxy_steps_dict:
                 npx_test_run_config = TestRunConfig(
-                    llm_api_key=os.getenv("GOOGLE_API_KEY"),
-                    llm_model="gemini-2.5-flash-lite",
+                    llm_api_key=os.getenv("GOOGLE_API_KEY_2"),
+                    llm_model="gemini-2.5-pro",
                     task=npx_steps_string,
                     real_browser=params.get('use_real_browser', False)
                 )
+
                 agent_no_pxy = create_test_run_agent(npx_test_run_config)
                 await asyncio.gather(agent_pxy.run(), agent_no_pxy.run())
+                # Extract and print results
+                final_result_pxy = agent_pxy.state.history.final_result()
+                if final_result_pxy:
+                    final_result_pxy = json.loads(final_result_pxy)
+                    final_result_pxy["ExecutionTime"] = agent_pxy.state.history.total_duration_seconds()
+                    final_result_pxy["AISteps"] = agent_pxy.state.history.number_of_steps()
+                final_result_no_pxy = agent_no_pxy.state.history.final_result()
+                if final_result_no_pxy:
+                    final_result_no_pxy = json.loads(final_result_no_pxy)
+                    final_result_no_pxy["ExecutionTime"] = agent_no_pxy.state.history.total_duration_seconds()
+                    final_result_no_pxy["AISteps"] = agent_no_pxy.state.history.number_of_steps()
                 await asyncio.gather(agent_pxy.close(), agent_no_pxy.close())
+                final_result["PXY"] = final_result_pxy
+                final_result["NO_PXY"] = final_result_no_pxy
+                print(f"Final Result: {final_result}")
             else:
                 await agent_pxy.run()
+                # Extract and print results
+                final_result_pxy = agent_pxy.state.history.final_result()
+                if final_result_pxy:
+                    final_result = json.loads(final_result_pxy)
+                    final_result["ExecutionTime"] = agent_pxy.state.history.total_duration_seconds()
+                    final_result["AISteps"] = agent_pxy.state.history.number_of_steps()
+
+                print(f"Final Result PXY: {final_result}")
                 await agent_pxy.close()
+            if final_result:
+                file_path = f"{params['TestName']}_final_result.json"
+                with open(file_path, "w") as f:
+                    json.dump(final_result, f, indent=4)
+                print(f"✅ Successfully wrote results to {file_path}")
+            else:
+                print(f"⚠️ No final result generated for {params['TestName']}, skipping file write.")
 
     except Exception as e:
         print(f"An error occurred: {e}")
