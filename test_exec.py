@@ -75,7 +75,7 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
     controller = Controller(output_model=output_schema)
    
     @controller.action("Takes a screenshot of the current page and saves it to a file.")
-    async def screenshot(browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
+    async def take_screenshot(browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
         """
         Takes a screenshot using Playwright's built-in method and saves it to the specified file.
         Args:
@@ -176,7 +176,10 @@ async def main():
                 return
 
         for test in tests:
-            final_result: Dict = {}
+            final_result: Dict = {
+                "COST": .0,
+                "TOKENS": 0
+            }
             pxy_steps_dict = test['TestStepsPXY']
             npxy_steps_dict = test.get('TestSteps', None)
             params = test['TestParams']
@@ -195,7 +198,7 @@ async def main():
                 proxy_pwd=params['proxy_password'],
                 proxy_host=params['proxy_url'],
                 llm_api_key=os.getenv("GOOGLE_API_KEY"),
-                llm_model="gemini-2.5-pro",
+                llm_model="gemini-2.5-flash",
                 task=px_steps_string,
                 use_proxy=True,
                 real_browser=params.get('use_real_browser', False)
@@ -206,7 +209,7 @@ async def main():
             if npxy_steps_dict:
                 npx_test_run_config = TestRunConfig(
                     llm_api_key=os.getenv("GOOGLE_API_KEY_2"),
-                    llm_model="gemini-2.5-pro",
+                    llm_model="gemini-2.5-flash",
                     task=npx_steps_string,
                     real_browser=params.get('use_real_browser', False)
                 )
@@ -219,11 +222,21 @@ async def main():
                     final_result_pxy = json.loads(final_result_pxy)
                     final_result_pxy["ExecutionTime"] = agent_pxy.state.history.total_duration_seconds()
                     final_result_pxy["AISteps"] = agent_pxy.state.history.number_of_steps()
+                    if agent_pxy.state.history.usage:
+                        final_result_pxy["Cost"] = agent_pxy.state.history.usage.total_cost
+                        final_result_pxy["TotalTokens"] = agent_pxy.state.history.usage.total_tokens
+                        final_result["COST"] += final_result_pxy["Cost"]
+                        final_result["TOKENS"] += final_result_pxy["TotalTokens"]
                 final_result_no_pxy = agent_no_pxy.state.history.final_result()
                 if final_result_no_pxy:
                     final_result_no_pxy = json.loads(final_result_no_pxy)
                     final_result_no_pxy["ExecutionTime"] = agent_no_pxy.state.history.total_duration_seconds()
                     final_result_no_pxy["AISteps"] = agent_no_pxy.state.history.number_of_steps()
+                    if agent_no_pxy.state.history.usage:
+                        final_result_no_pxy["Cost"] = agent_no_pxy.state.history.usage.total_cost
+                        final_result_no_pxy["TotalTokens"] = agent_no_pxy.state.history.usage.total_tokens
+                        final_result["COST"] += final_result_no_pxy["Cost"]
+                        final_result["TOKENS"] += final_result_no_pxy["TotalTokens"]
                 await asyncio.gather(agent_pxy.close(), agent_no_pxy.close())
                 final_result["PXY"] = final_result_pxy
                 final_result["NO_PXY"] = final_result_no_pxy

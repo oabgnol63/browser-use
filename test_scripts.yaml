@@ -6,7 +6,7 @@ waittime:
 
 tools:
   &tools
-  tool_screenshot: screenshot
+  tool_screenshot: take_screenshot
   tool_is_load_complete: is_load_complete
   tool_go_forward: go_forward
 
