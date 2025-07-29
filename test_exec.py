@@ -180,6 +180,10 @@ async def main():
                 "COST": .0,
                 "TOKENS": 0
             }
+            final_result: Dict = {
+                "COST": .0,
+                "TOKENS": 0
+            }
             pxy_steps_dict = test['TestStepsPXY']
             npxy_steps_dict = test.get('TestSteps', None)
             params = test['TestParams']
@@ -198,7 +202,7 @@ async def main():
                 proxy_pwd=params['proxy_password'],
                 proxy_host=params['proxy_url'],
                 llm_api_key=os.getenv("GOOGLE_API_KEY"),
-                llm_model="gemini-2.5-pro",
+                llm_model="gemini-2.5-flash",
                 task=px_steps_string,
                 use_proxy=True,
                 real_browser=params.get('use_real_browser', False)
@@ -209,7 +213,7 @@ async def main():
             if npxy_steps_dict:
                 npx_test_run_config = TestRunConfig(
                     llm_api_key=os.getenv("GOOGLE_API_KEY_2"),
-                    llm_model="gemini-2.5-pro",
+                    llm_model="gemini-2.5-flash",
                     task=npx_steps_string,
                     real_browser=params.get('use_real_browser', False)
                 )
