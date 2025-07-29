@@ -43,6 +43,22 @@ def load_test_from_yaml(file_path: str):
     with open(file_path, "r") as file:
         test_data = yaml.safe_load(file)
     return test_data['tests']
+
+def generate_result(agent: Agent) -> Optional[Dict]:
+    agent_result = agent.state.history.final_result()
+    if agent_result:
+        agent_result = json.loads(agent_result)
+        agent_result["ExecutionTime"] = agent.state.history.total_duration_seconds()
+        agent_result["AISteps"] = agent.state.history.number_of_steps()
+        if agent.state.history.usage:
+            agent_result["TotalCost"] = agent.state.history.usage.total_cost
+            agent_result["TotalTokens"] = agent.state.history.usage.total_tokens
+        else:
+            agent_result["TotalCost"] = 0
+            agent_result["TotalTokens"] = 0
+        return agent_result
+    return None
+
  
 def create_test_run_agent(config: TestRunConfig) -> Agent:
     
@@ -57,7 +73,6 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
             user_data_dir=None,
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
-            # keep_alive=True,
         )        
         browser_session = BrowserSession(
             browser_profile=br_profile,
@@ -154,7 +169,6 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
                   enable_cloud_sync=False,
                   calculate_cost=True,
                   )
-
     return agent
  
 async def main():
@@ -176,11 +190,7 @@ async def main():
                 return
 
         for test in tests:
-            final_result: Dict = {
-                "COST": .0,
-                "TOKENS": 0
-            }
-            final_result: Dict = {
+            final_result = {
                 "COST": .0,
                 "TOKENS": 0
             }
@@ -221,40 +231,27 @@ async def main():
                 agent_no_pxy = create_test_run_agent(npx_test_run_config)
                 await asyncio.gather(agent_pxy.run(), agent_no_pxy.run())
                 # Extract and print results
-                final_result_pxy = agent_pxy.state.history.final_result()
-                if final_result_pxy:
-                    final_result_pxy = json.loads(final_result_pxy)
-                    final_result_pxy["ExecutionTime"] = agent_pxy.state.history.total_duration_seconds()
-                    final_result_pxy["AISteps"] = agent_pxy.state.history.number_of_steps()
-                    if agent_pxy.state.history.usage:
-                        final_result_pxy["TotalCost"] = agent_pxy.state.history.usage.total_cost
-                        final_result_pxy["TotalTokens"] = agent_pxy.state.history.usage.total_tokens
-                        final_result["COST"] += final_result_pxy["TotalCost"]
-                        final_result["TOKENS"] += final_result_pxy["TotalTokens"]
-                final_result_no_pxy = agent_no_pxy.state.history.final_result()
-                if final_result_no_pxy:
-                    final_result_no_pxy = json.loads(final_result_no_pxy)
-                    final_result_no_pxy["ExecutionTime"] = agent_no_pxy.state.history.total_duration_seconds()
-                    final_result_no_pxy["AISteps"] = agent_no_pxy.state.history.number_of_steps()
-                    if agent_no_pxy.state.history.usage:
-                        final_result_no_pxy["TotalCost"] = agent_no_pxy.state.history.usage.total_cost
-                        final_result_no_pxy["TotalTokens"] = agent_no_pxy.state.history.usage.total_tokens
-                        final_result["COST"] += final_result_no_pxy["TotalCost"]
-                        final_result["TOKENS"] += final_result_no_pxy["TotalTokens"]
+                agent_pxy_result = generate_result(agent_pxy)
+                agent_no_pxy_result = generate_result(agent_no_pxy)
+                if agent_pxy_result:
+                    final_result["PXY"] = agent_pxy_result
+                    final_result["COST"] += agent_pxy_result["TotalCost"]
+                    final_result["TOKENS"] += agent_pxy_result["TotalTokens"]
+                if agent_no_pxy_result:
+                    final_result["NO_PXY"] = agent_no_pxy_result
+                    final_result["COST"] += agent_no_pxy_result["TotalCost"]
+                    final_result["TOKENS"] += agent_no_pxy_result["TotalTokens"]
                 await asyncio.gather(agent_pxy.close(), agent_no_pxy.close())
-                final_result["PXY"] = final_result_pxy
-                final_result["NO_PXY"] = final_result_no_pxy
+
                 print(f"Final Result: {final_result}")
             else:
                 await agent_pxy.run()
                 # Extract and print results
-                final_result_pxy = agent_pxy.state.history.final_result()
-                if final_result_pxy:
-                    final_result = json.loads(final_result_pxy)
-                    final_result["ExecutionTime"] = agent_pxy.state.history.total_duration_seconds()
-                    final_result["AISteps"] = agent_pxy.state.history.number_of_steps()
-
-                print(f"Final Result PXY: {final_result}")
+                agent_pxy_result = generate_result(agent_pxy)
+                if agent_pxy_result:
+                    final_result["PXY"] = agent_pxy_result
+                    final_result["COST"] += agent_pxy_result["TotalCost"]
+                    final_result["TOKENS"] += agent_pxy_result["TotalTokens"]
                 await agent_pxy.close()
             if final_result:
                 file_path = f"{params['TestName']}_final_result.json"

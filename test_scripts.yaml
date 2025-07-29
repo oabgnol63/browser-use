@@ -67,12 +67,10 @@ tests:
     Step 3: 'Input {proxy_password} for password and click "Log in"'
     Step 4: 'Wait for the website to load completely'
     Step 5: 'Identify and click any news link under the header "Most Popular". Wait for the new page to load completely'
-    Step 6: 'Click "go back" button, wait for the page to load completely'
-    Step 7: 'Click "go forward" button using {tool_go_forward}, wait for the page to load completely'
-    Step 8: 'Click "go back" button again, wait for the page to load completely'
-    Step 9: 'Evalute the result: Return passed/failed following criteria:
+    Step 6: 'Click "go back" button, wait for the page to load. Click "go forward" button, wait for the load. Click "go back" button again'
+    Step 7: 'Evalute the result: Return passed/failed following criteria:
         * At the end of back-forward-back button testing cycle, the homepage should be displayed'
-    Step 10: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait the website to load.'
