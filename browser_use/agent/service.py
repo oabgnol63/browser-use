@@ -1400,6 +1400,13 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				if action.model_dump(exclude_unset=True).get('done') is not None:
 					msg = f'Done action is allowed only as a single action - stopped after action {i} / {len(actions)}.'
 					logger.info(msg)
+					results.append(
+						ActionResult(
+							error=msg,
+							include_in_memory=True,
+							long_term_memory=msg,
+						)
+					)
 					break
 
 				if action.get_index() is not None:

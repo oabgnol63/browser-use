@@ -75,7 +75,7 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
     controller = Controller(output_model=output_schema)
    
     @controller.action("Takes a screenshot of the current page and saves it to a file.")
-    async def screenshot(browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
+    async def take_screenshot(browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
         """
         Takes a screenshot using Playwright's built-in method and saves it to the specified file.
         Args:
@@ -176,7 +176,10 @@ async def main():
                 return
 
         for test in tests:
-            final_result: Dict = {}
+            final_result: Dict = {
+                "COST": .0,
+                "TOKENS": 0
+            }
             pxy_steps_dict = test['TestStepsPXY']
             npxy_steps_dict = test.get('TestSteps', None)
             params = test['TestParams']
@@ -219,11 +222,21 @@ async def main():
                     final_result_pxy = json.loads(final_result_pxy)
                     final_result_pxy["ExecutionTime"] = agent_pxy.state.history.total_duration_seconds()
                     final_result_pxy["AISteps"] = agent_pxy.state.history.number_of_steps()
+                    if agent_pxy.state.history.usage:
+                        final_result_pxy["TotalCost"] = agent_pxy.state.history.usage.total_cost
+                        final_result_pxy["TotalTokens"] = agent_pxy.state.history.usage.total_tokens
+                        final_result["COST"] += final_result_pxy["TotalCost"]
+                        final_result["TOKENS"] += final_result_pxy["TotalTokens"]
                 final_result_no_pxy = agent_no_pxy.state.history.final_result()
                 if final_result_no_pxy:
                     final_result_no_pxy = json.loads(final_result_no_pxy)
                     final_result_no_pxy["ExecutionTime"] = agent_no_pxy.state.history.total_duration_seconds()
                     final_result_no_pxy["AISteps"] = agent_no_pxy.state.history.number_of_steps()
+                    if agent_no_pxy.state.history.usage:
+                        final_result_no_pxy["TotalCost"] = agent_no_pxy.state.history.usage.total_cost
+                        final_result_no_pxy["TotalTokens"] = agent_no_pxy.state.history.usage.total_tokens
+                        final_result["COST"] += final_result_no_pxy["TotalCost"]
+                        final_result["TOKENS"] += final_result_no_pxy["TotalTokens"]
                 await asyncio.gather(agent_pxy.close(), agent_no_pxy.close())
                 final_result["PXY"] = final_result_pxy
                 final_result["NO_PXY"] = final_result_no_pxy
