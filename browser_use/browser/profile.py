@@ -711,6 +711,12 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 			*(self._get_extension_args() if self.enable_default_extensions else []),
 		]
 
+		if self.proxy:
+			server = self.proxy.get('server')
+			if server:
+				pre_conversion_args.append(f'--proxy-server={server}')
+				pre_conversion_args.append('--ignore-certificate-errors')
+
 		# convert to dict and back to dedupe and merge duplicate args
 		final_args_list = BrowserLaunchArgs.args_as_list(BrowserLaunchArgs.args_as_dict(pre_conversion_args))
 		return final_args_list

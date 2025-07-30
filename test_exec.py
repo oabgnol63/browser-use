@@ -1,31 +1,44 @@
 import os
 import asyncio
 import sys
-import yaml
 import argparse
+from dotenv import load_dotenv
+import yaml
 import json
-
+import numpy as np
+from PIL import Image
 from typing import Optional, Dict
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
-from dotenv import load_dotenv
+
+load_dotenv()
+parser = argparse.ArgumentParser(description="Run browser tests with optional proxy.")
+parser.add_argument('--proxy_url', action='store', required=True, help="(Required) Use proxy settings for the tests.")
+parser.add_argument('--proxy_username', action='store', required=True, help="Proxy username for authentication.")
+parser.add_argument('--proxy_password', action='store', required=True, help="Proxy password for authentication.")
+parser.add_argument('--test_id', action='store', required=False, help="ID of the test to run. If not provided, all tests will be executed.")
+parser.add_argument('--use_real_browser', action='store_true', required=False, help="Use real browser for testing.")
+parser.add_argument('--headless', action='store_true', help="Run browser in headless mode.")
+parser.add_argument('--log_level', action='store', default='info', help="Set the logging level (default: info).")
+args = vars(parser.parse_args())
+
+if args['log_level']:
+    os.environ['BROWSER_USE_LOGGING_LEVEL'] = args['log_level']
+
 from browser_use.browser import BrowserSession, BrowserProfile
-from browser_use.browser.types import ProxySettings
-from browser_use.logging_config import setup_logging
+from browser_use.browser.types import ProxySettings, ViewportSize
 from browser_use import Agent, Controller, ActionResult
 from browser_use.llm import ChatGoogle
 
-load_dotenv()
-setup_logging(log_level='DEBUG')
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
- 
 if not os.getenv('GOOGLE_API_KEY'):
     raise ValueError('GOOGLE_API_KEY is not set. Please add it to your environment variables.')
 
 class AgentStructuredOutput(BaseModel):
-    result: str = Field(description="Pass or Fail: The result of the test case")
+    result: str = Field(description="'Pass' or 'Fail': The result of the test case")
     describe: str = Field(description="The web state evaluated by test steps")
     screenshot_path: str = Field(description="Path to the screenshot captured")
+    confidence: Optional[float] = Field(default=None, description="Confidence score from image comparison, if any.")
 
 
 @dataclass
@@ -38,11 +51,13 @@ class TestRunConfig:
     llm_model: Optional[str] = "gemini-2.5-flash"
     use_proxy: bool = False
     real_browser: bool = False
+    headless: bool = False
 
 def load_test_from_yaml(file_path: str):
     with open(file_path, "r") as file:
         test_data = yaml.safe_load(file)
     return test_data['tests']
+
 
 def generate_result(agent: Agent) -> Optional[Dict]:
     agent_result = agent.state.history.final_result()
@@ -61,27 +76,30 @@ def generate_result(agent: Agent) -> Optional[Dict]:
 
  
 def create_test_run_agent(config: TestRunConfig) -> Agent:
-    
     if config.use_proxy and config.proxy_host:
         proxy_settings: ProxySettings = {
             "server": config.proxy_host
         }
         br_profile = BrowserProfile(
+            # cannot config proxy settings in headless mode
             headless=False,
             proxy=proxy_settings,
             # Using user_data_dir=None ensures a clean, temporary profile for the test.
             user_data_dir=None,
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
+            window_size=ViewportSize(width=1280, height=720),
         )        
-    
         browser_session = BrowserSession(
             browser_profile=br_profile,
         )        
-        
     else:
-        browser_session = BrowserSession(browser_profile=BrowserProfile(headless=False))
-
+        browser_session = BrowserSession(
+            browser_profile=BrowserProfile(
+                headless=config.headless,
+                window_size=ViewportSize(width=1280, height=720),
+            )
+        )
     if config.real_browser:
         browser_session.browser_profile.executable_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"  # Path to Chrome executable
         print("Using real browser for testing.")
@@ -89,9 +107,42 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
     task = config.task
     output_schema = AgentStructuredOutput
     controller = Controller(output_model=output_schema)
-   
+
+
+    @controller.action("Compare 2 images and return a confidence score.")
+    async def check_img_similarity(img1_path, img2_path) -> ActionResult: 
+        try:   
+            assert img1_path != img2_path, "Image paths must be different"
+            img1 = Image.open(img1_path).convert("RGB")
+            img2 = Image.open(img2_path).convert("RGB")
+            assert img1.size == img2.size, "Images must be of the same size for comparison"
+
+            # Handle different image sizes by cropping to the smallest common dimensions
+            # if img1.size != img2.size:
+            #     min_width = min(img1.width, img2.width)
+            #     min_height = min(img1.height, img2.height)
+            #     img1 = img1.crop((0, 0, min_width, min_height))
+            #     img2 = img2.crop((0, 0, min_width, min_height))
+            arr1 = np.array(img1).astype(np.float32)
+            arr2 = np.array(img2).astype(np.float32)
+            mse = np.mean((arr1 - arr2) ** 2)
+            max_val = 255.0
+            confidence = 1 - (mse / (max_val ** 2))
+            confidence = max(0.0, min(1.0, float(confidence)))
+            if max(0.0, min(1.0, float(confidence))) > 0.9:
+                return ActionResult(extracted_content="Two images are similar with {confidence:.3f} confidence score.",
+                                    long_term_memory=f"Confidence score: {confidence:.3f}")
+            else:
+                message = f"The two images are not similar, with a confidence score of {confidence:.3f}."
+                return ActionResult(extracted_content=message,
+                                    long_term_memory=f"Confidence score: {confidence:.3f}")
+        except Exception as e:
+            return ActionResult(extracted_content="Fail to compare 2 images: {e}")
+
+
     @controller.action("Takes a screenshot of the current page and saves it to a file.")
-    async def take_screenshot(browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
+    async def take_screenshot(
+        browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
         """
         Takes a screenshot using Playwright's built-in method and saves it to the specified file.
         Args:
@@ -105,11 +156,12 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
             page = await browser_session.get_current_page()
             await browser_session.remove_highlights()
             await page.bring_to_front()
-            await page.screenshot(path=file_name, full_page=full_page)
+            await page.screenshot(path=file_name, full_page=full_page, animations='disabled')
             return ActionResult(extracted_content=f"Screenshot saved to {file_name}")
         except Exception as e:
             return ActionResult(error=f"Failed to save screenshot: {e}")
         
+
     @controller.action("Simulate the go forward button in the browser.")
     async def go_forward(browser_session: BrowserSession) -> ActionResult:
         try:
@@ -174,13 +226,6 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
  
 async def main():
     try:
-        parser = argparse.ArgumentParser(description="Run browser tests with optional proxy.")
-        parser.add_argument('--proxy_url', action='store', required=True, help="(Required) Use proxy settings for the tests.")
-        parser.add_argument('--proxy_username', action='store', required=True, help="Proxy username for authentication.")
-        parser.add_argument('--proxy_password', action='store', required=True, help="Proxy password for authentication.")
-        parser.add_argument('--test_id', action='store', required=False, help="ID of the test to run. If not provided, all tests will be executed.")
-        parser.add_argument('--use_real_browser', action='store', type=bool, required=False, help="Use real browser for testing.")
-        args = vars(parser.parse_args())
         tests = load_test_from_yaml('test_scripts.yaml')
         if args['test_id']:
             tests = [
@@ -189,11 +234,11 @@ async def main():
             if not tests:
                 print(f"No test found with ID: {args['test_id']}")
                 return
-
         for test in tests:
             final_result = {
                 "COST": .0,
-                "TOKENS": 0
+                "TOKENS": 0,
+                "CONFIDENCE_SCORE": .0,
             }
             pxy_steps_dict = test['TestStepsPXY']
             npxy_steps_dict = test.get('TestSteps', None)
@@ -215,19 +260,18 @@ async def main():
                 llm_model="gemini-2.5-flash",
                 task=px_steps_string,
                 use_proxy=True,
-                real_browser=params.get('use_real_browser', False)
+                real_browser=params.get('use_real_browser', False),
+                headless=params.get('headless', False)
             )
-
             agent_pxy = create_test_run_agent(px_test_run_config)
-
             if npxy_steps_dict:
                 npx_test_run_config = TestRunConfig(
                     llm_api_key=os.getenv("GOOGLE_API_KEY_2"),
                     llm_model="gemini-2.5-flash",
                     task=npx_steps_string,
-                    real_browser=params.get('use_real_browser', False)
+                    real_browser=params.get('use_real_browser', False),
+                    headless=params.get('headless', False)
                 )
-
                 agent_no_pxy = create_test_run_agent(npx_test_run_config)
                 await asyncio.gather(agent_pxy.run(), agent_no_pxy.run())
                 # Extract and print results
@@ -237,6 +281,8 @@ async def main():
                     final_result["PXY"] = agent_pxy_result
                     final_result["COST"] += agent_pxy_result["TotalCost"]
                     final_result["TOKENS"] += agent_pxy_result["TotalTokens"]
+                    # NOTE: by doing this, assuming agent_pxy always finishes after agentt_no_pxy
+                    final_result["CONFIDENCE_SCORE"] = agent_pxy_result["confidence"]
                 if agent_no_pxy_result:
                     final_result["NO_PXY"] = agent_no_pxy_result
                     final_result["COST"] += agent_no_pxy_result["TotalCost"]

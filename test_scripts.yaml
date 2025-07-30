@@ -9,6 +9,7 @@ tools:
   tool_screenshot: take_screenshot
   tool_is_load_complete: is_load_complete
   tool_go_forward: go_forward
+  tool_compare_image: check_img_similarity
 
 tests:
 - TestName: nbcnews_com_initial_page_load_5
@@ -23,16 +24,21 @@ tests:
     Step 4: 'Wait for the website to load completely'
     Step 5: 'Scroll down till the end of the page and up to top 2 times to make sure it smoothly'
     Step 6: 'If web elements are not loaded completely, wait them. Maximum wait time is 60 seconds'
-    Step 7: 'Evalute the result. The test pass/fail following criteria:
+    Step 7: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 8: 'Use the {tool_compare_image} to compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png", which are in the same path'
+    Step 9: 'Evalute the result. The test Pass/Fail following criteria:
+        * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped.
+        * Scrolling smoothy
+        * Two images should be identical, with confidence score as proof'
+  TestSteps:
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait for the website to load completely'
+    Step 3: 'Scroll down till the end of the page and up to top 2 times to make sure it smoothly'
+    Step 4: 'If web elements are not loaded completely, wait them. Maximum wait time is 60 seconds'
+    Step 5: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 6: 'Evalute the result. The test Pass/Fail following criteria:
         * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped.
         * Scrolling smoothy'
-    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
-  TestSteps:
-    Step 1: Go to {url}
-    Step 2: After the website is loaded, wait for all elements loaded completely.
-    Step 3: Scroll down till the end of the page and up again a 2 times to make sure it work perfectly
-    Step 4: If web elements are not loaded completely, wait them. Maximum wait time is 60 seconds
-    Step 5: Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png".
 
 - TestName: nbcnews_com_mouse_event_5
   TestID: 2
@@ -46,15 +52,19 @@ tests:
     Step 4: 'Wait for the website to load completely'
     Step 5: 'On the homepage, locate and click on the dropdown menu button'
     Step 6: 'Locate and click on **World** section. Wait for the new page to load'
-    Step 7: 'Evalute the result: Return passed/failed following criteria:
-        * The menus should respond to on click event and support navigation to the required entry'
-    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 7: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 8: 'Use the {tool_compare_image} to compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png", which are in the same path'
+    Step 9: 'Evalute the result: Return Pass/Fail following criteria:
+        * The menus should respond to on click event and support navigation to the required entry
+        * Two images should be identical, with confidence score as proof'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
     Step 3: 'On the homepage, locate and click on the dropdown menu button'
     Step 4: 'Locate and click on **World** section.  Wait for the new page to load'
-    Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 5: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 6: 'Evalute the result: Return Pass/Fail following criteria:
+        * The menus should respond to on click event and support navigation to the required entry'
 
 - TestName: nbcnews_com_navigation_5
   TestID: 3
@@ -68,15 +78,19 @@ tests:
     Step 4: 'Wait for the website to load completely'
     Step 5: 'Identify and click any news link under the header "Most Popular". Wait for the new page to load completely'
     Step 6: 'Click "go back" button, wait for the page to load. Click "go forward" button, wait for the load. Click "go back" button again'
-    Step 7: 'Evalute the result: Return passed/failed following criteria:
-        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
-    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 7: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 8: 'Use the {tool_compare_image} to compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png", which are in the same path'
+    Step 9: 'Evalute the result: Return Pass/Fail following criteria:
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed
+        * Two images should be identical, with confidence score as proof'
   TestSteps:
     Step 1: 'Go to {url}'
-    Step 2: 'Wait the website to load.'
-    Step 3: 'Identify and click any news link under the header "Most Popular".'
-    Step 4: 'Click "back" button, wait for the page to load, click "forward" button, wait for the load, click the back button again'
-    Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 2: 'Wait for the website to load completely'
+    Step 3: 'Identify and click any news link under the header "Most Popular". Wait for the new page to load completely'
+    Step 4: 'Click "go back" button, wait for the page to load. Click "go forward" button, wait for the load. Click "go back" button again'
+    Step 5: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 6: 'Evalute the result: Return Pass/Fail following criteria:
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
 
 - TestName: nbcnews_com_keyboard_input_5
   TestID: 4
@@ -90,15 +104,19 @@ tests:
     Step 4: 'Wait for the website to load completely'
     Step 5: 'On the homepage, locate and click on the dropdown menu button'
     Step 6: 'Locate the search box and search for "Money". Wait for the new page to load completely'
-    Step 7: 'Evalute the result: Return passed/failed following criteria:
-        * The search results context should contain "Money"'
-    Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 7: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 8: 'Use the {tool_compare_image} to compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png", which are in the same path'
+    Step 9: 'Evalute the result: Return Pass/Fail following criteria:
+        * The search results context should contain "Money"
+        * Two images should be identical, with confidence score as proof'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
     Step 3: 'On the homepage, locate and click on the dropdown menu button'
     Step 4: 'Locate the search box and search for "Money". Wait for the new page to load completely'
-    Step 5: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 5: 'Use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 6: 'Evalute the result: Return Pass/Fail following criteria:
+        * The search results context should contain "Money"'
 
 # - TestName: nbcnews_com_html5_video_playback_2
 #   TestID: 5
@@ -112,7 +130,7 @@ tests:
 #     Step 4: 'Wait for the website to load completely'
 #     Step 5: 'On the home page, looking for any video (not live) with advertisement. Click on the video to play it'
 #     Step 6: 'Let the advertisement play completely, validate that the video is playing and the sound is on'
-#     Step 7: 'Evalute the result: Return passed/failed following criteria:
+#     Step 7: 'Evalute the result: Return Pass/Fail following criteria:
 #         * The video should be playing with sound on'
 #     Step 8: 'Finally, use the {tool_screenshot} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
 #   TestSteps:
