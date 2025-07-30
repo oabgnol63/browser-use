@@ -74,12 +74,13 @@ def create_test_run_agent(config: TestRunConfig) -> Agent:
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
         )        
+    
         browser_session = BrowserSession(
             browser_profile=br_profile,
         )        
         
     else:
-        browser_session = BrowserSession()
+        browser_session = BrowserSession(browser_profile=BrowserProfile(headless=False))
 
     if config.real_browser:
         browser_session.browser_profile.executable_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"  # Path to Chrome executable
@@ -203,7 +204,6 @@ async def main():
             px_steps_string = 'Execute the test cases with the following steps:\n' + \
                             '\n'.join(key + ': ' + value for key, value in pxy_steps_dict.items()).format(**params)
             
-            npx_steps_string = ''
             if npxy_steps_dict:
                 npx_steps_string = '\n'.join(key + ': ' + value for key, value in npxy_steps_dict.items()).format(**params)
 
