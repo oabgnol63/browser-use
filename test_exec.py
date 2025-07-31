@@ -1,12 +1,16 @@
 import os
 import asyncio
+import multiprocessing
 import sys
 import argparse
-from dotenv import load_dotenv
+import inspect
 import yaml
+import time
 import json
 import io
+import tkinter
 import numpy as np
+from dotenv import load_dotenv
 from PIL import Image
 from typing import Optional, Dict
 from pydantic import BaseModel, Field
@@ -51,6 +55,7 @@ class AgentStructuredOutput(BaseModel):
 @dataclass
 class TestRunConfig:
     task: str
+    max_actions_per_step: Optional[int]
     proxy_host: Optional[str] = None
     proxy_username: Optional[str] = None
     proxy_pwd: Optional[str] = None
@@ -60,6 +65,22 @@ class TestRunConfig:
     real_browser: bool = False
     headless: bool = False
 
+
+def get_screen_size():
+    """Gets the screen size, with a fallback for headless environments."""
+    try:
+        root = tkinter.Tk()
+        root.withdraw()
+        width = root.winfo_screenwidth()
+        height = root.winfo_screenheight()
+        root.destroy()
+        return width, height
+    except tkinter.TclError:
+        print("Warning: Could not detect screen size (no display available). Falling back to 1920x1080.")
+        return 1920, 1080
+
+# Get screen dimensions
+screen_width, screen_height = get_screen_size()
 
 def load_test_from_yaml(file_path: str):
     with open(file_path, "r") as file:
@@ -84,6 +105,7 @@ def generate_result(agent: Agent) -> Optional[Dict]:
 
  
 async def create_test_run_agent(config: TestRunConfig) -> Agent:
+    signature = inspect.signature(Agent.__init__)
     if config.use_proxy and config.proxy_host:
         proxy_settings: ProxySettings = {
             "server": config.proxy_host
@@ -96,8 +118,8 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             user_data_dir=None,
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
-            # window_size=ViewportSize(width=1280, height=720),
-        )        
+            window_size=ViewportSize(width=screen_width, height=screen_height),
+        )
         browser_session = BrowserSession(
             browser_profile=br_profile,
         )        
@@ -107,7 +129,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
                 headless=config.headless,
                 minimum_wait_page_load_time=30,
                 maximum_wait_page_load_time=60,
-                # window_size=ViewportSize(width=1280, height=720),
+                window_size=ViewportSize(width=screen_width, height=screen_height),
             )
         )
     if config.real_browser:
@@ -160,7 +182,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
                 message = f"Two images are similar with {confidence:.3f} confidence score."
             else:
                 message = f"The two images are not similar, with a confidence score of {confidence:.3f}."
-            return ActionResult(extracted_content=message, long_term_memory=f"Confidence score: {confidence:.3f}")
+            return ActionResult(extracted_content=message, long_term_memory=message)
         except FileNotFoundError as e:
             return ActionResult(error=f"Failed to compare images: File not found - {e.filename}")
         except Exception as e:
@@ -178,6 +200,36 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         except Exception as e:
             return ActionResult(error=f"Failed to find file {name}: {e}")
     
+    @controller.action("Wait for a file to exist in the current directory, with a timeout.")
+    async def wait_for_file(file_name: str, timeout: int = 120) -> ActionResult:
+        """
+        Waits for a specific file to appear in the current directory.
+
+        Args:
+            file_name: The name of the file to wait for.
+            timeout: The maximum time to wait in seconds.
+
+        Returns:
+            An ActionResult indicating success or timeout.
+        """
+        try:
+            curent_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(curent_dir, file_name)
+            
+            start_time = time.time()
+            print(f"Waiting for file '{file_name}' to be created (timeout: {timeout}s)...")
+            while not os.path.exists(file_path):
+                if time.time() - start_time > timeout:
+                    error_message = f"Timeout: File '{file_name}' was not found within {timeout} seconds in directory {curent_dir}."
+                    print(error_message)
+                    return ActionResult(error=error_message)
+                await asyncio.sleep(2)  # Poll every 2 seconds
+            success_message = f"File '{file_name}' found at {file_path}."
+            print(success_message)
+            return ActionResult(extracted_content=success_message, long_term_memory=success_message)
+        except Exception as e:
+            return ActionResult(error=f"An error occurred while waiting for file '{file_name}': {e}")
+
     @controller.action("Takes a screenshot of the current page and saves it to a file.")
     async def capture_and_save_screen(
         browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
@@ -195,7 +247,6 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         except Exception as e:
             return ActionResult(error=f"Failed to save screenshot: {e}")
         
-
     @controller.action("Simulate the go forward button in the browser.")
     async def go_forward(browser_session: BrowserSession) -> ActionResult:
         try:
@@ -204,62 +255,109 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             return ActionResult(extracted_content=f"Successfully navigated forward in the browser history.")
         except Exception as e:
             return ActionResult(error=f"Failed to navigate forward: {e}")
-
-    # @controller.action("Evaluate if a page is fully loaded")
-    # async def is_load_complete(browser_session: BrowserSession) -> ActionResult:
-    #     script = '''
-    #         () => {
-    #             // First, check the document's readyState.
-    #             if (document.readyState !== 'complete') {
-    #                 return {
-    #                     is_complete: false,
-    #                     reason: `Document not ready yet. Current state: ${document.readyState}`
-    #                 };
-    #             }
- 
-    #             // Then, check all image elements on the page.
-    #             const images = Array.from(document.images);
-    #             const incompleteImages = images.filter(img => !img.complete || img.naturalWidth === 0);
- 
-    #             if (incompleteImages.length > 0) {
-    #                 return {
-    #                     is_complete: false,
-    #                     reason: `${incompleteImages.length} image(s) are still loading or failed to load.`,
-    #                     // For debugging, list the first 5 incomplete image URLs
-    #                     incomplete_urls: incompleteImages.slice(0, 5).map(img => img.src)
-    #                 };
-    #             }
- 
-    #             // If all checks pass, the page is considered fully loaded.
-    #             return { is_complete: true, reason: 'Document and all images are fully loaded.' };
- 
-    #         }
-    #     '''
-    #     try:
-    #         result = await browser_session.execute_javascript(script)
-    #         message = f"✅ {result['reason']}" if result['is_complete'] else f"⏳ {result['reason']}"
-    #         if not result.get('is_complete') and result.get('incomplete_urls'):
-    #             message += f" Example URLs: {result['incomplete_urls']}"
-    #         return ActionResult(extracted_content=message, long_term_memory=message)
-    #     except Exception as e:
-    #         return ActionResult(error=f"Failed to evaluate page load state: {e}")
     
     llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.5)
     page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash", temperature=0)
-    agent = Agent(task=task,
-                  llm=llm,
-                  page_extraction_llm=page_extraction_llm,
-                  flash_mode=True,
-                #   use_thinking=True,
-                  browser_session=browser_session,
-                  controller=controller,
-                  calculate_cost=True,
-                #   max_actions_per_step=1,
-                #   validate_output=True,
-                  )
+    agent = Agent(
+                    task=task,
+                    llm=llm,
+                    page_extraction_llm=page_extraction_llm,
+                    flash_mode=True,
+                    use_thinking=True,
+                    browser_session=browser_session,
+                    controller=controller,
+                    calculate_cost=True,
+                    max_actions_per_step=config.max_actions_per_step if config.max_actions_per_step else signature.parameters['max_actions_per_step'].default,
+                    validate_output=True,
+                )
     return agent
  
-async def main():
+def run_agent_worker(work_item):
+    test, args, agent_type = work_item
+    async def async_run_single_agent():
+        params = test['TestParams']
+        params['TestName'] = test['TestName']
+        params.update(args)
+
+        important_note = \
+            '\n\n **Important**:\n' + \
+            '1. Follow strictly the order of steps in the test case.\n' + \
+            '2. If a click action failed, retry by sending key if possible, else by evaluating and clicking on nearby elements \n' \
+            '3. If the evaluation at the end of the test case fails, retry from the failed step.\n'
+
+        agent_result = None
+        agent = None
+
+        try:
+            if agent_type == 'PXY':
+                steps_dict = test['TestStepsPXY']
+                steps_string = \
+                    'Execute the test cases with the following steps:\n' + \
+                    '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**params) + \
+                    important_note
+                
+                test_run_config = TestRunConfig(
+                    proxy_username=params['proxy_username'],
+                    proxy_pwd=params['proxy_password'],
+                    proxy_host=params['proxy_url'],
+                    llm_api_key=GEMINI_API_KEY,
+                    llm_model="gemini-2.5-flash",
+                    task=steps_string,
+                    use_proxy=True,
+                    real_browser=params.get('use_real_browser', False),
+                    headless=params.get('headless', False),
+                    max_actions_per_step=params.get('apt'),
+                )
+                agent = await create_test_run_agent(test_run_config)
+
+            elif agent_type == 'NO_PXY':
+                steps_dict = test.get('TestSteps')
+                if not steps_dict:
+                    return (test['TestName'], agent_type, None)
+
+                steps_string = \
+                    'Execute the test cases with the following steps:\n' + \
+                    '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**params) + \
+                    important_note
+
+                test_run_config = TestRunConfig(
+                    llm_api_key=GEMINI_API_KEY_2,
+                    llm_model="gemini-2.5-flash",
+                    task=steps_string,
+                    real_browser=params.get('use_real_browser', False),
+                    headless=params.get('headless', False),
+                    max_actions_per_step=params.get('apt'),
+                )
+                agent = await create_test_run_agent(test_run_config)
+            
+            else:
+                raise ValueError(f"Unknown agent_type: {agent_type}")
+
+            await agent.run()
+            agent_result = generate_result(agent)
+
+        finally:
+            if agent:
+                print(f"Closing browser agent for test {test['TestID']}, type {agent_type}...")
+                await agent.close()
+        
+        return (test['TestName'], agent_type, agent_result)
+
+    try:
+        print(f"--- Running agent: TestID {test['TestID']} - {test['TestName']} - Type {agent_type} ---")
+        result = asyncio.run(async_run_single_agent())
+        print(f"--- Finished agent: TestID {test['TestID']} - {test['TestName']} - Type {agent_type} ---")
+        return result
+    except Exception as e:
+        print(f"An error occurred in agent worker for TestID {test.get('TestID')}, Type {agent_type}: {e}")
+        return (test.get('TestName', 'Unknown'), agent_type, None)
+
+# Wrapper function to execute the worker and put the result in the queue
+def worker_wrapper(work_item, queue):
+    result = run_agent_worker(work_item)
+    queue.put(result)
+
+def main():
     try:
         tests = load_test_from_yaml('test_scripts.yaml')
         if args['test_id']:
@@ -269,87 +367,73 @@ async def main():
             if not tests:
                 print(f"No test found with ID: {args['test_id']}")
                 return
+        
         for test in tests:
+            print(f"\n{'='*20} Starting Test: {test['TestName']} (ID: {test['TestID']}) {'='*20}")
+            
+            work_items = []
+            if 'TestStepsPXY' in test:
+                work_items.append((test, args, 'PXY'))
+            if test.get('TestSteps'):
+                work_items.append((test, args, 'NO_PXY'))
+
+            if not work_items:
+                print(f"No steps found for test {test['TestName']}. Skipping.")
+                continue
+
+            num_processes = len(work_items)
+            print(f"Running {num_processes} agents in parallel for test '{test['TestName']}'...")
+
+            # Use a queue to collect results from the parallel processes
+            result_queue = multiprocessing.Queue()
+
+            # Create and start a process for each agent
+            processes = [multiprocessing.Process(target=worker_wrapper, args=(item, result_queue)) for item in work_items]
+            for p in processes:
+                p.start()
+
+            # Retrieve results from the queue
+            results = [result_queue.get() for _ in work_items]
+
+            # Wait for all processes to complete
+            for p in processes:
+                p.join()
+
             final_result = {
                 "COST": .0,
                 "TOKENS": 0,
                 "CONFIDENCE_SCORE": .0,
             }
-            pxy_steps_dict = test['TestStepsPXY']
-            npxy_steps_dict = test.get('TestSteps')
-            params = test['TestParams']
-            params['TestName'] = test['TestName']
-            params.update(args)
+            test_name = test['TestName']
 
-            px_steps_string = 'Execute the test cases with the following steps:\n' + \
-                            '\n'.join(key + ': ' + value for key, value in pxy_steps_dict.items()).format(**params)
+            for item in results:
+                if item is None: 
+                    continue
+                
+                _, agent_type, agent_run_result = item
+                
+                if agent_run_result:
+                    final_result[agent_type] = agent_run_result
+                    final_result["COST"] += agent_run_result.get("TotalCost", 0)
+                    final_result["TOKENS"] += agent_run_result.get("TotalTokens", 0)
+                    if agent_type == 'PXY':
+                        final_result["CONFIDENCE_SCORE"] = agent_run_result.get("confidence", 0.0)
             
-            npx_steps_string = None
-            if npxy_steps_dict:
-                npx_steps_string = '\n'.join(key + ': ' + value for key, value in npxy_steps_dict.items()).format(**params)
-
-            px_test_run_config = TestRunConfig(
-                proxy_username=params['proxy_username'],
-                proxy_pwd=params['proxy_password'],
-                proxy_host=params['proxy_url'],
-                llm_api_key=GEMINI_API_KEY,
-                llm_model="gemini-2.5-flash",
-                task=px_steps_string,
-                use_proxy=True,
-                real_browser=params.get('use_real_browser', False),
-                headless=params.get('headless', False)
-            )
-
-            agents = []
-            agent_results = {}
-
-            try:
-                agent_pxy = await create_test_run_agent(px_test_run_config)
-                agents.append(agent_pxy)
-
-                if npx_steps_string:
-                    npx_test_run_config = TestRunConfig(
-                        llm_api_key=GEMINI_API_KEY_2,
-                        llm_model="gemini-2.5-flash",
-                        task=npx_steps_string,
-                        real_browser=params.get('use_real_browser', False),
-                        headless=params.get('headless', False),
-                    )
-                    agent_no_pxy = await create_test_run_agent(npx_test_run_config)
-                    agents.append(agent_no_pxy)
-
-                run_tasks = [agent.run() for agent in agents]
-                await asyncio.gather(*run_tasks)
-                agent_results['PXY'] = generate_result(agent_pxy)
-                if len(agents) > 1:
-                    agent_results['NO_PXY'] = generate_result(agents[1])
-
-                if agent_results['PXY']:
-                    final_result["PXY"] = agent_results['PXY']
-                    final_result["COST"] += agent_results['PXY']["TotalCost"]
-                    final_result["TOKENS"] += agent_results['PXY']["TotalTokens"]
-                    final_result["CONFIDENCE_SCORE"] = agent_results['PXY'].get("confidence", 0.0)
-                if agent_results['NO_PXY']:
-                    final_result["NO_PXY"] = agent_results['NO_PXY']
-                    final_result["COST"] += agent_results['NO_PXY']["TotalCost"]
-                    final_result["TOKENS"] += agent_results['NO_PXY']["TotalTokens"]
-
-            finally:
-                if agents:
-                    print("Closing all browser agents...")
-                    close_tasks = [agent.close() for agent in agents]
-                    await asyncio.gather(*close_tasks)
-
-            if final_result:
-                file_path = f"{params['TestName']}_final_result.json"
+            if final_result and (final_result.get("PXY") or final_result.get("NO_PXY")):
+                file_path = f"{test_name}_final_result.json"
                 with open(file_path, "w") as f:
                     json.dump(final_result, f, indent=4)
-                print(f"✅ Successfully wrote results to {file_path}")
+                print(f"✅ Successfully wrote aggregated results to {file_path}")
             else:
-                print(f"⚠️ No final result generated for {params['TestName']}, skipping file write.")
+                print(f"⚠️ No final result generated for {test_name}, skipping file write.")
+            
+            print(f"{'='*20} Finished Test: {test['TestName']} (ID: {test['TestID']}) {'='*20}")
+
+        print("\nAll tests have been executed.")
 
     except Exception as e:
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    multiprocessing.freeze_support()
+    main()
