@@ -119,6 +119,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
             window_size=ViewportSize(width=screen_width, height=screen_height),
+            stealth=True
         )
         browser_session = BrowserSession(
             browser_profile=br_profile,
@@ -130,10 +131,11 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
                 minimum_wait_page_load_time=30,
                 maximum_wait_page_load_time=60,
                 window_size=ViewportSize(width=screen_width, height=screen_height),
+                stealth=True,
             )
         )
     if config.real_browser:
-        browser_session.browser_profile.executable_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        browser_session.browser_profile.executable_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
         print("Using real browser for testing.")
 
     task = config.task
@@ -283,7 +285,7 @@ def run_agent_worker(work_item):
             '\n\n **Important**:\n' + \
             '1. Follow strictly the order of steps in the test case.\n' + \
             '2. If a click action failed, retry by sending key if possible, else by evaluating and clicking on nearby elements \n' \
-            '3. If the evaluation at the end of the test case fails, retry from the failed step.\n'
+            '3. If the evaluation at the end of the test case fails, retry from the failed step. Max retry is 1\n'
 
         agent_result = None
         agent = None

@@ -115,7 +115,7 @@ tests:
     <<: [*default_waits, *tools]
     url: https://bbc.com
     search_term: 'Jeremy Clarkson'
-    apt: 1
+    apt: 2
   TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
@@ -127,16 +127,14 @@ tests:
     Step 8: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
     Step 9: 'Evalute the result: Return Pass/Fail following criteria:
         * The search results context should contain "{search_term}"
-        * Two images should be identical, with confidence score as proof, and contain the expected search results
-        * If evaluation failed, retry from the first failed step. Max rerty is 1'
+        * Two images should be identical, with confidence score as proof, and contain the expected search results'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
     Step 3: 'Locate the search box/icon, type "{search_term}" on search bar and click search or press Enter. Wait for the new page to load completely'
     Step 4: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_no_pxy.png"'
     Step 5: 'Evalute the result: Return Pass/Fail following criteria:
-        * The search results context should contain "{search_term}"
-        * If evaluation failed, retry from the first failed step. Max rerty is 1'
+        * The search results context should contain "{search_term}"'
 
 # - TestName: nbcnews_com_html5_video_playback_2
 #   TestID: 5
