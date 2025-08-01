@@ -1,0 +1,95 @@
+##########   TEMPLATE FOR PAGE NAVIGATION TEST CASE   ##########
+
+- TestName:             # Test case name, e.g. facebook_com_mouse_event_5
+  TestID:               # Unique identifier for the test (e.g., 3)
+  TestType: navigation
+  TestParams:
+    ## REQUIRED PARAMETERS ##
+    <<: [*default_waits, *tools]
+    url:                # Test url, e.g "https://www.example.com"
+    search_term:        # Search term to find on the page, e.g "News", "Weather", etc.
+    ## OPTIONAL PARAMETERS (uncomment to use) ##
+    # apt: 1            # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
+                        # Be aware that setting this will increase the test execution time and LLM token usage  
+  TestStepsPXY:
+    ############################# START UNTOUCHED STEPS #############################
+    Step 1: 'Go to {url}' 
+    Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait for the website to load completely'
+    Step 5: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
+    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_pxy.png"'
+    Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+    Step 8: 'Compare "first_img_pxy.png" and "first_img_no_pxy.png" using the {tool_compare_image} tool'
+    Step 9: 'Click "go back" button, wait for the page to load completely'
+    Step 10: 'Click "go forward" button, wait for the page to load completely'
+    Step 11: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_pxy.png"'
+    Step 12: 'Use the {tool_wait_for_file} tool to wait for the file "second_img_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+    Step 13: 'Compare "second_img_pxy.png" and "second_img_no_pxy.png" using the {tool_compare_image} tool'
+    Step 14: 'Click "go back" button again. Wait for the website to load completely'
+    Step 15: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 16: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+    Step 17: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 18: > ## Modify this step to fit your expectations
+      Evaluate the result: Return Pass/Fail following criteria: 
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed,
+        * All images comparisons should be identical, with confidence score as proof'
+  TestSteps:
+    ############################# START UNTOUCHED STEPS #############################
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait for the website to load completely'
+    Step 3: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
+    Step 4: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_no_pxy.png"'
+    Step 5: 'Click "go back" button, wait for the page to load completely'
+    Step 6: 'Click "go forward" button, wait for the page to load completely'
+    Step 7: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_no_pxy.png"'
+    Step 8: 'Click "go back" button again. Wait the website to load completely'
+    Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 10: > ## Should be the same as the above expectations
+      Evaluate the result: Return Pass/Fail following criteria:
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
+
+########## TEMPLATE FOR PAGE NAVIGATION TEST CASE END ##########
+
+##########   TEMPLATE FOR KEYBOARD INPUT TEST CASE   ##########
+
+- TestName:             # Test case name, e.g. facebook_com_mouse_event_5
+  TestID:               # Unique identifier for the test (e.g., 3)
+  TestType: keyboard_input
+  TestParams:
+    ## REQUIRED PARAMETERS ##
+    <<: [*default_waits, *tools]
+    url:                # Test url, e.g "https://www.example.com"
+    search_term:        # Search term to input to search bar, e.g "Bad boy lifestyle", etc.
+    ## OPTIONAL PARAMETERS (uncomment to use) ##
+    # apt: 1            # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
+                        # Be aware that setting this will increase the test execution time and LLM token usage  
+  TestStepsPXY:
+    ############################# START UNTOUCHED STEPS #############################
+    Step 1: 'Go to {url}' 
+    Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait for the website to load completely'
+    Step 5: 'Locate the search box/icon, type {search_term} on search bar and click search or press Enter. Wait for the new page to load completely'
+    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_pxy.png"'
+    Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+    Step 8: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 9: > ## Modify this step to fit your expectations
+      'Evaluate the result: Return Pass/Fail following criteria:
+        * The search results context should contain "{search_term}"
+        * Two images should be identical, with confidence score as proof, and contain the expected search results'
+  TestSteps:
+    ############################# START UNTOUCHED STEPS #############################
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait for the website to load completely'
+    Step 3: 'Locate the search box/icon, type {search_term} on search bar and click search or press Enter. Wait for the new page to load completely'
+    Step 4: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_no_pxy.png"'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 5: > ## Should be the same as the above expectations
+      'Evaluate the result: Return Pass/Fail following criteria:
+        * The search results context should contain "{search_term}"'
+
+########## TEMPLATE FOR KEYBOARD INPUT TEST CASE END ##########

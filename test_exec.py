@@ -8,11 +8,12 @@ import yaml
 import time
 import json
 import io
-import tkinter
+import functools
 import numpy as np
+import cv2
 from dotenv import load_dotenv
 from PIL import Image
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
@@ -23,12 +24,17 @@ if not os.getenv('GOOGLE_API_KEY'):
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
 GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2') else GEMINI_API_KEY
 
+if not os.getenv('TEST_FILE'):
+    raise ValueError('TEST_FILE is not set. Please add it to your environment variables.')
+TEST_FILE = os.getenv('TEST_FILE')
+
+
 parser = argparse.ArgumentParser(description="Run browser tests with optional proxy.")
 parser.add_argument('--proxy_url', action='store', required=True, help="(Required) Use proxy settings for the tests.")
 parser.add_argument('--proxy_username', action='store', required=True, help="Proxy username for authentication.")
 parser.add_argument('--proxy_password', action='store', required=True, help="Proxy password for authentication.")
 parser.add_argument('--test_id', action='store', required=False, help="ID of the test to run, or all tests will be executed.")
-parser.add_argument('--use_real_browser', action='store_true', required=False, help="Use real browser for testing.")
+parser.add_argument('--use_real_browser', action='store', required=False, choices=['msedge', 'chrome'], help="Use real browser for testing.")
 parser.add_argument('--headless', action='store_true', help="Run browser in headless mode.")
 parser.add_argument('--log_level', action='store', default='info', choices=['debug', 'info', 'warning', 'error', 'result'],
                     help="Set the logging level (default: info).")
@@ -44,43 +50,25 @@ from browser_use.browser.types import ProxySettings, ViewportSize
 from browser_use import Agent, Controller, ActionResult
 from browser_use.llm import ChatGoogle
 
-
 class AgentStructuredOutput(BaseModel):
     result: str = Field(description="'Pass' or 'Fail': The result of the test case")
-    describe: str = Field(description="The web state evaluated by test steps")
+    describe: str = Field(description="Describe the state of the website after interacting actions like navigating, searching, or scrolling, and include the results of any image comparisons.")
     screenshot_path: str = Field(description="Path to the screenshot captured")
-    confidence: Optional[float] = Field(default=None, description="Confidence score from image comparison, if any.")
-
+    similarity_score: list[tuple] = Field(description="Similarity score of all images comparison")
 
 @dataclass
 class TestRunConfig:
     task: str
-    max_actions_per_step: Optional[int]
+    max_actions_per_step: int = 3
+    real_browser: Optional[str] = None
     proxy_host: Optional[str] = None
     proxy_username: Optional[str] = None
     proxy_pwd: Optional[str] = None
     llm_api_key: Optional[str] = None
-    llm_model: Optional[str] = "gemini-2.5-flash"
+    llm_model: str = "gemini-2.5-flash"
     use_proxy: bool = False
-    real_browser: bool = False
     headless: bool = False
 
-
-def get_screen_size():
-    """Gets the screen size, with a fallback for headless environments."""
-    try:
-        root = tkinter.Tk()
-        root.withdraw()
-        width = root.winfo_screenwidth()
-        height = root.winfo_screenheight()
-        root.destroy()
-        return width, height
-    except tkinter.TclError:
-        print("Warning: Could not detect screen size (no display available). Falling back to 1920x1080.")
-        return 1920, 1080
-
-# Get screen dimensions
-screen_width, screen_height = get_screen_size()
 
 def load_test_from_yaml(file_path: str):
     with open(file_path, "r") as file:
@@ -106,6 +94,15 @@ def generate_result(agent: Agent) -> Optional[Dict]:
  
 async def create_test_run_agent(config: TestRunConfig) -> Agent:
     signature = inspect.signature(Agent.__init__)
+    if config.real_browser:
+        if config.real_browser == 'msedge':
+            browser_executable_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+        elif config.real_browser == 'chrome':
+            browser_executable_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        else:
+            pass
+    else:
+        browser_executable_path = None       
     if config.use_proxy and config.proxy_host:
         proxy_settings: ProxySettings = {
             "server": config.proxy_host
@@ -118,8 +115,10 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             user_data_dir=None,
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
-            window_size=ViewportSize(width=screen_width, height=screen_height),
-            stealth=True
+            viewport=ViewportSize(width=1600, height=900),
+            device_scale_factor=0.75,
+            # stealth=True,
+            executable_path=browser_executable_path
         )
         browser_session = BrowserSession(
             browser_profile=br_profile,
@@ -128,67 +127,121 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         browser_session = BrowserSession(
             browser_profile=BrowserProfile(
                 headless=config.headless,
-                minimum_wait_page_load_time=30,
+                minimum_wait_page_load_time=10,
                 maximum_wait_page_load_time=60,
-                window_size=ViewportSize(width=screen_width, height=screen_height),
-                stealth=True,
-            )
+                viewport=ViewportSize(width=1600, height=900),
+                device_scale_factor=0.75,                    
+                # stealth=True,
+                executable_path=browser_executable_path,)
         )
-    if config.real_browser:
-        browser_session.browser_profile.executable_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-        print("Using real browser for testing.")
 
     task = config.task
     output_schema = AgentStructuredOutput
     controller = Controller(output_model=output_schema)
 
 
-    @controller.action("Compare 2 images and return a confidence score.")
-    async def check_img_similarity(img1_path: str, img2_path: str, size_tolerance: float = 0.05) -> ActionResult:
+    @controller.action("Compare 2 images and return a similarity score. Scores close to 1 are considered similar.")
+    async def check_img_similarity(img1_path: str, img2_path: str) -> ActionResult:
         try:
-            MAX_HEIGHT_DIMENSION = 16384
+            max_width: int = 1200
+            n_features: int = 3000
+            lowe_ratio_thresh: float = 0.75
+            min_good_matches: int = 200
+            distance_threshold: float = 40.0
+
+            if not os.path.exists(img1_path) or not os.path.exists(img2_path):
+                raise FileNotFoundError(f"One or both image files do not exist: {img1_path}, {img2_path}")
+
             print(f"Comparing images: {img1_path} and {img2_path}")
             if img1_path == img2_path:
                 return ActionResult(error="Image paths must be different. Same img?")
             
-            img1 = Image.open(img1_path).convert("RGB")
-            img2 = Image.open(img2_path).convert("RGB")
-            if img1.height > MAX_HEIGHT_DIMENSION:
-                img1 = img1.crop((0, 0, img1.width, MAX_HEIGHT_DIMENSION))
-                img1.save(img1_path)
-            if img2.height > MAX_HEIGHT_DIMENSION:
-                img2 = img2.crop((0, 0, img2.width, MAX_HEIGHT_DIMENSION))
-                img2.save(img2_path)
-            if img1.size != img2.size:
-                print("Images are in different sizes. Resizing")
-                area1 = img1.width * img1.height
-                area2 = img2.width * img2.height
-                if area1 == 0 or area2 == 0:
-                    return ActionResult(error="One of the images has zero area and cannot be compared.")
-                area_diff_ratio = abs(area1 - area2) / max(area1, area2)
-                if area_diff_ratio > size_tolerance:
-                    message = (f"Images have a size difference of {area_diff_ratio:.2%}, "
-                               f"which is larger than the tolerance of {size_tolerance:.2%}.")
-                    return ActionResult(extracted_content=message, long_term_memory=message)
-                if area1 < area2:
-                    img2 = img2.resize(img1.size, Image.Resampling.LANCZOS)
+            def resize_for_processing(img):
+                h, w = img.shape[:2]
+                if w > max_width:
+                    ratio = max_width / w
+                    new_height = int(h * ratio)
+                    return cv2.resize(img, (max_width, new_height), interpolation=cv2.INTER_AREA)
+                return img
+
+            def _compare_sync(path1: str, path2: str) -> str:
+                """
+                Compares two images for visual similarity using the ORB feature matching algorithm.
+
+                This function is designed to be robust against changes in image size and minor 
+                content shifts (e.g., due to dynamic ads on a webpage screenshot). It returns
+                a similarity score between 0.0 (completely different) and 1.0 (very similar).
+
+                Args:
+                    path1 (str): Filesystem path to the first image.
+                    path2 (str): Filesystem path to the second image.
+                    max_width (int): The width to which large images are resized for efficient 
+                                    processing. Maintains aspect ratio.
+                    n_features (int): The maximum number of features to detect with ORB.
+                    lowe_ratio_thresh (float): The threshold for Lowe's ratio test to filter
+                                            for high-quality matches.
+                    min_good_matches (int): The minimum number of good matches required to even
+                                            consider the images potentially similar.
+                    distance_threshold (float): The average match distance that corresponds to
+                                                a high similarity. Used to normalize the score.
+
+                Returns:
+                    float: A similarity score between 0.0 and 1.0.
+                """
+                # Load images
+                img1_full = cv2.imread(path1, cv2.IMREAD_GRAYSCALE)
+                img2_full = cv2.imread(path2, cv2.IMREAD_GRAYSCALE)
+                img1 = resize_for_processing(img1_full)
+                img2 = resize_for_processing(img2_full)
+
+                # Initiate ORB detector
+                orb = cv2.ORB.create(nfeatures=n_features)
+
+                # Find the keypoints and descriptors with ORB
+                kp1, des1 = orb.detectAndCompute(img1, None) # type: ignore
+                kp2, des2 = orb.detectAndCompute(img2, None) # type: ignore
+                if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
+                    raise ValueError("Not enough features found in one or both images to compare.")
+                
+                # Match Features using Brute-Force Matcher
+                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+                # Use knnMatch to get k=2 best matches for Lowe's ratio test
+                all_matches = bf.knnMatch(des1, des2, k=2)
+                good_matches = []
+                try:
+                    for m, n in all_matches:
+                        if m.distance < lowe_ratio_thresh * n.distance:
+                            good_matches.append(m)
+                except ValueError:
+                    # This can happen if not enough matches are found to unpack
+                    raise ValueError("Not enough matches found to apply Lowe's ratio test.")
+                if len(good_matches) > min_good_matches:
+                    print(f"Found {len(good_matches)} good matches between the images.")
+                    # Calculate the average distance of only the good matches
+                    average_distance = np.mean([m.distance for m in good_matches])
+
+                    # Normalize the score based on the distance threshold.
+                    # A lower distance means higher similarity.
+                    similarity_score = max(0.0, float(1.0 - (average_distance / distance_threshold)))
+                    if similarity_score > 0.7:
+                        return f"Two images are similar with ORB similarity score {similarity_score:.2f}"
+                    else:
+                        return f"The two images are not similar, with a ORB similarity score of {similarity_score:.2f}"
                 else:
-                    img1 = img1.resize(img2.size, Image.Resampling.LANCZOS)
-            arr1 = np.array(img1).astype(np.float32)
-            arr2 = np.array(img2).astype(np.float32)
-            mse = np.mean((arr1 - arr2) ** 2)
-            max_pixel_val = 255.0
-            confidence = 1 - (mse / (max_pixel_val ** 2))
-            confidence = max(0.0, min(1.0, float(confidence)))
-            if confidence > 0.95:
-                message = f"Two images are similar with {confidence:.3f} confidence score."
-            else:
-                message = f"The two images are not similar, with a confidence score of {confidence:.3f}."
+                    # Not enough good matches to be considered similar
+                    return f"The two images are totaly different, with a ORB similarity score of 0.0."
+
+            loop = asyncio.get_event_loop()
+            message = await loop.run_in_executor(
+                None, functools.partial(_compare_sync, img1_path, img2_path)
+            )
             return ActionResult(extracted_content=message, long_term_memory=message)
+
         except FileNotFoundError as e:
             return ActionResult(error=f"Failed to compare images: File not found - {e.filename}")
         except Exception as e:
-            return ActionResult(error=f"Failed to compare 2 images: {e}")
+            return ActionResult(error=f"{e}", long_term_memory=f"{e}")
 
     @controller.action("Find a file in the current directory by name and return its path.")
     async def find_file(name: str) -> ActionResult:
@@ -204,16 +257,6 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
     
     @controller.action("Wait for a file to exist in the current directory, with a timeout.")
     async def wait_for_file(file_name: str, timeout: int = 120) -> ActionResult:
-        """
-        Waits for a specific file to appear in the current directory.
-
-        Args:
-            file_name: The name of the file to wait for.
-            timeout: The maximum time to wait in seconds.
-
-        Returns:
-            An ActionResult indicating success or timeout.
-        """
         try:
             curent_dir = os.path.dirname(os.path.abspath(__file__))
             file_path = os.path.join(curent_dir, file_name)
@@ -258,18 +301,18 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         except Exception as e:
             return ActionResult(error=f"Failed to navigate forward: {e}")
     
-    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.5)
+    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.7)
     page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash", temperature=0)
     agent = Agent(
                     task=task,
                     llm=llm,
                     page_extraction_llm=page_extraction_llm,
                     flash_mode=True,
-                    use_thinking=True,
+                    # use_thinking=True,
                     browser_session=browser_session,
                     controller=controller,
                     calculate_cost=True,
-                    max_actions_per_step=config.max_actions_per_step if config.max_actions_per_step else signature.parameters['max_actions_per_step'].default,
+                    max_actions_per_step=config.max_actions_per_step,
                     validate_output=True,
                 )
     return agent
@@ -306,7 +349,7 @@ def run_agent_worker(work_item):
                     llm_model="gemini-2.5-flash",
                     task=steps_string,
                     use_proxy=True,
-                    real_browser=params.get('use_real_browser', False),
+                    real_browser=params.get('use_real_browser', None),
                     headless=params.get('headless', False),
                     max_actions_per_step=params.get('apt'),
                 )
@@ -326,7 +369,7 @@ def run_agent_worker(work_item):
                     llm_api_key=GEMINI_API_KEY_2,
                     llm_model="gemini-2.5-flash",
                     task=steps_string,
-                    real_browser=params.get('use_real_browser', False),
+                    real_browser=params.get('use_real_browser', None),
                     headless=params.get('headless', False),
                     max_actions_per_step=params.get('apt'),
                 )
@@ -361,7 +404,7 @@ def worker_wrapper(work_item, queue):
 
 def main():
     try:
-        tests = load_test_from_yaml('test_scripts.yaml')
+        tests = load_test_from_yaml(TEST_FILE) # type: ignore
         if args['test_id']:
             tests = [
                 test for test in tests if str(test['TestID']) == str(args['test_id'])
@@ -404,7 +447,7 @@ def main():
             final_result = {
                 "COST": .0,
                 "TOKENS": 0,
-                "CONFIDENCE_SCORE": .0,
+                "SIMILARITY_SCORE": [],
             }
             test_name = test['TestName']
 
@@ -419,7 +462,12 @@ def main():
                     final_result["COST"] += agent_run_result.get("TotalCost", 0)
                     final_result["TOKENS"] += agent_run_result.get("TotalTokens", 0)
                     if agent_type == 'PXY':
-                        final_result["CONFIDENCE_SCORE"] = agent_run_result.get("confidence", 0.0)
+                        final_result["SIMILARITY_SCORE"] = agent_run_result.get("similarity_score", [])
+                        if final_result["SIMILARITY_SCORE"]:
+                            # we no longer need it here
+                            final_result[agent_type].delete("similarity_score", None)
+                    elif agent_type == 'NO_PXY':
+                        final_result[agent_type].delete("similarity_score", None)
             
             if final_result and (final_result.get("PXY") or final_result.get("NO_PXY")):
                 file_path = f"{test_name}_final_result.json"

@@ -3,6 +3,8 @@ waittime:
   wait_short: 10
   wait_medium: 30
   wait_long: 60
+  wait_extra_long: 120
+
 
 tools:
   &tools
@@ -12,6 +14,7 @@ tools:
   tool_compare_image: check_img_similarity
   tool_find_path: find_file
   tool_wait_for_file: wait_for_file
+
 
 tests:
 - TestName: bbc_com_initial_page_load_5
@@ -33,8 +36,7 @@ tests:
     Step 10: 'Evaluate the result. The test should Pass/Fail based on the following criteria:
         * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped.
         * Scrolling is smooth.
-        * The two images should be identical, with the confidence score as proof, and contain the expected search results
-        * If evaluation failed, retry from the first failed step. Max retry is 1'
+        * The two images should be identical, with the confidence score as proof, and contain the expected search results'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Scroll down to the end of the page and then back up to the top 2 times to ensure all content is triggered to load.'
@@ -42,8 +44,7 @@ tests:
     Step 4: 'Use the {tool_capture_and_save_screen} tool to capture a full-page screenshot and save it as "{TestName}_no_pxy.png".'
     Step 5: 'Evaluate the result. The test should Pass/Fail based on the following criteria:
         * All elements(images, texts, fonts, etc,) are visible and not crashed or overlapped.
-        * Scrolling is smooth.
-        * If evaluation failed, retry from the first failed step. Max retry is 1'
+        * Scrolling is smooth'
 
 - TestName: bbc_com_mouse_event_5
   TestID: 2
@@ -64,8 +65,7 @@ tests:
     Step 9: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
     Step 10: 'Evalute the result: Return Pass/Fail following criteria:
         * The menus should respond to on click event and support navigation to the required entry
-        * Two images should be identical, with confidence score as proof, and contain the expected search results
-        * If evaluation failed, retry from the first failed step. Max rerty is 1'
+        * Two images should be identical, with confidence score as proof, and contain the expected search results'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
@@ -73,40 +73,49 @@ tests:
     Step 4: 'Locate and click on {search_term} section, then click on the first item. Wait for the new page to load'
     Step 5: 'Wait until all web elements loaded. Use the {tool_capture_and_save_screen} tool to capture viewport screenshot and save as "{TestName}_no_pxy.png"'
     Step 6: 'Evalute the result: Return Pass/Fail following criteria:
-        * The menus should respond to on click event and support navigation to the required entry
-        * If evaluation failed, retry from the first failed step. Max rerty is 1'
+        * The menus should respond to on click event and support navigation to the required entry'
 
 - TestName: bbc_com_navigation_5
   TestID: 3
+  TestType: navigation
   TestParams:
     <<: [*default_waits, *tools]
     url: https://bbc.com
-    search_term: 'More News'
+    search_term: 'ONLY FROM THE BBC'
+    apt: 1
   TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
     Step 4: 'Wait for the website to load completely'
-    Step 5: 'Identify the header {search_term} and click the first news link under. Wait for the new page to load completely'
-    Step 6: 'Click "go back" button, wait for the page to load. Click "go forward" button, wait for the load. Click "go back" button again'
-    Step 7: 'Wait the website to load completely'
-    Step 8: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_pxy.png"'
-    Step 9: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
-    Step 10: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
-    Step 11: 'Evalute the result: Return Pass/Fail following criteria:
+    Step 5: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
+    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_pxy.png"'
+    Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds.'
+    Step 8: 'Compare "first_img_pxy.png" and "first_img_no_pxy.png" using the {tool_compare_image} tool'
+    Step 9: 'Click "go back" button, wait for the page to load completely'
+    Step 10: 'Click "go forward" button using the {tool_go_forward} tool, wait for the page to load completely'
+    Step 11: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_pxy.png"'
+    Step 12: 'Use the {tool_wait_for_file} tool to wait for the file "second_img_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds.'
+    Step 13: 'Compare "second_img_pxy.png" and "second_img_no_pxy.png" using the {tool_compare_image} tool'
+    Step 14: 'Click "go back" button again. Wait the website to load completely'
+    Step 15: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+    Step 16: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds.'
+    Step 17: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
+    Step 18: 'Evalute the result: Return Pass/Fail following criteria:
         * At the end of back-forward-back button testing cycle, the homepage should be displayed
-        * Two images should be identical, with confidence score as proof, and contain the expected search results
-        * If evaluation failed, retry from the first failed step. Max rerty is 1'
+        * All images comparisons should be identical, with confidence score as proof'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
-    Step 5: 'Identify the header {search_term} and click the first news link under. Wait for the new page to load completely'
-    Step 4: 'Click "go back" button, wait for the page to load. Click "go forward" button, wait for the load. Click "go back" button again'
-    Step 5: 'Wait the website to load completely'
-    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_no_pxy.png"'
-    Step 7: 'Evalute the result: Return Pass/Fail following criteria:
-        * At the end of back-forward-back button testing cycle, the homepage should be displayed
-        * If evaluation failed, retry from the first failed step. Max rerty is 1'
+    Step 3: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
+    Step 4: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_no_pxy.png"'
+    Step 5: 'Click "go back" button, wait for the page to load completely'
+    Step 6: 'Click "go forward" button using the {tool_go_forward} tool, wait for the page to load completely'
+    Step 7: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_no_pxy.png"'
+    Step 8: 'Click "go back" button again. Wait the website to load completely'
+    Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 10: 'Evalute the result: Return Pass/Fail following criteria:
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
 
 - TestName: bbc_com_keyboard_input_5
   TestID: 4
@@ -115,7 +124,7 @@ tests:
     <<: [*default_waits, *tools]
     url: https://bbc.com
     search_term: 'Jeremy Clarkson'
-    apt: 2
+    apt: 1
   TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
