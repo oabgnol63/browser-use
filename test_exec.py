@@ -3,7 +3,6 @@ import asyncio
 import multiprocessing
 import sys
 import argparse
-import inspect
 import yaml
 import time
 import json
@@ -27,7 +26,8 @@ GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2'
 if not os.getenv('TEST_FILE'):
     raise ValueError('TEST_FILE is not set. Please add it to your environment variables.')
 TEST_FILE = os.getenv('TEST_FILE')
-
+RESULT_FOLDER = os.getcwd() + '/TestResults'
+os.makedirs(RESULT_FOLDER, exist_ok=True)
 
 parser = argparse.ArgumentParser(description="Run browser tests with optional proxy.")
 parser.add_argument('--proxy_url', action='store', required=True, help="(Required) Use proxy settings for the tests.")
@@ -59,6 +59,7 @@ class AgentStructuredOutput(BaseModel):
 @dataclass
 class TestRunConfig:
     task: str
+    result_folder: str = RESULT_FOLDER
     max_actions_per_step: int = 3
     real_browser: Optional[str] = None
     proxy_host: Optional[str] = None
@@ -93,7 +94,6 @@ def generate_result(agent: Agent) -> Optional[Dict]:
 
  
 async def create_test_run_agent(config: TestRunConfig) -> Agent:
-    signature = inspect.signature(Agent.__init__)
     if config.real_browser:
         if config.real_browser == 'msedge':
             browser_executable_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
@@ -108,11 +108,9 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             "server": config.proxy_host
         }
         br_profile = BrowserProfile(
-            # cannot config proxy settings in headless mode
-            headless=False,
+            headless=False, # cannot config proxy settings in headless mode
             proxy=proxy_settings,
-            # Using user_data_dir=None ensures a clean, temporary profile for the test.
-            user_data_dir=None,
+            user_data_dir=None, # user_data_dir=None ensures a clean, temporary profile for the test.
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
             viewport=ViewportSize(width=1600, height=900),
@@ -168,12 +166,17 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         try:
             max_width: int = 1200
             n_features: int = 3000
-            lowe_ratio_thresh: float = 0.75
+            lowe_ratio_thresh: float = 0.8
             min_good_matches: int = 20
-            distance_threshold: float = 40.0
+            distance_threshold: float = 60.0
 
             if not os.path.exists(img1_path) or not os.path.exists(img2_path):
-                raise FileNotFoundError(f"One or both image files do not exist: {img1_path}, {img2_path}")
+                # force it to look in the result folder
+                print(f"Debugging: img1_path={img1_path}, img2_path={img2_path}")
+                img1_path = config.result_folder + '/' + os.path.basename(img1_path)
+                img2_path = config.result_folder + '/' + os.path.basename(img2_path)
+                if not os.path.exists(img1_path) or not os.path.exists(img2_path):
+                    raise FileNotFoundError(f"One or both image files do not exist: {img1_path}, {img2_path}")
 
             if img1_path == img2_path:
                 raise ValueError("Image paths must be different. Same img?")
@@ -246,28 +249,25 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             return ActionResult(error=f"{e}")
 
     @controller.action("Find a file in the current directory by name and return its path.")
-    async def find_file(name: str) -> ActionResult:
+    async def find_file(dir: str, name: str) -> ActionResult:
         try:
-            curent_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(curent_dir, name)
+            file_path = os.path.join(dir, name)
             if not os.path.exists(file_path):
-                return ActionResult(error=f"File {name} not found in the current directory: {curent_dir}")
+                return ActionResult(error=f"File {name} not found in the current directory: {dir}")
             print(f"File {name} found at: {file_path}")
             return ActionResult(extracted_content=f"File {name} found at {file_path}",)
         except Exception as e:
             return ActionResult(error=f"Failed to find file {name}: {e}")
     
-    @controller.action("Wait for a file to exist in the current directory, with a timeout.")
+    @controller.action("Wait for a file to exist in the TestResults directory, with a timeout.")
     async def wait_for_file(file_name: str, timeout: int = 120) -> ActionResult:
         try:
-            curent_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(curent_dir, file_name)
-            
+            file_path = os.path.join(config.result_folder, file_name)
             start_time = time.time()
             print(f"Waiting for file '{file_name}' to be created (timeout: {timeout}s)...")
             while not os.path.exists(file_path):
                 if time.time() - start_time > timeout:
-                    error_message = f"Timeout: File '{file_name}' was not found within {timeout} seconds in directory {curent_dir}."
+                    error_message = f"Timeout: File '{file_name}' was not found within {timeout} seconds in directory {config.result_folder}."
                     print(error_message)
                     return ActionResult(error=error_message)
                 await asyncio.sleep(2)  # Poll every 2 seconds
@@ -282,15 +282,15 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         browser_session: BrowserSession, file_name: str, full_page: bool = False) -> ActionResult:
 
         try:
-            file_path = os.path.join(os.path.curdir, file_name)
+            file_path = os.path.join(config.result_folder, file_name)
             page = await browser_session.get_current_page()
             await browser_session.remove_highlights()
             await page.evaluate("window.scrollTo(0, 0)")
             screenshot_bytes = await page.screenshot(full_page=full_page, animations="disabled")
             with Image.open(io.BytesIO(screenshot_bytes)) as img:
                 img.convert("RGB").save(file_path)
-            return ActionResult(extracted_content=f"Screenshot saved to {file_name}",
-                                long_term_memory=f"Screenshot saved to {file_path}",)
+            return ActionResult(extracted_content=f"{file_name} screenshot saved to {file_path}",
+                                long_term_memory=f"{file_name} screenshot saved to {file_path}",)
         except Exception as e:
             return ActionResult(error=f"Failed to save screenshot: {e}")
         
@@ -306,22 +306,24 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
     llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.7)
     page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash", temperature=0)
     agent = Agent(
-                    task=task,
-                    llm=llm,
-                    page_extraction_llm=page_extraction_llm,
-                    flash_mode=True,
-                    # use_thinking=True,
-                    browser_session=browser_session,
-                    controller=controller,
-                    calculate_cost=True,
-                    max_actions_per_step=config.max_actions_per_step,
-                    validate_output=True,
-                )
+        task=task,
+        llm=llm,
+        page_extraction_llm=page_extraction_llm,
+        flash_mode=True,
+        # use_thinking=True,
+        browser_session=browser_session,
+        controller=controller,
+        calculate_cost=True,
+        max_actions_per_step=config.max_actions_per_step,
+        validate_output=True,
+    )
     return agent
  
 def run_agent_worker(work_item):
     test, args, agent_type = work_item
     async def async_run_single_agent():
+
+        # combine test parameters with args from cmd line
         params = test['TestParams']
         params['TestName'] = test['TestName']
         params.update(args)
@@ -334,6 +336,9 @@ def run_agent_worker(work_item):
 
         agent_result = None
         agent = None
+        # create folder to save results
+        sub_result_folder = os.path.join(RESULT_FOLDER, test['TestName'])
+        os.makedirs(sub_result_folder, exist_ok=True)
 
         try:
             if agent_type == 'PXY':
@@ -344,6 +349,7 @@ def run_agent_worker(work_item):
                     important_note
                 
                 test_run_config = TestRunConfig(
+                    result_folder=sub_result_folder,
                     proxy_username=params['proxy_username'],
                     proxy_pwd=params['proxy_password'],
                     proxy_host=params['proxy_url'],
@@ -368,6 +374,7 @@ def run_agent_worker(work_item):
                     important_note
 
                 test_run_config = TestRunConfig(
+                    result_folder=sub_result_folder,
                     llm_api_key=GEMINI_API_KEY_2,
                     llm_model="gemini-2.5-flash",
                     task=steps_string,
@@ -470,10 +477,13 @@ def main():
                         final_result[agent_type].pop("similarity_score", None)
             
             if final_result and (final_result.get("PXY") or final_result.get("NO_PXY")):
-                file_path = f"{test_name}_final_result.json"
-                with open(file_path, "w") as f:
+                test_result_folder = os.path.join(RESULT_FOLDER, test_name)
+                if not os.path.exists(test_result_folder):
+                    os.makedirs(test_result_folder, exist_ok=True)
+                result_file_path = os.path.join(test_result_folder, f"{test_name}_final_result.json")
+                with open(result_file_path, "w") as f:
                     json.dump(final_result, f, indent=4)
-                print(f"✅ Successfully wrote aggregated results to {file_path}")
+                print(f"✅ Successfully wrote aggregated results to {result_file_path}")
             else:
                 print(f"⚠️ No final result generated for {test_name}, skipping file write.")
             
