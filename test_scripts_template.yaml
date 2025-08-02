@@ -9,8 +9,9 @@
     url:                            # Test url, e.g "https://www.example.com"
     search_term:                    # Search term to find on the page, e.g "News", "Weather", etc.
     ## OPTIONAL PARAMETERS (uncomment to use) ##
-    # apt: 1            # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
-                        # Be aware that setting this will increase the test execution time and LLM token usage  
+    # apt: 1      # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
+                  # Be aware that setting this will increase the test execution time and LLM token usage
+    # scroll: 1   # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
   TestStepsPXY:
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}' 
@@ -74,7 +75,7 @@
     # apt: 1            # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
                         # Be aware that setting this will increase the test execution time and LLM token usage  
   TestStepsPXY:
-    ############################# START UNTOUCHED STEPS #############################
+    ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
@@ -90,7 +91,7 @@
         * << Expectation 2 >>
         * Two images should be identical, with confidence score as proof, and contain the expected search results'
   TestSteps:
-    ############################# START UNTOUCHED STEPS #############################
+    ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
     Step 3: 'Locate the search box/icon, type {search_term} on search bar and click search or press Enter. Wait for the new page to load completely'

@@ -798,6 +798,7 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 
 		if extension_paths:
 			logger.info(f'✅ Extensions ready: {len(extension_paths)} extensions loaded ({", ".join(loaded_extension_names)})')
+			logger.debug(f'📂 Extensions directory: {extension_paths}')
 		else:
 			logger.warning('⚠️ No default extensions could be loaded')
 
@@ -927,7 +928,7 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		else:
 			# device_scale_factor and screen are not supported non-viewport mode, the system monitor determines these
 			self.viewport = None
-			self.device_scale_factor = None  # only supported in viewport mode
+			# self.device_scale_factor = None  # only supported in viewport mode
 			self.screen = None  # only supported in viewport mode
 			assert self.viewport is None
 			assert self.no_viewport is True

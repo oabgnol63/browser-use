@@ -8,6 +8,7 @@ import time
 import json
 import io
 import functools
+import tkinter as tk
 import numpy as np
 import cv2
 from dotenv import load_dotenv
@@ -53,8 +54,8 @@ from browser_use.llm import ChatGoogle
 class AgentStructuredOutput(BaseModel):
     result: str = Field(description="'Pass' or 'Fail': The result of the test case")
     describe: str = Field(description="Describe the state of the website after interacting actions like navigating, searching, or scrolling, and include the results of any image comparisons.")
-    screenshot_path: str = Field(description="Path to the screenshot captured")
-    similarity_score: list[tuple] = Field(description="Similarity score of all images comparison")
+    screenshot_path: str = Field(description="Absolute path to the screenshot captured")
+    similarity_score: list[tuple] = Field(description="a list of tuples (image 1, image 2, similarity score of their comparison)")
 
 @dataclass
 class TestRunConfig:
@@ -76,6 +77,20 @@ def load_test_from_yaml(file_path: str):
         test_data = yaml.safe_load(file)
     return test_data['tests']
 
+def detect_screen_size():
+    """
+    Detects the screen size of the primary monitor.
+    Returns a tuple (width, height).
+    """
+    root = tk.Tk()
+    root.withdraw()
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    root.destroy()
+    return screen_width, screen_height
+
+windows_width, windows_height = detect_screen_size()
+print(f"Detected screen size: {windows_width}x{windows_height}")
 
 def generate_result(agent: Agent) -> Optional[Dict]:
     agent_result = agent.history.final_result()
@@ -102,7 +117,8 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         else:
             pass
     else:
-        browser_executable_path = None       
+        browser_executable_path = None  
+
     if config.use_proxy and config.proxy_host:
         proxy_settings: ProxySettings = {
             "server": config.proxy_host
@@ -110,29 +126,37 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         br_profile = BrowserProfile(
             headless=False, # cannot config proxy settings in headless mode
             proxy=proxy_settings,
-            user_data_dir=None, # user_data_dir=None ensures a clean, temporary profile for the test.
+            user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
-            viewport=ViewportSize(width=1600, height=900),
-            device_scale_factor=0.75,
-            # stealth=True,
-            executable_path=browser_executable_path
+            window_size=ViewportSize(width=windows_width, height=windows_height-50),
+            device_scale_factor=1.5,
+            stealth=False,
+            executable_path=browser_executable_path,
+            enable_default_extensions=True,
+            # profile_directory="C:\\Users\\231791\\AppData\\Local\\Microsoft\\Edge\\User Data\\Profile 2", # Use a specific profile directory if needed
+            # keep_alive=True,
+            # channel=BrowserChannel.CHROME
         )
-        browser_session = BrowserSession(
-            browser_profile=br_profile,
-        )        
+        
     else:
-        browser_session = BrowserSession(
-            browser_profile=BrowserProfile(
-                headless=config.headless,
-                minimum_wait_page_load_time=10,
-                maximum_wait_page_load_time=60,
-                viewport=ViewportSize(width=1600, height=900),
-                device_scale_factor=0.75,                    
-                # stealth=True,
-                executable_path=browser_executable_path,)
+        br_profile=BrowserProfile(
+            headless=config.headless,
+            user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
+            minimum_wait_page_load_time=10,
+            maximum_wait_page_load_time=60,
+            window_size=ViewportSize(width=windows_width, height=windows_height-50),
+            device_scale_factor=1.5,                    
+            stealth=False,
+            executable_path=browser_executable_path,
+            enable_default_extensions=True,
+            # keep_alive=True,
+            # channel=BrowserChannel.CHROME
         )
-
+        
+    browser_session = BrowserSession(
+        browser_profile=br_profile,
+    )
     task = config.task
     output_schema = AgentStructuredOutput
     controller = Controller(output_model=output_schema)
@@ -302,7 +326,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             return ActionResult(extracted_content=f"Successfully navigated forward in the browser history.")
         except Exception as e:
             return ActionResult(error=f"Failed to navigate forward: {e}")
-    
+
     llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.7)
     page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash", temperature=0)
     agent = Agent(
@@ -421,8 +445,11 @@ def main():
             if not tests:
                 print(f"No test found with ID: {args['test_id']}")
                 return
-        
         for test in tests:
+            # check if the test has a 'skip' tag
+            if "skip" in test.get('Tag', []) and not args['test_id']: # ignore skip tag if test_id is provided
+                print(f"Skipping test {test['TestName']} (ID: {test['TestID']}) due to 'skip' tag.")
+                continue
             print(f"\n{'='*20} Starting Test: {test['TestName']} (ID: {test['TestID']}) {'='*20}")
             final_result = {
                 "COST": .0,

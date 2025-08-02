@@ -15,7 +15,6 @@ tools:
   tool_find_path: find_file
   tool_wait_for_file: wait_for_file
 
-
 tests:
 - TestName: bbc_com_initial_page_load_5
   TestID: 1
@@ -83,12 +82,13 @@ tests:
     url: https://bbc.com
     search_term: 'MORE NEWS'
     apt: 1
+    scroll: 1
   TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait for the website to load completely'
-    Step 5: 'Find "{search_term}" article headline on home page (it should be text on the page, not a navigation menu link). If scroll is needed, scroll half-page each time to find it'
+    Step 4: 'Wait for the website to load completely and note the current URL, which is the homepage'
+    Step 5: 'Find "{search_term}" article headline on home page (it should be text on the page, not a navigation menu link). If scroll is needed, scroll {scroll} page each time to find it'
     Step 6: 'Click the first article link found directly underneath this heading. Wait for the new page to load completely.'
     Step 7: 'Once on the article page, use the {tool_capture_and_save_screen} tool to capture a full-page screenshot and save it as "first_img_pxy.png".'
     Step 8: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds.'
@@ -107,8 +107,8 @@ tests:
         * All images comparisons should be similar, with similarity score as proof'
   TestSteps:
     Step 1: 'Go to {url}'
-    Step 2: 'Wait for the website to load completely. Note the current URL, which is the homepage'
-    Step 3: 'Find "{search_term}" article headline on home page (it should be text on the page, not a navigation menu link). If scroll is needed, scroll half-page each time to find it'
+    Step 2: 'Wait for the website to load completely and note the current URL, which is the homepage'
+    Step 3: 'Find "{search_term}" article headline on home page (it should be text on the page, not a navigation menu link). If scroll is needed, scroll {scroll} page each time to find it'
     Step 4: 'Click the first article link found directly underneath this heading. Wait for the new page to load completely.'    
     Step 5: 'Once on the article page, use the {tool_capture_and_save_screen} tool to capture a full-page screenshot and save it as "first_img_no_pxy.png"'
     Step 6: 'Click "go back" button, wait for the page to load completely'
