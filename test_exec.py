@@ -133,25 +133,20 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             device_scale_factor=1.5,
             stealth=False,
             executable_path=browser_executable_path,
-            enable_default_extensions=True,
-            # profile_directory="C:\\Users\\231791\\AppData\\Local\\Microsoft\\Edge\\User Data\\Profile 2", # Use a specific profile directory if needed
             # keep_alive=True,
-            # channel=BrowserChannel.CHROME
         )
         
     else:
         br_profile=BrowserProfile(
             headless=config.headless,
-            user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
+            user_data_dir=None,
             minimum_wait_page_load_time=10,
             maximum_wait_page_load_time=60,
             window_size=ViewportSize(width=windows_width, height=windows_height-50),
             device_scale_factor=1.5,                    
             stealth=False,
             executable_path=browser_executable_path,
-            enable_default_extensions=True,
             # keep_alive=True,
-            # channel=BrowserChannel.CHROME
         )
         
     browser_session = BrowserSession(

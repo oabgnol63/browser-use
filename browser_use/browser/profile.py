@@ -64,6 +64,7 @@ CHROME_DISABLED_COMPONENTS = [
 	'OverscrollHistoryNavigation',
 	'InfiniteSessionRestore',
 	'ExtensionDisableUnsupportedDeveloper',
+	'DisableLoadExtensionCommandLineSwitch',
 ]
 
 CHROME_HEADLESS_ARGS = [
