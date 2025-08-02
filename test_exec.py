@@ -78,14 +78,14 @@ def load_test_from_yaml(file_path: str):
 
 
 def generate_result(agent: Agent) -> Optional[Dict]:
-    agent_result = agent.state.history.final_result()
+    agent_result = agent.history.final_result()
     if agent_result:
         agent_result = json.loads(agent_result)
-        agent_result["ExecutionTime"] = agent.state.history.total_duration_seconds()
-        agent_result["AISteps"] = agent.state.history.number_of_steps()
-        if agent.state.history.usage:
-            agent_result["TotalCost"] = agent.state.history.usage.total_cost
-            agent_result["TotalTokens"] = agent.state.history.usage.total_tokens
+        agent_result["ExecutionTime"] = agent.history.total_duration_seconds()
+        agent_result["AISteps"] = agent.history.number_of_steps()
+        if agent.history.usage:
+            agent_result["TotalCost"] = agent.history.usage.total_cost
+            agent_result["TotalTokens"] = agent.history.usage.total_tokens
         else:
             agent_result["TotalCost"] = 0
             agent_result["TotalTokens"] = 0
