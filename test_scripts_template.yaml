@@ -1,13 +1,13 @@
 ##########   TEMPLATE FOR PAGE NAVIGATION TEST CASE   ##########
 
-- TestName:             # Test case name, e.g. facebook_com_mouse_event_5
+- TestType: navigation
+  TestName:             # Test case name, e.g. facebook_com_navigation_5
   TestID:               # Unique identifier for the test (e.g., 3)
-  TestType: navigation
   TestParams:
     ## REQUIRED PARAMETERS ##
-    <<: [*default_waits, *tools]
-    url:                # Test url, e.g "https://www.example.com"
-    search_term:        # Search term to find on the page, e.g "News", "Weather", etc.
+    <<: [*default_waits, *tools]    # Default waits and tools use by agent 
+    url:                            # Test url, e.g "https://www.example.com"
+    search_term:                    # Search term to find on the page, e.g "News", "Weather", etc.
     ## OPTIONAL PARAMETERS (uncomment to use) ##
     # apt: 1            # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
                         # Be aware that setting this will increase the test execution time and LLM token usage  
@@ -32,8 +32,9 @@
     Step 17: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
     #############################  END UNTOUCHED STEPS  #############################
     Step 18: > ## Modify this step to fit your expectations
-      Evaluate the result: Return Pass/Fail following criteria: 
-        * At the end of back-forward-back button testing cycle, the homepage should be displayed,
+      'Evaluate the result: Return Pass/Fail following criteria: 
+        * << Expectation 1 >>
+        * << Expectation 2 >>
         * All images comparisons should be identical, with confidence score as proof'
   TestSteps:
     ############################# START UNTOUCHED STEPS #############################
@@ -48,21 +49,23 @@
     Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
     #############################  END UNTOUCHED STEPS  #############################
     Step 10: > ## Should be the same as the above expectations
-      Evaluate the result: Return Pass/Fail following criteria:
-        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
+      'Evaluate the result: Return Pass/Fail following criteria:
+        * << Expectation 1 >>
+        * << Expectation 2 >>
+      '
 
 ########## TEMPLATE FOR PAGE NAVIGATION TEST CASE END ##########
 
 ##########   TEMPLATE FOR KEYBOARD INPUT TEST CASE   ##########
 
-- TestName:             # Test case name, e.g. facebook_com_mouse_event_5
+- TestType: keyboard_input
+  TestName:             # Test case name, e.g. facebook_com_keyboard_input_5
   TestID:               # Unique identifier for the test (e.g., 3)
-  TestType: keyboard_input
   TestParams:
     ## REQUIRED PARAMETERS ##
-    <<: [*default_waits, *tools]
-    url:                # Test url, e.g "https://www.example.com"
-    search_term:        # Search term to input to search bar, e.g "Bad boy lifestyle", etc.
+    <<: [*default_waits, *tools]    # Default waits and tools use by agent
+    url:                            # Test url, e.g "https://www.example.com"
+    search_term:                    # Search term to input to search bar, e.g "Bad boy lifestyle", etc.
     ## OPTIONAL PARAMETERS (uncomment to use) ##
     # apt: 1            # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
                         # Be aware that setting this will increase the test execution time and LLM token usage  
@@ -79,7 +82,8 @@
     #############################  END UNTOUCHED STEPS  #############################
     Step 9: > ## Modify this step to fit your expectations
       'Evaluate the result: Return Pass/Fail following criteria:
-        * The search results context should contain "{search_term}"
+        * << Expectation 1 >>
+        * << Expectation 2 >>
         * Two images should be identical, with confidence score as proof, and contain the expected search results'
   TestSteps:
     ############################# START UNTOUCHED STEPS #############################
@@ -90,6 +94,8 @@
     #############################  END UNTOUCHED STEPS  #############################
     Step 5: > ## Should be the same as the above expectations
       'Evaluate the result: Return Pass/Fail following criteria:
-        * The search results context should contain "{search_term}"'
+        * << Expectation 1 >>
+        * << Expectation 2 >>
+      '
 
 ########## TEMPLATE FOR KEYBOARD INPUT TEST CASE END ##########

@@ -13,7 +13,7 @@ import numpy as np
 import cv2
 from dotenv import load_dotenv
 from PIL import Image
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
@@ -140,21 +140,43 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
     controller = Controller(output_model=output_schema)
 
 
-    @controller.action("Compare 2 images and return a similarity score. Scores close to 1 are considered similar.")
+    @controller.action("Compare 2 images and return a similarity score. Scores of at least 0.7 are considered similar.")
     async def check_img_similarity(img1_path: str, img2_path: str) -> ActionResult:
+        """
+        Compares two images for visual similarity using the ORB feature matching algorithm.
+
+        This function is designed to be robust against changes in image size and minor 
+        content shifts (e.g., due to dynamic ads on a webpage screenshot). It returns
+        a similarity score between 0.0 (completely different) and 1.0 (very similar).
+
+        Args:
+            img1_path (str): Filesystem path to the first image.
+            img2_path (str): Filesystem path to the second image.
+            max_width (int): The width to which large images are resized for efficient 
+                            processing. Maintains aspect ratio.
+            n_features (int): The maximum number of features to detect with ORB.
+            lowe_ratio_thresh (float): The threshold for Lowe's ratio test to filter
+                                    for high-quality matches.
+            min_good_matches (int): The minimum number of good matches required to even
+                                    consider the images potentially similar.
+            distance_threshold (float): The average match distance that corresponds to
+                                        a high similarity. Used to normalize the score.
+
+        Returns:
+            ActionResult: A similarity score between 0.0 and 1.0.
+        """
         try:
             max_width: int = 1200
             n_features: int = 3000
             lowe_ratio_thresh: float = 0.75
-            min_good_matches: int = 200
+            min_good_matches: int = 20
             distance_threshold: float = 40.0
 
             if not os.path.exists(img1_path) or not os.path.exists(img2_path):
                 raise FileNotFoundError(f"One or both image files do not exist: {img1_path}, {img2_path}")
 
-            print(f"Comparing images: {img1_path} and {img2_path}")
             if img1_path == img2_path:
-                return ActionResult(error="Image paths must be different. Same img?")
+                raise ValueError("Image paths must be different. Same img?")
             
             def resize_for_processing(img):
                 h, w = img.shape[:2]
@@ -165,29 +187,9 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
                 return img
 
             def _compare_sync(path1: str, path2: str) -> str:
-                """
-                Compares two images for visual similarity using the ORB feature matching algorithm.
-
-                This function is designed to be robust against changes in image size and minor 
-                content shifts (e.g., due to dynamic ads on a webpage screenshot). It returns
-                a similarity score between 0.0 (completely different) and 1.0 (very similar).
-
-                Args:
-                    path1 (str): Filesystem path to the first image.
-                    path2 (str): Filesystem path to the second image.
-                    max_width (int): The width to which large images are resized for efficient 
-                                    processing. Maintains aspect ratio.
-                    n_features (int): The maximum number of features to detect with ORB.
-                    lowe_ratio_thresh (float): The threshold for Lowe's ratio test to filter
-                                            for high-quality matches.
-                    min_good_matches (int): The minimum number of good matches required to even
-                                            consider the images potentially similar.
-                    distance_threshold (float): The average match distance that corresponds to
-                                                a high similarity. Used to normalize the score.
-
-                Returns:
-                    float: A similarity score between 0.0 and 1.0.
-                """
+                img1_name = os.path.basename(path1)
+                img2_name = os.path.basename(path2)
+                print(f"Comparing images: {img1_name} and {img2_name}")
                 # Load images
                 img1_full = cv2.imread(path1, cv2.IMREAD_GRAYSCALE)
                 img2_full = cv2.imread(path2, cv2.IMREAD_GRAYSCALE)
@@ -225,12 +227,12 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
                     # A lower distance means higher similarity.
                     similarity_score = max(0.0, float(1.0 - (average_distance / distance_threshold)))
                     if similarity_score > 0.7:
-                        return f"Two images are similar with ORB similarity score {similarity_score:.2f}"
+                        return f"Two images {img1_name} and {img2_name} are similar, with ORB similarity score {similarity_score:.2f}"
                     else:
-                        return f"The two images are not similar, with a ORB similarity score of {similarity_score:.2f}"
+                        return f"Two images {img1_name} and {img2_name} are not similar, with a ORB similarity score {similarity_score:.2f}"
                 else:
                     # Not enough good matches to be considered similar
-                    return f"The two images are totaly different, with a ORB similarity score of 0.0."
+                    return f"The two images {img1_name} and {img2_name} are totaly different, with a ORB similarity score 0.0."
 
             loop = asyncio.get_event_loop()
             message = await loop.run_in_executor(
@@ -241,7 +243,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         except FileNotFoundError as e:
             return ActionResult(error=f"Failed to compare images: File not found - {e.filename}")
         except Exception as e:
-            return ActionResult(error=f"{e}", long_term_memory=f"{e}")
+            return ActionResult(error=f"{e}")
 
     @controller.action("Find a file in the current directory by name and return its path.")
     async def find_file(name: str) -> ActionResult:
@@ -415,7 +417,12 @@ def main():
         
         for test in tests:
             print(f"\n{'='*20} Starting Test: {test['TestName']} (ID: {test['TestID']}) {'='*20}")
-            
+            final_result = {
+                "COST": .0,
+                "TOKENS": 0,
+                "SIMILARITY_SCORE": [],
+            }
+            test_name = test['TestName']
             work_items = []
             if 'TestStepsPXY' in test:
                 work_items.append((test, args, 'PXY'))
@@ -444,13 +451,6 @@ def main():
             for p in processes:
                 p.join()
 
-            final_result = {
-                "COST": .0,
-                "TOKENS": 0,
-                "SIMILARITY_SCORE": [],
-            }
-            test_name = test['TestName']
-
             for item in results:
                 if item is None: 
                     continue
@@ -465,9 +465,9 @@ def main():
                         final_result["SIMILARITY_SCORE"] = agent_run_result.get("similarity_score", [])
                         if final_result["SIMILARITY_SCORE"]:
                             # we no longer need it here
-                            final_result[agent_type].delete("similarity_score", None)
+                            final_result[agent_type].pop("similarity_score", None)
                     elif agent_type == 'NO_PXY':
-                        final_result[agent_type].delete("similarity_score", None)
+                        final_result[agent_type].pop("similarity_score", None)
             
             if final_result and (final_result.get("PXY") or final_result.get("NO_PXY")):
                 file_path = f"{test_name}_final_result.json"

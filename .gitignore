@@ -29,7 +29,6 @@ dist/
 *.jsonl
 *.log
 *.bak
-*.png
 
 # Secrets and sensitive files
 secrets.env
@@ -54,3 +53,8 @@ credentials.json
 token.json
 
 !docs/docs.json
+
+# Additional files
+*.png
+*.jpg
+*.jpeg

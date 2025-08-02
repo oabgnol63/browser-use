@@ -81,14 +81,14 @@ tests:
   TestParams:
     <<: [*default_waits, *tools]
     url: https://bbc.com
-    search_term: 'ONLY FROM THE BBC'
+    search_term: 'MORE NEWS'
     apt: 1
   TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
     Step 4: 'Wait for the website to load completely'
-    Step 5: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
+    Step 5: 'Find the {search_term} session and click the first news link under {search_term}. Wait for the new page to load completely'
     Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_pxy.png"'
     Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds.'
     Step 8: 'Compare "first_img_pxy.png" and "first_img_no_pxy.png" using the {tool_compare_image} tool'
@@ -103,11 +103,11 @@ tests:
     Step 17: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
     Step 18: 'Evalute the result: Return Pass/Fail following criteria:
         * At the end of back-forward-back button testing cycle, the homepage should be displayed
-        * All images comparisons should be identical, with confidence score as proof'
+        * All images comparisons should be similar, with similarity score as proof'
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
-    Step 3: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
+    Step 3: 'Find the {search_term} session and click the first news link under {search_term}. Wait for the new page to load completely'
     Step 4: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_no_pxy.png"'
     Step 5: 'Click "go back" button, wait for the page to load completely'
     Step 6: 'Click "go forward" button using the {tool_go_forward} tool, wait for the page to load completely'
