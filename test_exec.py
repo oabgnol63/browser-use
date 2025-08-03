@@ -53,7 +53,7 @@ from browser_use.llm import ChatGoogle
 
 class AgentStructuredOutput(BaseModel):
     result: str = Field(description="'Pass' or 'Fail': The result of the test case")
-    describe: str = Field(description="Describe the state of the website after interacting actions like navigating, searching, or scrolling, and include the results of any image comparisons.")
+    describe: list[tuple] = Field(description="a list of tuples (main step description, detail step result)")
     screenshot_path: str = Field(description="Absolute path to the screenshot captured")
     similarity_score: list[tuple] = Field(description="a list of tuples (image 1, image 2, similarity score of their comparison)")
 
@@ -322,7 +322,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         except Exception as e:
             return ActionResult(error=f"Failed to navigate forward: {e}")
 
-    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0.7)
+    llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0)
     page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash", temperature=0)
     agent = Agent(
         task=task,

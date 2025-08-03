@@ -8,10 +8,10 @@
     <<: [*default_waits, *tools]    # Default waits and tools use by agent 
     url:                            # Test url, e.g "https://www.example.com"
     search_term:                    # Search term to find on the page, e.g "News", "Weather", etc.
-    ## OPTIONAL PARAMETERS (uncomment to use) ##
+    ## OPTIONAL PARAMETERS ##
     # apt: 1      # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
                   # Be aware that setting this will increase the test execution time and LLM token usage
-    # scroll: 1   # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
+    scroll: 1     # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
   TestStepsPXY:
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}' 
