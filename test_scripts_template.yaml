@@ -7,7 +7,6 @@
     ## REQUIRED PARAMETERS ##
     <<: [*default_waits, *tools]    # Default waits and tools use by agent 
     url:                            # Test url, e.g "https://www.example.com"
-    search_term:                    # Search term to find on the page, e.g "News", "Weather", etc.
     ## OPTIONAL PARAMETERS ##
     # apt: 1      # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
                   # Be aware that setting this will increase the test execution time and LLM token usage
@@ -19,15 +18,17 @@
     Step 3: 'Input {proxy_password} for password and click "Log in"'
     Step 4: 'Wait for the website to load completely'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 5: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
-      * << Action >>
+    Step 5: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
+      * << Your Navigate Action>>
+      * Wait for the new page to load completely
+      * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_pxy.png"'
+    Step 6: 'Check for rendering errors. Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_pxy.png"'
     Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
     Step 8: 'Compare "first_img_pxy.png" and "first_img_no_pxy.png" using the {tool_compare_image} tool'
-    Step 9: 'Click "go back" button, wait for the page to load completely'
-    Step 10: 'Click "go forward" button, wait for the page to load completely'
+    Step 9: 'Click "go back" button, wait for the page to load completely. Check for rendering errors'
+    Step 10: 'Click "go forward" button, wait for the page to load completely. Check for rendering errors'
     Step 11: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_pxy.png"'
     Step 12: 'Use the {tool_wait_for_file} tool to wait for the file "second_img_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
     Step 13: 'Compare "second_img_pxy.png" and "second_img_no_pxy.png" using the {tool_compare_image} tool'
@@ -37,24 +38,34 @@
     Step 17: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
     #############################  END UNTOUCHED STEPS  #############################
     Step 18: > ## Modify this step to fit your expectations
-      'Evaluate the result: Return Pass/Fail following criteria: 
+      '
+      Evaluate the result: Return Pass/Fail following criteria: 
         * << Expectation 1 >>
         * << Expectation 2 >>
-        * All images comparisons should be identical, with confidence score as proof'
+        * All images comparisons should be identical, with confidence score as proof
+      '
   TestSteps:
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
-    Step 3: 'Identify the {search_term} header and click the first news link under. Wait for the new page to load completely'
-    Step 4: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_no_pxy.png"'
-    Step 5: 'Click "go back" button, wait for the page to load completely'
-    Step 6: 'Click "go forward" button, wait for the page to load completely'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 3: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
+      '
+      * << Navigate Action >>  
+      * Wait for the new page to load completely
+      * If scroll is needed, scroll {scroll} page each time to find search term
+      '
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 4: 'Check for rendering errors. Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_no_pxy.png"'
+    Step 5: 'Click "go back" button, wait for the page to load completely. Check for rendering errors'
+    Step 6: 'Click "go forward" button, wait for the page to load completely. Check for rendering errors'
     Step 7: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_no_pxy.png"'
-    Step 8: 'Click "go back" button again. Wait the website to load completely'
+    Step 8: 'Click "go back" button again. Wait the website to load completely. Check for rendering errors'
     Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
     #############################  END UNTOUCHED STEPS  #############################
     Step 10: > ## Should be the same as the above expectations
-      'Evaluate the result: Return Pass/Fail following criteria:
+      '
+      Evaluate the result: Return Pass/Fail following criteria:
         * << Expectation 1 >>
         * << Expectation 2 >>
       '

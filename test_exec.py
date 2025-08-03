@@ -7,6 +7,7 @@ import yaml
 import time
 import json
 import io
+import inspect
 import functools
 import tkinter as tk
 import numpy as np
@@ -183,9 +184,9 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         try:
             max_width: int = 1200
             n_features: int = 3000
-            lowe_ratio_thresh: float = 0.7
+            lowe_ratio_thresh: float = 0.6
             min_good_matches: int = 20
-            distance_threshold: float = 40.0
+            distance_threshold: float = 30.0
 
             if not os.path.exists(img1_path) or not os.path.exists(img2_path):
                 # force it to look in the result folder
@@ -356,7 +357,7 @@ def run_agent_worker(work_item):
         # create folder to save results
         sub_result_folder = os.path.join(RESULT_FOLDER, test['TestName'])
         os.makedirs(sub_result_folder, exist_ok=True)
-
+        signature = inspect.signature(Agent.__init__)
         try:
             if agent_type == 'PXY':
                 steps_dict = test['TestStepsPXY']
@@ -376,7 +377,7 @@ def run_agent_worker(work_item):
                     use_proxy=True,
                     real_browser=params.get('use_real_browser', None),
                     headless=params.get('headless', False),
-                    max_actions_per_step=params.get('apt'),
+                    max_actions_per_step=params.get('apt', signature.parameters["max_actions_per_step"].default),
                 )
                 agent = await create_test_run_agent(test_run_config)
 
@@ -397,7 +398,7 @@ def run_agent_worker(work_item):
                     task=steps_string,
                     real_browser=params.get('use_real_browser', None),
                     headless=params.get('headless', False),
-                    max_actions_per_step=params.get('apt'),
+                    max_actions_per_step=params.get('apt', signature.parameters["max_actions_per_step"].default),
                 )
                 agent = await create_test_run_agent(test_run_config)
             
