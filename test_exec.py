@@ -131,7 +131,6 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             maximum_wait_page_load_time=60,
             window_size=ViewportSize(width=windows_width, height=windows_height-50),
             device_scale_factor=1.5,
-            stealth=False,
             executable_path=browser_executable_path,
             # keep_alive=True,
         )
@@ -144,7 +143,6 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             maximum_wait_page_load_time=60,
             window_size=ViewportSize(width=windows_width, height=windows_height-50),
             device_scale_factor=1.5,                    
-            stealth=False,
             executable_path=browser_executable_path,
             # keep_alive=True,
         )
@@ -185,9 +183,9 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         try:
             max_width: int = 1200
             n_features: int = 3000
-            lowe_ratio_thresh: float = 0.8
+            lowe_ratio_thresh: float = 0.7
             min_good_matches: int = 20
-            distance_threshold: float = 60.0
+            distance_threshold: float = 40.0
 
             if not os.path.exists(img1_path) or not os.path.exists(img2_path):
                 # force it to look in the result folder
@@ -211,7 +209,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             def _compare_sync(path1: str, path2: str) -> str:
                 img1_name = os.path.basename(path1)
                 img2_name = os.path.basename(path2)
-                print(f"Comparing images: {img1_name} and {img2_name}")
+                print(f"Comparing images: {path1} and {path2}")
                 # Load images
                 img1_full = cv2.imread(path1, cv2.IMREAD_GRAYSCALE)
                 img2_full = cv2.imread(path2, cv2.IMREAD_GRAYSCALE)

@@ -80,7 +80,7 @@ tests:
   TestParams:
     <<: [*default_waits, *tools]
     url: https://bbc.com
-    search_term: 'MORE NEWS'
+    search_term: 'CULTURE'
     apt: 1
     scroll: 1
   TestStepsPXY:
