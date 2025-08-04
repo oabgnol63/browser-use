@@ -28,7 +28,7 @@ GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2'
 if not os.getenv('TEST_FILE'):
     raise ValueError('TEST_FILE is not set. Please add it to your environment variables.')
 TEST_FILE = os.getenv('TEST_FILE')
-RESULT_FOLDER = os.getcwd() + '/TestResults'
+RESULT_FOLDER = os.path.join(os.getcwd(), 'TestResults')
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
 parser = argparse.ArgumentParser(description="Run browser tests with optional proxy.")
@@ -54,7 +54,7 @@ from browser_use.llm import ChatGoogle
 
 class AgentStructuredOutput(BaseModel):
     result: str = Field(description="'Pass' or 'Fail': The result of the test case")
-    describe: list[tuple] = Field(description="a list of tuples (main step description, detail step result)")
+    describe: list[tuple] = Field(description="a list of tuples (step actions summary, result in details)")
     screenshot_path: str = Field(description="Absolute path to the screenshot captured")
     similarity_score: list[tuple] = Field(description="a list of tuples (image 1, image 2, similarity score of their comparison)")
 
@@ -120,36 +120,25 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
     else:
         browser_executable_path = None  
 
+    bf_profile = BrowserProfile(
+        headless=False, # cannot config proxy settings in headless mode
+        user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
+        minimum_wait_page_load_time=10,
+        maximum_wait_page_load_time=20,
+        wait_for_network_idle_page_load_time=2,
+        default_navigation_timeout=40000,
+        window_size=ViewportSize(width=windows_width, height=windows_height-50),
+        executable_path=browser_executable_path,
+    )
     if config.use_proxy and config.proxy_host:
         proxy_settings: ProxySettings = {
             "server": config.proxy_host
         }
-        br_profile = BrowserProfile(
-            headless=False, # cannot config proxy settings in headless mode
-            proxy=proxy_settings,
-            user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
-            minimum_wait_page_load_time=10,
-            maximum_wait_page_load_time=60,
-            window_size=ViewportSize(width=windows_width, height=windows_height-50),
-            device_scale_factor=1.5,
-            executable_path=browser_executable_path,
-            # keep_alive=True,
-        )
-        
-    else:
-        br_profile=BrowserProfile(
-            headless=config.headless,
-            user_data_dir=None,
-            minimum_wait_page_load_time=10,
-            maximum_wait_page_load_time=60,
-            window_size=ViewportSize(width=windows_width, height=windows_height-50),
-            device_scale_factor=1.5,                    
-            executable_path=browser_executable_path,
-            # keep_alive=True,
-        )
+        bf_profile.proxy = proxy_settings
+        bf_profile.wait_for_network_idle_page_load_time = 3
         
     browser_session = BrowserSession(
-        browser_profile=br_profile,
+        browser_profile=bf_profile,
     )
     task = config.task
     output_schema = AgentStructuredOutput
@@ -328,12 +317,14 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         llm=llm,
         page_extraction_llm=page_extraction_llm,
         flash_mode=True,
-        # use_thinking=True,
         browser_session=browser_session,
         controller=controller,
         calculate_cost=True,
         max_actions_per_step=config.max_actions_per_step,
+        use_vision=True,
+        vision_detail_level='high',
         validate_output=True,
+        llm_timeout=90,
     )
     return agent
  
@@ -349,7 +340,7 @@ def run_agent_worker(work_item):
         important_note = \
             '\n\n **Important**:\n' + \
             '1. Follow strictly the order of steps in the test case.\n' + \
-            '2. If a click action failed, retry by sending key if possible, else by evaluating and clicking on nearby elements \n' \
+            '2. Always plan the "Done/Finish" in a single action\n' + \
             '3. If the evaluation at the end of the test case fails, retry from the failed step. Max retry is 1\n'
 
         agent_result = None

@@ -1,10 +1,9 @@
 waittime:
   &default_waits
-  wait_short: 10
-  wait_medium: 30
+  wait_short: 5
+  wait_medium: 20
   wait_long: 60
   wait_extra_long: 120
-
 
 tools:
   &tools
@@ -75,51 +74,81 @@ tests:
         * The menus should respond to on click event and support navigation to the required entry'
 
 - TestName: bbc_com_navigation_5
-  TestID: 3
+  TestID: 3     # Unique identifier for the test (e.g., 3)
   TestType: navigation
   TestParams:
-    <<: [*default_waits, *tools]
-    url: https://bbc.com
-    search_term: 'CULTURE'
-    apt: 1
-    scroll: 1
+    ## REQUIRED PARAMETERS ##
+    <<: [*default_waits, *tools]    # Default waits and tools use by agent 
+    url: https://bbc.com                           # Test url, e.g "https://www.example.com"
+    ## OPTIONAL PARAMETERS ##
+    # apt: 5      # Actions per step, default is 10. Set it to a lower value if the test is tricky, or often fails.
+                  # Be aware that setting this will increase the test execution time and LLM token usage
+    scroll: 1     # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
   TestStepsPXY:
+    ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait for the website to load completely and note the current URL, which is the homepage'
-    Step 5: 'If a pop up window appears, reload page'
-    Step 6: 'Find the **exact "{search_term}"** article headline on home page (it should be text on the page, not a navigation menu link). If scroll is needed, scroll {scroll} page each time to find it'
-    Step 7: 'Scroll up if the headline is missed. Click the first article link found directly underneath this heading. Wait for the new page to load completely.'
-    Step 8: 'Once on the article page, use the {tool_capture_and_save_screen} tool to capture a full-page screenshot and save it as "first_img_pxy.png".'
-    Step 9: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds.'
-    Step 10: 'Compare **exact "first_img_pxy.png" and "first_img_no_pxy.png"** using the {tool_compare_image} tool'
-    Step 11: 'Click "go back" button, wait for the page to load completely'
-    Step 12: 'Click "go forward" button using the {tool_go_forward} tool, wait for the page to load completely'
-    Step 13: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_pxy.png"'
-    Step 14: 'Use the {tool_wait_for_file} tool to wait for the file "second_img_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds'
-    Step 15: 'Compare **exact "second_img_pxy.png" and "second_img_no_pxy.png"** using the {tool_compare_image} tool'
-    Step 16: 'Click "go back" button again. Wait the website to load completely'
-    Step 17: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
-    Step 18: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of {wait_extra_long} seconds'
-    Step 19: 'Compare **exact "{TestName}_pxy.png" and "{TestName}_no_pxy.png"** using the {tool_compare_image} tool'
-    Step 20: 'Evalute the result: Return Pass/Fail following criteria:
+    Step 4: 'Wait 5 seconds. If a pop up window appears, reload page'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 5: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
+      '
+      * Locate "Only from the BBC" title and click the first news under 
+      * If scroll is needed, scroll {scroll} page each time to find search term
+      '
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 6: > 
+      'Wait 5 seconds'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**. Check for rendering errors'
+      'Use the {tool_wait_for_file} tool to wait for the file **"forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"forward_img_pxy.png"** and **"forward_img_no_pxy.png"** using the {tool_compare_image} tool'
+      'Click "go back" button, Wait 5 seconds. Check for rendering errors'
+      'Click "go forward" button, Wait 5 seconds. Check for rendering errors'
+    Step 7: >
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_pxy.png"**'
+      'Use the {tool_wait_for_file} tool to wait for the file **"back_then_forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"back_then_forward_img_pxy.png"** and **"back_then_forward_img_no_pxy.png"** using the {tool_compare_image} tool'
+      'Click "go back" button again'
+    Step 8: > 
+      'Wait 5 seconds'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+      'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"{TestName}_pxy.png"** and **"{TestName}_no_pxy.png"** using the {tool_compare_image} tool'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 9: > ## Modify this step to fit your expectations
+      '
+      Evaluate the result: Return Pass/Fail following criteria: 
+        * At each step(back-forward-back button testing), all the content must be rendered correctly
         * At the end of back-forward-back button testing cycle, the homepage should be displayed
-        * All images comparisons should be similar, with similarity score as proof'
+        * All images comparisons should be similar, with confidence score as proof
+      '
   TestSteps:
+    ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}'
-    Step 2: 'Wait for the website to load completely and note the current URL, which is the homepage'
-    Step 3: 'If a pop up window appears, reload page'
-    Step 4: 'Find **exact "{search_term}"** article headline on home page (it should be text on the page, not a navigation menu link). If scroll is needed, scroll {scroll} page each time to find it'
-    Step 5: 'Scroll up if the headline is missed. Click the first article link found directly underneath this heading. Wait for the new page to load completely.'    
-    Step 6: 'Once on the article page, use the {tool_capture_and_save_screen} tool to capture a full-page screenshot and save it as "first_img_no_pxy.png"'
-    Step 7: 'Click "go back" button, wait for the page to load completely'
-    Step 8: 'Click "go forward" button using the {tool_go_forward} tool, wait for the page to load completely'
-    Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_no_pxy.png"'
-    Step 10: 'Click "go back" button again. Wait the website to load completely'
-    Step 11: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
-    Step 12: 'Evalute the result: Return Pass/Fail following criteria:
-        * At the end of back-forward-back button testing cycle, the homepage should be displayed'
+    Step 2: 'Wait util the website and all web elements to load completely. If a pop up window appears, reload page'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 3: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
+      '
+      * Locate "Only from the BBC" title and click the first news under 
+      * If scroll is needed, scroll {scroll} page each time to find search term
+      '
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 4: >
+      'Wait 5 seconds. Check for rendering errors'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
+      'Click "go back" button, Wait 5 seconds. Check for rendering errors'
+      'Click "go forward" button, Wait 5 seconds. Check for rendering errors'
+    Step 5: >
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
+      'Click "go back" button again. Wait 5 seconds. Check for rendering errors'
+    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 7: > ## Should be the same as the above expectations
+      '
+      Evaluate the result: Return Pass/Fail following criteria:
+        * At each step(back-forward-back button testing), all the content must be rendered correctly
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed
+      '
 
 - TestName: bbc_com_keyboard_input_5
   TestID: 4
@@ -128,26 +157,42 @@ tests:
     <<: [*default_waits, *tools]
     url: https://bbc.com
     search_term: 'Jeremy Clarkson'
-    apt: 1
+    # apt: 1
   TestStepsPXY:
     Step 1: 'Go to {url}' 
     Step 2: 'If a window prompted for proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
     Step 3: 'Input {proxy_password} for password and click "Log in"'
     Step 4: 'Wait for the website to load completely'
-    Step 5: 'Locate the search box/icon, type {search_term} on search bar and click search or press Enter. Wait for the new page to load completely'
-    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_pxy.png"'
-    Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
-    Step 8: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
-    Step 9: 'Evalute the result: Return Pass/Fail following criteria:
+    Step 5: >
+      'If the page is blank, wait for 5 seconds more'
+      'Locate the search box/icon, type "{search_term}" on search bar, click search'. 
+      'If navigation not occur, search again and press Enter'
+    Step 6: >
+      'If the page is blank, wait for 5 seconds more'
+      'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_pxy.png"'
+      'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
+    Step 7: >
+      '
+      Evalute the result: Return Pass/Fail following criteria:
         * The search results context should contain "{search_term}"
-        * Two images should be identical, with confidence score as proof, and contain the expected search results'
+        * Two images must be compared and are similar, with confidence score as proof.
+      '
   TestSteps:
     Step 1: 'Go to {url}'
     Step 2: 'Wait for the website to load completely'
-    Step 3: 'Locate the search box/icon, type "{search_term}" on search bar and click search or press Enter. Wait for the new page to load completely'
-    Step 4: 'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_no_pxy.png"'
-    Step 5: 'Evalute the result: Return Pass/Fail following criteria:
-        * The search results context should contain "{search_term}"'
+    Step 3: >
+      'If the page is blank, wait for 5 seconds more'
+      'Locate the search box/icon, type "{search_term}" on search bar, click search'. 
+      'If navigation not occur, search again and press Enter'
+    Step 4: >
+      'If the page is blank, wait for 5 seconds more'
+      'Use the {tool_capture_and_save_screen} tool to capture view-port screenshot and save as "{TestName}_no_pxy.png"'
+    Step 5: > 
+      '
+      Evalute the result: Return Pass/Fail following criteria:
+        * The search results context should contain "{search_term}"
+      '
 
 - TestName: nbcnews_com_html5_video_playback_2
   TestID: 5
@@ -171,3 +216,81 @@ tests:
     Step 3: 'On the home page, looking for any video (not live) with advertisement. Click on the video to play it'
     Step 4: 'Let the advertisement play completely, validate that the video is playing and the sound is on'
     Step 5: 'Finally, use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+
+- TestType: navigation
+  TestName: nbcnews_com_navigation_5            # Test case name, e.g. facebook_com_navigation_5
+  TestID: 111              # Unique identifier for the test (e.g., 3)
+  TestParams:
+    ## REQUIRED PARAMETERS ##
+    <<: [*default_waits, *tools]    # Default waits and tools use by agent 
+    url: https://nbcnews.com                           # Test url, e.g "https://www.example.com"
+    ## OPTIONAL PARAMETERS ##
+    # apt: 5      # Actions per step, default is 10. Set it to a lower value if the test is tricky, or often fails.
+                  # Be aware that setting this will increase the test execution time and LLM token usage
+    scroll: 1     # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
+  TestStepsPXY:
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 1: 'Go to {url}' 
+    Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
+    Step 3: 'Input {proxy_password} for password and click "Log in"'
+    Step 4: 'Wait util the website and all web elements to load completely. If a pop up window appears, reload page'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 5: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
+      '
+      * Locate "LATEST NEWS" title and click the first news under 
+      * Wait util the website and all web elements to load completely
+      * If scroll is needed, scroll {scroll} page each time to find search term
+      '
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 6: > 
+      'If the page is blank, wait for 5 seconds more'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**. Check for rendering errors'
+      'Use the {tool_wait_for_file} tool to wait for the file **"forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"forward_img_pxy.png"** and **"forward_img_no_pxy.png"** using the {tool_compare_image} tool'
+    Step 7: >
+      'Click "go back" button, Wait util the website and all web elements to load completely. Check for rendering errors'
+      'Click "go forward" button, Wait util the website and all web elements to load completely. Check for rendering errors'
+    Step 8: >
+      'If the page is blank, wait for 5 seconds more'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_pxy.png"**'
+      'Use the {tool_wait_for_file} tool to wait for the file **"back_then_forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"back_then_forward_img_pxy.png"** and **"back_then_forward_img_no_pxy.png"** using the {tool_compare_image} tool'
+    Step 9: > 
+      'Click "go back" button again. Wait util the website and all web elements to load completely'
+      'If the page is blank, wait for 5 seconds more'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+      'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"{TestName}_pxy.png"** and **"{TestName}_no_pxy.png"** using the {tool_compare_image} tool'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 10: > ## Modify this step to fit your expectations
+      '
+      Evaluate the result: Return Pass/Fail following criteria: 
+        * At each step(back-forward-back button testing), all the content must be rendered correctly
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed
+        * All images comparisons should be similar, with confidence score as proof
+      '
+  TestSteps:
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 1: 'Go to {url}'
+    Step 2: 'Wait util the website and all web elements to load completely. If a pop up window appears, reload page'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 3: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
+      '
+      * Locate "LATEST NEWS" title and click the first news under 
+      * Wait for the new page to load completely
+      * If scroll is needed, scroll {scroll} page each time to find search term
+      '
+    ############################# BEGIN UNTOUCHED STEPS #############################
+    Step 4: 'Check for rendering errors. Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
+    Step 5: 'Click "go back" button, wait for the page to load completely. Check for rendering errors'
+    Step 6: 'Click "go forward" button, wait for the page to load completely. Check for rendering errors'
+    Step 7: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
+    Step 8: 'Click "go back" button again. Wait the website to load completely. Check for rendering errors'
+    Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
+    #############################  END UNTOUCHED STEPS  #############################
+    Step 10: > ## Should be the same as the above expectations
+      '
+      Evaluate the result: Return Pass/Fail following criteria:
+        * At each step(back-forward-back button testing), all the content must be rendered correctly
+        * At the end of back-forward-back button testing cycle, the homepage should be displayed
+      '
