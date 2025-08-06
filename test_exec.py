@@ -125,7 +125,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
         minimum_wait_page_load_time=10,
         maximum_wait_page_load_time=20,
-        wait_for_network_idle_page_load_time=2,
+        wait_for_network_idle_page_load_time=3,
         default_navigation_timeout=40000,
         window_size=ViewportSize(width=windows_width, height=windows_height-50),
         executable_path=browser_executable_path,
@@ -135,8 +135,8 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             "server": config.proxy_host
         }
         bf_profile.proxy = proxy_settings
-        bf_profile.wait_for_network_idle_page_load_time = 3
-        
+        bf_profile.wait_for_network_idle_page_load_time = 5 # overwrite for pxy browser
+       
     browser_session = BrowserSession(
         browser_profile=bf_profile,
     )
@@ -322,9 +322,9 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         calculate_cost=True,
         max_actions_per_step=config.max_actions_per_step,
         use_vision=True,
-        vision_detail_level='high',
+        vision_detail_level='low',
         validate_output=True,
-        llm_timeout=90,
+        llm_timeout=60,
     )
     return agent
  

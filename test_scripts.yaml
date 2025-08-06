@@ -99,11 +99,11 @@ tests:
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 6: > 
       'Wait 5 seconds'
-      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**. Check for rendering errors'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**'
       'Use the {tool_wait_for_file} tool to wait for the file **"forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
       'Compare **"forward_img_pxy.png"** and **"forward_img_no_pxy.png"** using the {tool_compare_image} tool'
-      'Click "go back" button, Wait 5 seconds. Check for rendering errors'
-      'Click "go forward" button, Wait 5 seconds. Check for rendering errors'
+      'Click "go back" button, Wait 5 seconds'
+      'Click "go forward" button, Wait 5 seconds'
     Step 7: >
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_pxy.png"**'
       'Use the {tool_wait_for_file} tool to wait for the file **"back_then_forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
@@ -136,11 +136,11 @@ tests:
     Step 4: >
       'Wait 5 seconds. Check for rendering errors'
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
-      'Click "go back" button, Wait 5 seconds. Check for rendering errors'
-      'Click "go forward" button, Wait 5 seconds. Check for rendering errors'
+      'Click "go back" button, Wait 5 seconds'
+      'Click "go forward" button, Wait 5 seconds'
     Step 5: >
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
-      'Click "go back" button again. Wait 5 seconds. Check for rendering errors'
+      'Click "go back" button again. Wait 5 seconds'
     Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
     #############################  END UNTOUCHED STEPS  #############################
     Step 7: > ## Should be the same as the above expectations
@@ -230,39 +230,38 @@ tests:
     scroll: 1     # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
   TestStepsPXY:
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 1: 'Go to {url}' 
-    Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
-    Step 3: 'Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait util the website and all web elements to load completely. If a pop up window appears, reload page'
+    Step 1: > 
+      'Go to {url}' 
+      'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next"'
+      'Otherwise, skip to Step 4'
+    Step 2: 'Input {proxy_password} for password and click "Log in"'
+    Step 3: 'Wait 5 seconds. If a pop up window appears, reload page'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 5: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
+    Step 4: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
       '
-      * Locate "LATEST NEWS" title and click the first news under 
-      * Wait util the website and all web elements to load completely
+      * Locate "Latest News" title and click the first news under 
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 6: > 
-      'If the page is blank, wait for 5 seconds more'
+    Step 5: > 
+      'Wait 5 seconds'
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**. Check for rendering errors'
       'Use the {tool_wait_for_file} tool to wait for the file **"forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
       'Compare **"forward_img_pxy.png"** and **"forward_img_no_pxy.png"** using the {tool_compare_image} tool'
-    Step 7: >
-      'Click "go back" button, Wait util the website and all web elements to load completely. Check for rendering errors'
-      'Click "go forward" button, Wait util the website and all web elements to load completely. Check for rendering errors'
-    Step 8: >
-      'If the page is blank, wait for 5 seconds more'
+      'Click "go back" button, Wait 5 seconds. Check for rendering errors'
+      'Click "go forward" button, Wait 5 seconds. Check for rendering errors'
+    Step 6: >
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_pxy.png"**'
       'Use the {tool_wait_for_file} tool to wait for the file **"back_then_forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
       'Compare **"back_then_forward_img_pxy.png"** and **"back_then_forward_img_no_pxy.png"** using the {tool_compare_image} tool'
-    Step 9: > 
-      'Click "go back" button again. Wait util the website and all web elements to load completely'
-      'If the page is blank, wait for 5 seconds more'
+      'Click "go back" button again'
+    Step 7: > 
+      'Wait 5 seconds'
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
       'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
       'Compare **"{TestName}_pxy.png"** and **"{TestName}_no_pxy.png"** using the {tool_compare_image} tool'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 10: > ## Modify this step to fit your expectations
+    Step 8: > ## Modify this step to fit your expectations
       '
       Evaluate the result: Return Pass/Fail following criteria: 
         * At each step(back-forward-back button testing), all the content must be rendered correctly
@@ -272,23 +271,25 @@ tests:
   TestSteps:
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}'
-    Step 2: 'Wait util the website and all web elements to load completely. If a pop up window appears, reload page'
+    Step 2: 'Wait 5 seconds. If a pop up window appears, reload page'
     #############################  END UNTOUCHED STEPS  #############################
     Step 3: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
       '
-      * Locate "LATEST NEWS" title and click the first news under 
-      * Wait for the new page to load completely
+      * Locate "Latest News" title and click the first news under 
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 4: 'Check for rendering errors. Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
-    Step 5: 'Click "go back" button, wait for the page to load completely. Check for rendering errors'
-    Step 6: 'Click "go forward" button, wait for the page to load completely. Check for rendering errors'
-    Step 7: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
-    Step 8: 'Click "go back" button again. Wait the website to load completely. Check for rendering errors'
-    Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
+    Step 4: >
+      'Wait 5 seconds. Check for rendering errors'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
+      'Click "go back" button, Wait 5 seconds. Check for rendering errors'
+      'Click "go forward" button, Wait 5 seconds. Check for rendering errors'
+    Step 5: >
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
+      'Click "go back" button again. Wait 5 seconds. Check for rendering errors'
+    Step 6: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 10: > ## Should be the same as the above expectations
+    Step 7: > ## Should be the same as the above expectations
       '
       Evaluate the result: Return Pass/Fail following criteria:
         * At each step(back-forward-back button testing), all the content must be rendered correctly
