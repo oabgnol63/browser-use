@@ -125,8 +125,8 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
         minimum_wait_page_load_time=10,
         maximum_wait_page_load_time=20,
-        wait_for_network_idle_page_load_time=3,
-        default_navigation_timeout=40000,
+        wait_for_network_idle_page_load_time=1.5,
+        default_navigation_timeout=30000,
         window_size=ViewportSize(width=windows_width, height=windows_height-50),
         executable_path=browser_executable_path,
     )
@@ -323,8 +323,9 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         max_actions_per_step=config.max_actions_per_step,
         use_vision=True,
         vision_detail_level='low',
-        validate_output=True,
+        # validate_output=True,
         llm_timeout=60,
+        viewport_expansion=1,
     )
     return agent
  
@@ -339,9 +340,8 @@ def run_agent_worker(work_item):
 
         important_note = \
             '\n\n **Important**:\n' + \
-            '1. Follow strictly the order of steps in the test case.\n' + \
-            '2. Always plan the "Done/Finish" in a single action\n' + \
-            '3. If the evaluation at the end of the test case fails, retry from the failed step. Max retry is 1\n'
+            '1. Follow strictly the order of steps in the test case.\n'
+            # '2. If the evaluation at the end of the test case fails, retry from the failed step. Max retry is 1\n'
 
         agent_result = None
         agent = None

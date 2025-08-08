@@ -165,6 +165,7 @@ Maximize efficiency by combining related actions in one step instead of doing th
 
 **When to Use Single Actions:**
 - When next action depends on previous action's specific result
+- It's the 'done' action
 
 
 **Efficiency Mindset:** Think "What's the logical sequence of actions I would do?" and group them together when safe.
