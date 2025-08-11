@@ -8,62 +8,70 @@
     <<: [*default_waits, *tools]    # Default waits and tools use by agent 
     url:                            # Test url, e.g "https://www.example.com"
     ## OPTIONAL PARAMETERS ##
-    # apt: 1      # Actions per step, default is 3. Set it to a lower value if the test is tricky, or often fails.
+    # apt: 5      # Actions per step, default is 10. Set it to a lower value if the test is tricky, or often fails.
                   # Be aware that setting this will increase the test execution time and LLM token usage
     scroll: 1     # number of page for each scrolling action. Decrease it will slow down test execution, but increase the chance of finding the search term.
   TestStepsPXY:
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 1: 'Go to {url}' 
-    Step 2: 'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next". Otherwise ignore this step and go to Step 4'
-    Step 3: 'Input {proxy_password} for password and click "Log in"'
-    Step 4: 'Wait for the website to load completely'
+    Step 1: > 
+      'Go to {url}' 
+      'If a window prompted for Menlo proxy authentication: input {proxy_username} for "Email/Login ID" and click "Next"'
+      'Otherwise, skip to Step 2'
+      'Input {proxy_password} for password and click "Log in"'
+      'Wait for networkidle. If a pop up window appears, reload page'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 5: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
-      * << Your Navigate Action>>
-      * Wait for the new page to load completely
+    Step 2: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
+      '
+      * << Your Navigation Action >> 
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 6: 'Check for rendering errors. Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_pxy.png"'
-    Step 7: 'Use the {tool_wait_for_file} tool to wait for the file "first_img_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
-    Step 8: 'Compare "first_img_pxy.png" and "first_img_no_pxy.png" using the {tool_compare_image} tool'
-    Step 9: 'Click "go back" button, wait for the page to load completely. Check for rendering errors'
-    Step 10: 'Click "go forward" button, wait for the page to load completely. Check for rendering errors'
-    Step 11: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_pxy.png"'
-    Step 12: 'Use the {tool_wait_for_file} tool to wait for the file "second_img_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
-    Step 13: 'Compare "second_img_pxy.png" and "second_img_no_pxy.png" using the {tool_compare_image} tool'
-    Step 14: 'Click "go back" button again. Wait for the website to load completely'
-    Step 15: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
-    Step 16: 'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
-    Step 17: 'Compare "{TestName}_pxy.png" and "{TestName}_no_pxy.png" using the {tool_compare_image} tool'
+    Step 3: > 
+      'Wait for networkidle'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**. Check for rendering errors'
+      'Use the {tool_wait_for_file} tool to wait for the file **"forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"forward_img_pxy.png"** and **"forward_img_no_pxy.png"** using the {tool_compare_image} tool'
+      'Click "go back" button, Wait for networkidle'
+      'Click "go forward" button, Wait for networkidle'
+    Step 4: >
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_pxy.png"**'
+      'Use the {tool_wait_for_file} tool to wait for the file **"back_then_forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"back_then_forward_img_pxy.png"** and **"back_then_forward_img_no_pxy.png"** using the {tool_compare_image} tool'
+      'Click "go back" button again'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 18: > ## Modify this step to fit your expectations
+    Step 5: > # Fill in the expectation(s)
+      'Wait for networkidle'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
+      'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
+      'Compare **"{TestName}_pxy.png"** and **"{TestName}_no_pxy.png"** using the {tool_compare_image} tool'
       '
       Evaluate the result: Return Pass/Fail following criteria: 
+      '
         * << Expectation 1 >>
         * << Expectation 2 >>
-        * All images comparisons should be identical, with confidence score as proof
+        * All images comparisons should be similar, with confidence score as proof
       '
   TestSteps:
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 1: 'Go to {url}'
-    Step 2: 'Wait for the website to load completely'
+    Step 2: 'Wait for networkidle. If a pop up window appears, reload page'
     #############################  END UNTOUCHED STEPS  #############################
     Step 3: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
       '
-      * << Navigate Action >>  
-      * Wait for the new page to load completely
+      * << Your Navigation Action >>  
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 4: 'Check for rendering errors. Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "first_img_no_pxy.png"'
-    Step 5: 'Click "go back" button, wait for the page to load completely. Check for rendering errors'
-    Step 6: 'Click "go forward" button, wait for the page to load completely. Check for rendering errors'
-    Step 7: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "second_img_no_pxy.png"'
-    Step 8: 'Click "go back" button again. Wait the website to load completely. Check for rendering errors'
-    Step 9: 'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
+    Step 4: >
+      'Wait for networkidle. Check for rendering errors'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
+      'Click "go back" button, Wait for networkidle'
+      'Click "go forward" button, Wait for networkidle'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 10: > ## Should be the same as the above expectations
+    Step 5: > # Fill in the expectation(s)
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
+      'Click "go back" button again. Wait for networkidle'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
       '
       Evaluate the result: Return Pass/Fail following criteria:
         * << Expectation 1 >>

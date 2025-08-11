@@ -1,6 +1,5 @@
 import os
 import asyncio
-import multiprocessing
 import sys
 import argparse
 import yaml
@@ -311,7 +310,7 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
             return ActionResult(error=f"Failed to navigate forward: {e}")
 
     llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0)
-    page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash", temperature=0)
+    page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash-lite", temperature=0)
     agent = Agent(
         task=task,
         llm=llm,
@@ -329,98 +328,89 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
     )
     return agent
  
-def run_agent_worker(work_item):
+async def run_agent_worker(work_item):
     test, args, agent_type = work_item
-    async def async_run_single_agent():
 
-        # combine test parameters with args from cmd line
-        params = test['TestParams']
-        params['TestName'] = test['TestName']
-        params.update(args)
+    # combine test parameters with args from cmd line
+    params = test['TestParams']
+    params['TestName'] = test['TestName']
+    params.update(args)
 
-        important_note = \
-            '\n\n **Important**:\n' + \
-            '1. Follow strictly the order of steps in the test case.\n'
-            # '2. If the evaluation at the end of the test case fails, retry from the failed step. Max retry is 1\n'
+    important_note = \
+        '\n\n **Important**:\n' + \
+        '1. Follow strictly the order of steps in the test case.\n'
+        # '2. If the evaluation at the end of the test case fails, retry from the failed step. Max retry is 1\n'
 
-        agent_result = None
-        agent = None
-        # create folder to save results
-        sub_result_folder = os.path.join(RESULT_FOLDER, test['TestName'])
-        os.makedirs(sub_result_folder, exist_ok=True)
-        signature = inspect.signature(Agent.__init__)
-        try:
-            if agent_type == 'PXY':
-                steps_dict = test['TestStepsPXY']
-                steps_string = \
-                    'Execute the test cases with the following steps:\n' + \
-                    '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**params) + \
-                    important_note
-                
-                test_run_config = TestRunConfig(
-                    result_folder=sub_result_folder,
-                    proxy_username=params['proxy_username'],
-                    proxy_pwd=params['proxy_password'],
-                    proxy_host=params['proxy_url'],
-                    llm_api_key=GEMINI_API_KEY,
-                    llm_model="gemini-2.5-flash",
-                    task=steps_string,
-                    use_proxy=True,
-                    real_browser=params.get('use_real_browser', None),
-                    headless=params.get('headless', False),
-                    max_actions_per_step=params.get('apt', signature.parameters["max_actions_per_step"].default),
-                )
-                agent = await create_test_run_agent(test_run_config)
-
-            elif agent_type == 'NO_PXY':
-                steps_dict = test.get('TestSteps')
-                if not steps_dict:
-                    return (test['TestName'], agent_type, None)
-
-                steps_string = \
-                    'Execute the test cases with the following steps:\n' + \
-                    '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**params) + \
-                    important_note
-
-                test_run_config = TestRunConfig(
-                    result_folder=sub_result_folder,
-                    llm_api_key=GEMINI_API_KEY_2,
-                    llm_model="gemini-2.5-flash",
-                    task=steps_string,
-                    real_browser=params.get('use_real_browser', None),
-                    headless=params.get('headless', False),
-                    max_actions_per_step=params.get('apt', signature.parameters["max_actions_per_step"].default),
-                )
-                agent = await create_test_run_agent(test_run_config)
-            
-            else:
-                raise ValueError(f"Unknown agent_type: {agent_type}")
-
-            await agent.run()
-            agent_result = generate_result(agent)
-
-        finally:
-            if agent:
-                print(f"Closing browser agent for test {test['TestID']}, type {agent_type}...")
-                await agent.close()
-        
-        return (test['TestName'], agent_type, agent_result)
-
+    agent_result = None
+    agent = None
+    # create folder to save results
+    sub_result_folder = os.path.join(RESULT_FOLDER, test['TestName'])
+    os.makedirs(sub_result_folder, exist_ok=True)
+    signature = inspect.signature(Agent.__init__)
     try:
         print(f"--- Running agent: TestID {test['TestID']} - {test['TestName']} - Type {agent_type} ---")
-        result = asyncio.run(async_run_single_agent())
-        print(f"--- Finished agent: TestID {test['TestID']} - {test['TestName']} - Type {agent_type} ---")
-        return result
+        if agent_type == 'PXY':
+            steps_dict = test['TestStepsPXY']
+            steps_string = \
+                'Execute the test cases with the following steps:\n' + \
+                '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**params) + \
+                important_note
+            
+            test_run_config = TestRunConfig(
+                result_folder=sub_result_folder,
+                proxy_username=params['proxy_username'],
+                proxy_pwd=params['proxy_password'],
+                proxy_host=params['proxy_url'],
+                llm_api_key=GEMINI_API_KEY,
+                llm_model="gemini-2.5-flash",
+                task=steps_string,
+                use_proxy=True,
+                real_browser=params.get('use_real_browser', None),
+                headless=params.get('headless', False),
+                max_actions_per_step=params.get('apt', signature.parameters["max_actions_per_step"].default),
+            )
+            agent = await create_test_run_agent(test_run_config)
+
+        elif agent_type == 'NO_PXY':
+            steps_dict = test.get('TestSteps')
+            if not steps_dict:
+                return (test['TestName'], agent_type, None)
+
+            steps_string = \
+                'Execute the test cases with the following steps:\n' + \
+                '\n'.join(key + ': ' + value for key, value in steps_dict.items()).format(**params) + \
+                important_note
+
+            test_run_config = TestRunConfig(
+                result_folder=sub_result_folder,
+                llm_api_key=GEMINI_API_KEY_2,
+                llm_model="gemini-2.5-flash",
+                task=steps_string,
+                real_browser=params.get('use_real_browser', None),
+                headless=params.get('headless', False),
+                max_actions_per_step=params.get('apt', signature.parameters["max_actions_per_step"].default),
+            )
+            agent = await create_test_run_agent(test_run_config)
+        
+        else:
+            raise ValueError(f"Unknown agent_type: {agent_type}")
+
+        await agent.run()
+        agent_result = generate_result(agent)
+
     except Exception as e:
         print(f"An error occurred in agent worker for TestID {test.get('TestID')}, Type {agent_type}: {e}")
         return (test.get('TestName', 'Unknown'), agent_type, None)
+    finally:
+        if agent:
+            print(f"Closing browser agent for test {test['TestID']}, type {agent_type}...")
+            await agent.close()
+    
+    result = (test['TestName'], agent_type, agent_result)
+    print(f"--- Finished agent: TestID {test['TestID']} - {test['TestName']} - Type {agent_type} ---")
+    return result
 
-# Wrapper function to execute the worker and put the result in the queue
-def worker_wrapper(work_item, queue):
-    result = run_agent_worker(work_item)
-    queue.put(result)
-
-def main():
+async def main():
     try:
         tests = load_test_from_yaml(TEST_FILE) # type: ignore
         if args['test_id']:
@@ -452,23 +442,11 @@ def main():
                 print(f"No steps found for test {test['TestName']}. Skipping.")
                 continue
 
-            num_processes = len(work_items)
-            print(f"Running {num_processes} agents in parallel for test '{test['TestName']}'...")
+            num_agents = len(work_items)
+            print(f"Running {num_agents} agents in parallel for test '{test['TestName']}'...")
 
-            # Use a queue to collect results from the parallel processes
-            result_queue = multiprocessing.Queue()
-
-            # Create and start a process for each agent
-            processes = [multiprocessing.Process(target=worker_wrapper, args=(item, result_queue)) for item in work_items]
-            for p in processes:
-                p.start()
-
-            # Retrieve results from the queue
-            results = [result_queue.get() for _ in work_items]
-
-            # Wait for all processes to complete
-            for p in processes:
-                p.join()
+            tasks = [run_agent_worker(item) for item in work_items]
+            results = await asyncio.gather(*tasks)
 
             for item in results:
                 if item is None: 
@@ -507,5 +485,4 @@ def main():
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
-    main()
+    asyncio.run(main())
