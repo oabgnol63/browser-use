@@ -1,8 +1,8 @@
 ##########   TEMPLATE FOR PAGE NAVIGATION TEST CASE   ##########
 
 - TestType: navigation
-  TestName:             # Test case name, e.g. facebook_com_navigation_5
-  TestID:               # Unique identifier for the test (e.g., 3)
+  TestName:        # Test case name, e.g. facebook_com_navigation_5
+  TestID:          # Unique identifier for the test (e.g., 3)
   TestParams:
     ## REQUIRED PARAMETERS ##
     <<: [*default_waits, *tools]    # Default waits and tools use by agent 
@@ -27,12 +27,12 @@
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
     Step 3: > 
-      'Wait for networkidle'
-      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**. Check for rendering errors'
+      'Wait for images to load'
+      'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_pxy.png"**'
       'Use the {tool_wait_for_file} tool to wait for the file **"forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
       'Compare **"forward_img_pxy.png"** and **"forward_img_no_pxy.png"** using the {tool_compare_image} tool'
-      'Click "go back" button, Wait for networkidle'
-      'Click "go forward" button, Wait for networkidle'
+      'Click "go back" button, wait for images to load'
+      'Click "go forward" button, wait for images to load'
     Step 4: >
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_pxy.png"**'
       'Use the {tool_wait_for_file} tool to wait for the file **"back_then_forward_img_no_pxy.png"** to be created by the other agent. Set a timeout of 120 seconds.'
@@ -40,7 +40,7 @@
       'Click "go back" button again'
     #############################  END UNTOUCHED STEPS  #############################
     Step 5: > # Fill in the expectation(s)
-      'Wait for networkidle'
+      'Wait for images to load'
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_pxy.png"'
       'Use the {tool_wait_for_file} tool to wait for the file "{TestName}_no_pxy.png" to be created by the other agent. Set a timeout of 120 seconds.'
       'Compare **"{TestName}_pxy.png"** and **"{TestName}_no_pxy.png"** using the {tool_compare_image} tool'
@@ -53,24 +53,25 @@
       '
   TestSteps:
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 1: 'Go to {url}'
-    Step 2: 'Wait for networkidle. If a pop up window appears, reload page'
+    Step 1: >
+      'Go to {url}'
+      'Wait for networkidle. If a pop up window appears, reload page'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 3: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
+    Step 2: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
       '
       * << Your Navigation Action >>  
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 4: >
-      'Wait for networkidle. Check for rendering errors'
+    Step 3: >
+      'Wait for images to load'
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"forward_img_no_pxy.png"**'
-      'Click "go back" button, Wait for networkidle'
-      'Click "go forward" button, Wait for networkidle'
+      'Click "go back" button, Wait for images to load'
+      'Click "go forward" button, Wait for images to load'
     #############################  END UNTOUCHED STEPS  #############################
-    Step 5: > # Fill in the expectation(s)
+    Step 4: > # Fill in the expectation(s)
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"back_then_forward_img_no_pxy.png"**'
-      'Click "go back" button again. Wait for networkidle'
+      'Click "go back" button again. Wait for images to load'
       'Use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as **"{TestName}_no_pxy.png"**'
       '
       Evaluate the result: Return Pass/Fail following criteria:

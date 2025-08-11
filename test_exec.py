@@ -122,8 +122,8 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
     bf_profile = BrowserProfile(
         headless=False, # cannot config proxy settings in headless mode
         user_data_dir=None, # Using a temporary profile (None) is best practice for isolated tests.
-        minimum_wait_page_load_time=10,
-        maximum_wait_page_load_time=20,
+        minimum_wait_page_load_time=7,
+        maximum_wait_page_load_time=10,
         wait_for_network_idle_page_load_time=1.5,
         default_navigation_timeout=30000,
         window_size=ViewportSize(width=windows_width, height=windows_height-50),
@@ -309,6 +309,58 @@ async def create_test_run_agent(config: TestRunConfig) -> Agent:
         except Exception as e:
             return ActionResult(error=f"Failed to navigate forward: {e}")
 
+    @controller.action("Wait for all images in the current viewport to load.")
+    async def wait_for_images_loaded(browser_session: BrowserSession, timeout: float = 15.0) -> ActionResult:
+        try:
+            page = await browser_session.get_current_page()
+            await asyncio.wait_for(
+                page.evaluate("""
+                    async () => {
+                        // Function to check if an image is in the viewport
+                        const isInViewport = (img) => {
+                            const rect = img.getBoundingClientRect();
+                            return (
+                                rect.top >= 0 &&
+                                rect.left >= 0 &&
+                                rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                                rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+                            );
+                        };
+
+                        // Filter images that are in the viewport
+                        const imgs = Array.from(document.images).filter(img => isInViewport(img));
+
+                        // Wait for all viewport images to load successfully or reject on failure
+                        await Promise.all(imgs.map(img => {
+                            if (img.complete) {
+                                // Check if already loaded successfully
+                                return img.naturalWidth > 0 && img.naturalHeight > 0
+                                    ? Promise.resolve()
+                                    : Promise.reject(`Image failed to load: ${img.src}`);
+                            }
+                            return new Promise((resolve, reject) => {
+                                img.addEventListener('load', () => {
+                                    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                                        resolve();
+                                    } else {
+                                        reject(`Image failed to load: ${img.src}`);
+                                    }
+                                }, { once: true });
+                                img.addEventListener('error', () => {
+                                    reject(`Image failed to load: ${img.src}`);
+                                }, { once: true });
+                            });
+                        }));
+                    }
+                """),
+                timeout=timeout
+            )
+            return ActionResult(extracted_content="All images in viewport loaded successfully")
+        except Exception as e:
+            error_msg = f"⚠️ Timeout or error waiting for images to load: {type(e).__name__}: {e}"
+            print(error_msg)
+            return ActionResult(error=error_msg)
+
     llm = ChatGoogle(api_key=config.llm_api_key, model=config.llm_model if config.llm_model else "gemini-2.5-flash", temperature=0)
     page_extraction_llm = ChatGoogle(api_key=config.llm_api_key, model="gemini-2.5-flash-lite", temperature=0)
     agent = Agent(
@@ -483,6 +535,7 @@ async def main():
 
     except Exception as e:
         print(f"An error occurred: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
