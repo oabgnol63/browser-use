@@ -218,12 +218,12 @@ tests:
     Step 5: 'Finally, use the {tool_capture_and_save_screen} tool to capture full-page screenshot and save as "{TestName}_no_pxy.png"'
 
 - TestType: navigation
-  TestName: nbcnews_com_video_navigation_1       # Test case name, e.g. facebook_com_navigation_5
-  TestID: 111                            # Unique identifier for the test (e.g., 3)
+  TestName:  nbcnews_com_navigation_5      # Test case name, e.g. facebook_com_navigation_5
+  TestID: 111         # Unique identifier for the test (e.g., 3)
   TestParams:
     ## REQUIRED PARAMETERS ##
     <<: [*default_waits, *tools]    # Default waits and tools use by agent 
-    url: https://nbcnews.com       # Test url, e.g "https://www.example.com"
+    url: https://nbcnews.com                           # Test url, e.g "https://www.example.com"
     ## OPTIONAL PARAMETERS ##
     # apt: 5      # Actions per step, default is 10. Set it to a lower value if the test is tricky, or often fails.
                   # Be aware that setting this will increase the test execution time and LLM token usage
@@ -239,7 +239,7 @@ tests:
     #############################  END UNTOUCHED STEPS  #############################
     Step 2: > # Specify your actions, e.g. 'Find the link contain "WORLD" and click it'
       '
-      * Identify and click the first news link under the header "Latest News" 
+      * Identify and click the first news link under the heading "Latest News".
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
@@ -270,13 +270,13 @@ tests:
       '
   TestSteps:
     ############################# BEGIN UNTOUCHED STEPS #############################
-    Step 1: > 
+    Step 1: >
       'Go to {url}'
       'Wait for networkidle. If a pop up window appears, reload page'
     #############################  END UNTOUCHED STEPS  #############################
     Step 2: > # Specify your actions, e.g. 'Find the link contain {search_term} and click it'
       '
-      * Identify and click the first news link under the header "Latest News"  
+      * Identify and click the first news link under the heading "Latest News". 
       * If scroll is needed, scroll {scroll} page each time to find search term
       '
     ############################# BEGIN UNTOUCHED STEPS #############################
