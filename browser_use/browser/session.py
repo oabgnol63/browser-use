@@ -36,7 +36,7 @@ from browser_use.browser.events import (
 	TabClosedEvent,
 	TabCreatedEvent,
 )
-from browser_use.browser.profile import BrowserProfile, ProxySettings
+from browser_use.browser.profile import BrowserProfile, CloudBrowserProfile, ProxySettings
 from browser_use.browser.views import BrowserStateSummary, TabInfo
 from browser_use.dom.views import EnhancedDOMTreeNode, TargetInfo
 from browser_use.utils import _log_pretty_url, is_new_tab_page
@@ -220,7 +220,7 @@ class BrowserSession(BaseModel):
 		id: str | None = None,
 		cdp_url: str | None = None,
 		is_local: bool = True,
-		browser_profile: BrowserProfile | None = None,
+		browser_profile: BrowserProfile | CloudBrowserProfile | None = None,
 		# BrowserProfile fields that can be passed directly
 		# From BrowserConnectArgs
 		headers: dict[str, str] | None = None,
@@ -277,9 +277,30 @@ class BrowserSession(BaseModel):
 		if browser_profile is not None:
 			# Merge any direct kwargs into the provided browser_profile (direct kwargs take precedence)
 			merged_kwargs = {**browser_profile.model_dump(exclude_unset=True), **profile_kwargs}
-			resolved_browser_profile = BrowserProfile(**merged_kwargs)
+			# Preserve the specific profile class (Cloud vs Local)
+			profile_cls = CloudBrowserProfile if isinstance(browser_profile, CloudBrowserProfile) else BrowserProfile
+			resolved_browser_profile = profile_cls(**merged_kwargs)
 		else:
-			resolved_browser_profile = BrowserProfile(**profile_kwargs)
+			# Auto-detect cloud profile usage from kwargs
+			cloud_keys = {
+				'service_url',
+				'username',
+				'access_key',
+				'browser_name',
+				'browser_version',
+				'platform_name',
+				'session_name',
+				'build_name',
+				'tags',
+				'record_video',
+				'record_screenshots',
+				'skip_iframe_documents',
+				'default_navigation_timeout',
+				'default_timeout',
+				'timeout',
+			}
+			use_cloud = any(k in profile_kwargs for k in cloud_keys)
+			resolved_browser_profile = (CloudBrowserProfile if use_cloud else BrowserProfile)(**profile_kwargs)
 
 		# Initialize the Pydantic model
 		super().__init__(
@@ -291,9 +312,9 @@ class BrowserSession(BaseModel):
 	id: str = Field(default_factory=lambda: str(uuid7str()), description='Unique identifier for this browser session')
 
 	# Browser configuration (reusable profile)
-	browser_profile: BrowserProfile = Field(
+	browser_profile: BrowserProfile | CloudBrowserProfile = Field(
 		default_factory=lambda: DEFAULT_BROWSER_PROFILE,
-		description='BrowserProfile() options to use for the session, otherwise a default profile will be used',
+		description='BrowserProfile() or CloudBrowserProfile() options to use for the session, otherwise a default profile will be used',
 	)
 
 	# Convenience properties for common browser settings
@@ -895,6 +916,7 @@ class BrowserSession(BaseModel):
 			self.event_bus.dispatch(
 				BrowserStateRequestEvent(
 					include_dom=True,
+					event_timeout=100,
 					include_screenshot=include_screenshot,
 					cache_clickable_elements_hashes=cache_clickable_elements_hashes,
 					include_recent_events=include_recent_events,

@@ -34,7 +34,7 @@ from bubus import EventBus
 from pydantic import ValidationError
 from uuid_extensions import uuid7str
 
-from browser_use import Browser, BrowserProfile, BrowserSession
+from browser_use import Browser, BrowserProfile, CloudBrowserProfile, BrowserSession
 
 # Lazy import for gif to avoid heavy agent.views import at startup
 # from browser_use.agent.gif import create_history_gif
@@ -130,7 +130,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		task: str,
 		llm: BaseChatModel = ChatOpenAI(model='gpt-4.1-mini'),
 		# Optional parameters
-		browser_profile: BrowserProfile | None = None,
+		browser_profile: BrowserProfile | CloudBrowserProfile | None = None,
 		browser_session: BrowserSession | None = None,
 		browser: Browser | None = None,  # Alias for browser_session
 		tools: Tools[Context] | None = None,
@@ -431,7 +431,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		return logging.getLogger(f'browser_use.Agent🅰 {self.task_id[-4:]} ⇢ 🅑 {_browser_session_id[-4:]} 🅣 {_current_target_id}')
 
 	@property
-	def browser_profile(self) -> BrowserProfile:
+	def browser_profile(self) -> BrowserProfile | CloudBrowserProfile:
 		assert self.browser_session is not None, 'BrowserSession is not set up'
 		return self.browser_session.browser_profile
 

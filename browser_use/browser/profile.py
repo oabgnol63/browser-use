@@ -1,6 +1,7 @@
 import sys
 import tempfile
 from collections.abc import Iterable
+import base64
 from enum import Enum
 from functools import cache
 from pathlib import Path
@@ -63,6 +64,8 @@ CHROME_DISABLED_COMPONENTS = [
 	'InfiniteSessionRestore',
 	'ExtensionDisableUnsupportedDeveloper',
 	'ExtensionManifestV2Unsupported',
+	# temporairy bypass chrome disabling load extension
+	"DisableLoadExtensionCommandLineSwitch",
 ]
 
 CHROME_HEADLESS_ARGS = [
@@ -940,3 +943,465 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 			assert self.no_viewport is True
 
 		assert not (self.headless and self.no_viewport), 'headless=True and no_viewport=True cannot both be set at the same time'
+
+class CloudBrowserProfile(
+	BrowserProfile,
+	BrowserConnectArgs,
+	BrowserLaunchPersistentContextArgs,
+	BrowserLaunchArgs,
+	BrowserNewContextArgs,
+):
+	"""
+	A CloudBrowserProfile matches the interface of BrowserProfile but is optimized for cloud browser services 
+	like SauceLabs, BrowserStack, etc. It excludes local-specific configurations that don't apply to cloud services.
+	"""
+
+	model_config = ConfigDict(
+		extra='ignore',
+		validate_assignment=True,
+		revalidate_instances='always',
+		from_attributes=True,
+		validate_by_name=True,
+		validate_by_alias=True,
+	)
+
+	# ... extends options defined in:
+	# BrowserConnectArgs, BrowserNewContextArgs
+
+	# Session/connection configuration
+	cdp_url: str | None = Field(default=None, description='CDP URL for connecting to cloud browser instance')
+	is_local: bool = Field(default=False, description='Always False for cloud browsers')
+
+	# Cloud service credentials and configuration
+	service_url: str | None = Field(default=None, description='Base URL for the cloud browser service (e.g., SauceLabs, BrowserStack)')
+	username: str | None = Field(default=None, description='Username for cloud service authentication')
+	access_key: str | None = Field(default=None, description='Access key/token for cloud service authentication')
+	
+	# Browser capabilities for cloud services
+	browser_name: str = Field(default='chrome', description='Browser name (chrome, firefox, safari, edge)')
+	browser_version: str | None = Field(default=None, description='Browser version (e.g., "latest", "119", "118")')
+	platform_name: str | None = Field(default=None, description='Platform/OS (e.g., "Windows 11", "macOS 13", "Linux")')
+	
+	# Cloud-specific options
+	session_name: str | None = Field(default=None, description='Name for the test session in cloud service')
+	build_name: str | None = Field(default=None, description='Build identifier for grouping sessions')
+	tags: list[str] = Field(default_factory=list, description='Tags for organizing sessions')
+
+	# custom options we provide that aren't native playwright kwargs
+	stealth: bool = Field(default=True, description='Use stealth mode to avoid detection by anti-bot systems.')
+	disable_security: bool = Field(default=False, description='Disable browser security features.')
+	deterministic_rendering: bool = Field(default=False, description='Enable deterministic rendering flags.')
+	allowed_domains: list[str] | None = Field(
+		default=None,
+		description='List of allowed domains for navigation e.g. ["*.google.com", "https://example.com", "chrome-extension://*"]',
+	)
+	keep_alive: bool | None = Field(default=None, description='Keep browser alive after agent run.')
+
+	# --- Proxy settings ---
+	# New consolidated proxy config (typed)
+	proxy: ProxySettings | None = Field(
+		default=None,
+		description='Proxy settings. Use browser_use.browser.profile.ProxySettings(server, bypass, username, password)',
+	)
+	enable_default_extensions: bool = Field(
+		default=False,
+		description="Extensions not supported in cloud browsers - disable by default",
+	)
+	window_size: ViewportSize | None = Field(
+		default=None,
+		description='Browser window size (may not apply to all cloud services).',
+	)
+	window_height: int | None = Field(default=None, description='DEPRECATED, use window_size["height"] instead', exclude=True)
+	window_width: int | None = Field(default=None, description='DEPRECATED, use window_size["width"] instead', exclude=True)
+	window_position: ViewportSize | None = Field(
+		default=None,
+		description='Window position (may not apply to cloud browsers).',
+	)
+	cross_origin_iframes: bool = Field(
+		default=False,
+		description='Enable cross-origin iframe support (OOPIF/Out-of-Process iframes). When False (default), only same-origin frames are processed to avoid complexity and hanging.',
+	)
+
+	# DOM/AX options
+	skip_iframe_documents: bool = Field(
+		default=False,
+		description='Skip traversing iframe content documents and restrict AX tree to the main frame. Helps avoid FrameId not found (-32602) on dynamic iframes.',
+	)
+
+	# --- Page load/wait timings ---
+
+	minimum_wait_page_load_time: float = Field(default=0.25, description='Minimum time to wait before capturing page state.')
+	wait_for_network_idle_page_load_time: float = Field(default=0.5, description='Time to wait for network idle.')
+	maximum_wait_page_load_time: float = Field(default=5.0, description='Maximum time to wait for page load.')
+
+	wait_between_actions: float = Field(default=0.5, description='Time to wait between actions.')
+
+	# --- Playwright timeout configurations ---
+	
+	default_navigation_timeout: float | None = Field(default=None, description='Default page navigation timeout in milliseconds.')
+	default_timeout: float | None = Field(default=None, description='Default playwright call timeout in milliseconds.')
+	timeout: float | None = Field(default=None, description='General timeout for playwright operations in milliseconds.')
+
+	# --- UI/viewport/DOM ---
+
+	highlight_elements: bool = Field(default=True, description='Highlight interactive elements on the page.')
+
+	# --- Downloads ---
+	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
+
+	# Chrome arguments and automation settings (ESSENTIAL for cloud browsers)
+	args: list[CliArgStr] = Field(
+		default_factory=list, description='List of *extra* CLI args to pass to the browser when launching.'
+	)
+	ignore_default_args: list[CliArgStr] | Literal[True] = Field(
+		default_factory=lambda: [
+			'--enable-automation',  # we mask the automation fingerprint via JS and other flags
+			'--disable-extensions',  # allow browser extensions
+			'--hide-scrollbars',  # always show scrollbars in screenshots so agent knows there is more content below it can scroll down to
+			'--disable-features=AcceptCHFrame,AutoExpandDetailsElement,AvoidUnnecessaryBeforeUnloadCheckSync,CertificateTransparencyComponentUpdater,DeferRendererTasksAfterInput,DestroyProfileOnBrowserClose,DialMediaRouteProvider,ExtensionManifestV2Disabled,GlobalMediaControls,HttpsUpgrades,ImprovedCookieControls,LazyFrameLoading,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate',
+		],
+		description='List of default CLI args to stop playwright from applying (see https://github.com/microsoft/playwright/blob/41008eeddd020e2dee1c540f7c0cdfa337e99637/packages/playwright-core/src/server/chromium/chromiumSwitches.ts)',
+	)
+
+	# Recording and debugging (if supported by cloud service)
+	record_video: bool = Field(default=False, description='Enable video recording if supported by cloud service')
+	record_screenshots: bool = Field(default=False, description='Enable screenshot recording')
+	
+	def __repr__(self) -> str:
+		service_info = f"{self.service_url or 'cloud'}"
+		return f'CloudBrowserProfile(service={service_info}, browser={self.browser_name})'
+
+	def __str__(self) -> str:
+		return 'CloudBrowserProfile'
+
+	@model_validator(mode='after')
+	def copy_old_config_names_to_new(self) -> Self:
+		"""Copy old config window_width & window_height to window_size."""
+		if self.window_width or self.window_height:
+			logger.warning(
+				f'⚠️ CloudBrowserProfile(window_width=..., window_height=...) are deprecated, use CloudBrowserProfile(window_size={"width": 1280, "height": 1100}) instead.'
+			)
+			window_size = self.window_size or ViewportSize(width=0, height=0)
+			window_size['width'] = window_size['width'] or self.window_width or 1280
+			window_size['height'] = window_size['height'] or self.window_height or 1100
+			self.window_size = window_size
+
+		return self
+
+	@model_validator(mode='after')
+	def warn_storage_state_user_data_dir_conflict(self) -> Self:
+		"""Cloud browsers don't support user_data_dir, so this validator is simplified."""
+		# Cloud browsers typically don't support persistent user data directories
+		# Storage state is handled through the cloud service's session management
+		return self
+
+	@model_validator(mode='after')
+	def warn_deterministic_rendering_weirdness(self) -> Self:
+		if self.deterministic_rendering:
+			logger.warning(
+				'⚠️ CloudBrowserProfile(deterministic_rendering=True) is NOT RECOMMENDED. It breaks many sites and increases chances of getting blocked by anti-bot systems. '
+				'It hardcodes the JS random seed and forces browsers across Linux/Mac/Windows to use the same font rendering engine so that identical screenshots can be generated.'
+			)
+		return self
+
+	@model_validator(mode='after')
+	def validate_proxy_settings(self) -> Self:
+		"""Ensure proxy configuration is consistent."""
+		if self.proxy and (self.proxy.bypass and not self.proxy.server):
+			logger.warning('CloudBrowserProfile.proxy.bypass provided but proxy has no server; bypass will be ignored.')
+		return self
+
+	@model_validator(mode='after')
+	def validate_cloud_configuration(self) -> Self:
+		"""Validate cloud-specific configuration."""
+		if not self.cdp_url and not self.service_url:
+			logger.warning('⚠️ CloudBrowserProfile: Neither cdp_url nor service_url provided. You may need to set one for connection.')
+		
+		if self.is_local:
+			logger.warning('⚠️ CloudBrowserProfile: is_local should be False for cloud browsers. Setting to False.')
+			self.is_local = False
+
+		# if self.enable_default_extensions:
+		# 	logger.warning('⚠️ CloudBrowserProfile: enable_default_extensions=True is not supported for cloud browsers. Setting to False.')
+		# 	self.enable_default_extensions = False
+			
+		return self
+
+	def get_args(self) -> list[str]:
+		"""Get the list of all Chrome CLI args for cloud browsers (compiled from defaults, user-provided, and cloud-specific)."""
+
+		# Note: Extensions (if enabled) are handled via capabilities, not CLI args.
+		if self.enable_default_extensions:
+			logger.debug('CloudBrowserProfile: default extensions will be added via capabilities (not via --load-extension).')
+
+		if isinstance(self.ignore_default_args, list):
+			default_args = set(CHROME_DEFAULT_ARGS) - set(self.ignore_default_args)
+		elif self.ignore_default_args is True:
+			default_args = set()
+		elif not self.ignore_default_args:
+			default_args = set(CHROME_DEFAULT_ARGS)
+		else:
+			default_args = set(CHROME_DEFAULT_ARGS)
+
+		# Remove local-specific args that don't apply to cloud browsers
+		local_specific_args = {
+			'--user-data-dir',  # Cloud browsers manage their own profiles
+			'--profile-directory',  # Cloud browsers manage their own profiles
+			'--load-extension',  # Extensions handled differently in cloud
+		}
+		default_args = default_args - local_specific_args
+
+		# Capture args before conversion for logging
+		pre_conversion_args = [
+			*default_args,
+			*self.args,
+			# Note: Cloud browsers don't support user-data-dir or profile-directory
+			# Note: Docker args may not apply to cloud browsers
+			*(CHROME_DISABLE_SECURITY_ARGS if self.disable_security else []),
+			*(CHROME_DETERMINISTIC_RENDERING_ARGS if self.deterministic_rendering else []),
+			*(
+				[f'--window-size={self.window_size["width"]},{self.window_size["height"]}']
+				if self.window_size
+				else []
+			),
+			*(
+				[f'--window-position={self.window_position["width"]},{self.window_position["height"]}']
+				if self.window_position
+				else []
+			),
+			# Note: Cloud browsers don't support local extension loading
+		]
+
+		# Add stealth-specific args if enabled
+		if self.stealth:
+			stealth_args = [
+				'--disable-blink-features=AutomationControlled',
+				'--exclude-switches=enable-automation',
+				'--disable-extensions-file-access-check',
+				'--disable-extensions-http-throttling',
+			]
+			pre_conversion_args.extend(stealth_args)
+
+		# Proxy flags
+		proxy_server = self.proxy.server if self.proxy else None
+		proxy_bypass = self.proxy.bypass if self.proxy else None
+
+		if proxy_server:
+			pre_conversion_args.append(f'--proxy-server={proxy_server}')
+			if proxy_bypass:
+				pre_conversion_args.append(f'--proxy-bypass-list={proxy_bypass}')
+
+		# convert to dict and back to dedupe and merge duplicate args
+		final_args_list = BrowserLaunchArgs.args_as_list(BrowserLaunchArgs.args_as_dict(pre_conversion_args))
+		return final_args_list
+
+	def _get_extension_args(self) -> list[str]:
+		"""Cloud browsers don't support local extension loading."""
+		logger.warning('⚠️ CloudBrowserProfile: Local extension loading is not supported for cloud browsers.')
+		return []
+
+	def _ensure_default_extensions_downloaded(self) -> list[str]:
+		"""Cloud browsers don't support local extension downloading."""
+		logger.warning('⚠️ CloudBrowserProfile: Local extension downloading is not supported for cloud browsers.')
+		return []
+
+	def _download_extension(self, url: str, output_path: Path) -> None:
+		"""Download extension .crx file locally to embed into cloud capabilities."""
+		# Reuse the same behavior as local profile (download client-side and embed as base64)
+		try:
+			# Defer to BrowserProfile implementation if available
+			return super()._download_extension(url, output_path)  # type: ignore[attr-defined]
+		except AttributeError:
+			# Fallback if MRO changes
+			import urllib.request as _urlreq  # local import to avoid global namespace issues
+			with _urlreq.urlopen(url) as response:
+				with open(output_path, 'wb') as f:
+					f.write(response.read())
+
+	def _extract_extension(self, crx_path: Path, extract_dir: Path) -> None:
+		"""Cloud browsers don't support local extension extraction."""
+		raise NotImplementedError('CloudBrowserProfile does not support local extension extraction.')
+
+	def _get_default_extensions_as_base64(self) -> list[str]:
+		"""Download default .crx files (if needed) and return base64-encoded payloads for cloud capabilities."""
+		# Definitions mirror BrowserProfile defaults
+		extensions = [
+			{
+				'name': 'uBlock Origin',
+				'id': 'cjpalhdlnbpafiamejdnhcphjbkeiagm',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dcjpalhdlnbpafiamejdnhcphjbkeiagm%26uc',
+			},
+			{
+				'name': "I still don't care about cookies",
+				'id': 'edibdbjcniadpccecjdfdjjppcpchdlm',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dedibdbjcniadpccecjdfdjjppcpchdlm%26uc',
+			},
+			{
+				'name': 'ClearURLs',
+				'id': 'lckanjgmijmafbedllaakclkaicjfmnk',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dlckanjgmijmafbedllaakclkaicjfmnk%26uc',
+			},
+		]
+
+		cache_dir = CONFIG.BROWSER_USE_EXTENSIONS_DIR
+		cache_dir.mkdir(parents=True, exist_ok=True)
+
+		encoded: list[str] = []
+		loaded_names: list[str] = []
+		for ext in extensions:
+			crx_file = cache_dir / f"{ext['id']}.crx"
+			if not crx_file.exists():
+				logger.info(f"📦 Downloading {ext['name']} extension (cloud embed)...")
+				self._download_extension(ext['url'], crx_file)
+			try:
+				data = crx_file.read_bytes()
+				encoded.append(base64.b64encode(data).decode('ascii'))
+				loaded_names.append(ext['name'])
+			except Exception as e:
+				logger.warning(f"⚠️ Failed to prepare {ext['name']} extension for cloud: {e}")
+
+		if encoded:
+			logger.debug(f"[CloudBrowserProfile] 🧩 Extensions prepared for cloud ({len(encoded)}): [{', '.join(loaded_names)}]")
+		else:
+			logger.warning('[CloudBrowserProfile] ⚠️ No default extensions could be prepared for cloud capabilities')
+
+		return encoded
+
+	@observe_debug(ignore_input=True, ignore_output=True, name='detect_display_configuration')
+	def detect_display_configuration(self) -> None:
+		"""
+		Detect cloud browser display configuration. 
+		For cloud browsers, we use sensible defaults since we can't detect the remote display.
+		"""
+		# Cloud browsers: use default viewport configuration
+		default_viewport = ViewportSize(width=1280, height=1100)
+		self.screen = self.screen or default_viewport
+
+		# Cloud browsers are typically headless by nature
+		# But may support headful mode depending on the service
+		# Default to what the cloud service provides
+
+		# For cloud browsers, always use viewport mode for consistency
+		self.viewport = self.viewport or self.window_size or self.screen
+		self.window_position = None  # Not applicable to cloud browsers
+		self.window_size = self.window_size or self.viewport
+		self.no_viewport = False  # Always use viewport for cloud browsers
+
+		# Set device scale factor for cloud browsers
+		self.device_scale_factor = self.device_scale_factor or 1.0
+
+		# Ensure viewport is set
+		assert self.viewport is not None
+		assert self.no_viewport is False
+
+	def to_selenium_capabilities(self) -> dict[str, Any]:
+		"""Convert profile to Selenium WebDriver capabilities for cloud services."""
+		capabilities: dict[str, Any] = {
+			'browserName': self.browser_name,
+		}
+		
+		if self.browser_version:
+			capabilities['browserVersion'] = self.browser_version
+		if self.platform_name:
+			capabilities['platformName'] = self.platform_name
+		if self.session_name:
+			capabilities['name'] = self.session_name
+		if self.build_name:
+			capabilities['build'] = self.build_name
+		if self.tags:
+			capabilities['tags'] = ','.join(self.tags)
+
+		# Decide options key based on browser
+		bn = (self.browser_name or '').lower()
+		options_key = 'ms:edgeOptions' if 'edge' in bn else 'goog:chromeOptions'
+		# Add browser-specific options with our optimized args
+		browser_options: dict[str, Any] = {
+			'args': self.get_args(),
+		}
+
+		# Attach extensions via base64 payloads if requested and supported by provider
+		if self.enable_default_extensions:
+			try:
+				encoded_exts = self._get_default_extensions_as_base64()
+				if encoded_exts:
+					browser_options['extensions'] = encoded_exts
+			except Exception as e:
+				logger.warning(f'⚠️ Failed to attach cloud extensions to capabilities: {e}')
+		
+		# Add proxy settings to Chrome args if specified (not as separate proxy object)
+		if self.proxy and self.proxy.server:
+			proxy_args = [f'--proxy-server={self.proxy.server}']
+			if self.proxy.bypass:
+				proxy_args.append(f'--proxy-bypass-list={self.proxy.bypass}')
+			browser_options['args'].extend(proxy_args)
+			
+		capabilities[options_key] = browser_options
+			
+		# Add viewport if specified
+		if hasattr(self, 'viewport') and self.viewport:
+			capabilities['screenResolution'] = f"{self.viewport['width']}x{self.viewport['height']}"
+			
+		return capabilities
+
+	def to_saucelabs_capabilities(self) -> dict[str, Any]:
+		"""Convert profile to SauceLabs-specific capabilities."""
+		capabilities: dict[str, Any] = {
+			'browserName': self.browser_name,
+		}
+		# Note: Sauce Labs returns se:cdp when devTools is enabled in sauce:options.
+		# Requesting webSocketUrl explicitly is not required and can cause conflicts on some setups.
+		if self.browser_version:
+			capabilities['browserVersion'] = self.browser_version
+		if self.platform_name:
+			capabilities['platformName'] = self.platform_name
+			
+		# Add options with stealth arguments under the correct key
+		bn = (self.browser_name or '').lower()
+		options_key = 'ms:edgeOptions' if ('microsoftedge' in bn or 'edge' in bn) else 'goog:chromeOptions'
+		chrome_args = self.get_args()
+		if chrome_args:
+			capabilities[options_key] = {'args': chrome_args}
+		# Attach extensions for SauceLabs (supports base64-encoded CRX payloads)
+		if self.enable_default_extensions:
+			try:
+				encoded_exts = self._get_default_extensions_as_base64()
+				if encoded_exts:
+					capabilities.setdefault(options_key, {})['extensions'] = encoded_exts
+			except Exception as e:
+				logger.warning(f'⚠️ Failed to attach cloud extensions for SauceLabs: {e}')
+		
+		# SauceLabs specific options - ALL sauce-specific capabilities go here
+		sauce_options: dict[str, Any] = {
+			'devTools': True,
+		}
+		# Common metadata supported by Sauce Labs
+		if self.session_name:
+			sauce_options['name'] = self.session_name
+		if self.build_name:
+			sauce_options['build'] = self.build_name
+		if self.tags:
+			# Sauce expects a list for tags
+			sauce_options['tags'] = self.tags
+		# Prefer setting screen resolution inside sauce:options for Sauce Labs
+		if hasattr(self, 'viewport') and self.viewport:
+			try:
+				w = int(self.viewport['width'])
+				h = int(self.viewport['height'])
+				sauce_options['screenResolution'] = f"{w}x{h}"
+			except Exception:
+				pass
+			
+		# Avoid enabling extra experimental flags by default; users can add them manually if needed.
+			
+		if sauce_options:
+			capabilities['sauce:options'] = sauce_options
+			
+		return capabilities
+
+	def kwargs_for_connect(self) -> BrowserConnectArgs:
+		"""Return the kwargs for BrowserType.connect()."""
+		return BrowserConnectArgs(**self.model_dump())
+
+	def kwargs_for_new_context(self) -> BrowserNewContextArgs:
+		"""Return the kwargs for BrowserContext.new_context()."""
+		return BrowserNewContextArgs(**self.model_dump())

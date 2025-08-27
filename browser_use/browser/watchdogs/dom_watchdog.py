@@ -426,6 +426,7 @@ class DOMWatchdog(BaseWatchdog):
 					browser_session=self.browser_session,
 					logger=self.logger,
 					cross_origin_iframes=self.browser_session.browser_profile.cross_origin_iframes,
+					skip_iframe_documents=getattr(self.browser_session.browser_profile, 'skip_iframe_documents', False),
 				)
 				# self.logger.debug('🔍 DOMWatchdog._build_dom_tree: ✅ DomService created')
 			# else:

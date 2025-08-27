@@ -40,11 +40,17 @@ class DomService:
 	logger: logging.Logger
 
 	def __init__(
-		self, browser_session: 'BrowserSession', logger: logging.Logger | None = None, cross_origin_iframes: bool = False
+		self,
+		browser_session: 'BrowserSession',
+		logger: logging.Logger | None = None,
+		cross_origin_iframes: bool = False,
+		skip_iframe_documents: bool = False,
 	):
 		self.browser_session = browser_session
 		self.logger = logger or browser_session.logger
 		self.cross_origin_iframes = cross_origin_iframes
+		# When True, do not traverse into iframe content documents and restrict AX tree to main frame
+		self.skip_iframe_documents = skip_iframe_documents
 
 	async def __aenter__(self):
 		return self
@@ -257,21 +263,38 @@ class DomService:
 		# Collect all frame IDs recursively
 		all_frame_ids = collect_all_frame_ids(frame_tree['frameTree'])
 
-		# Get accessibility tree for each frame
-		ax_tree_requests = []
-		for frame_id in all_frame_ids:
-			ax_tree_request = cdp_session.cdp_client.send.Accessibility.getFullAXTree(
-				params={'frameId': frame_id}, session_id=cdp_session.session_id
-			)
-			ax_tree_requests.append(ax_tree_request)
+		# Optionally skip iframe frames entirely (only include the top-level document)
+		if self.skip_iframe_documents and all_frame_ids:
+			root_frame_id = frame_tree['frameTree']['frame']['id']
+			all_frame_ids = [root_frame_id]
 
-		# Wait for all requests to complete
-		ax_trees = await asyncio.gather(*ax_tree_requests)
+		# Get accessibility tree for each frame, being resilient to frames that disappeared
+		async def _fetch_ax_tree(frame_id: str):
+			try:
+				return await cdp_session.cdp_client.send.Accessibility.getFullAXTree(
+					params={'frameId': frame_id}, session_id=cdp_session.session_id
+				)
+			except Exception as e:
+				msg = getattr(e, 'message', None) or str(e)
+				# Common CDP error when a frame detaches between discovery and query
+				if '-32602' in msg or 'Frame with the given frameId is not found' in msg:
+					self.logger.debug(f'Skipping AX tree for missing frame {frame_id}: {msg}')
+					return None
+				self.logger.warning(f'AX tree request failed for frame {frame_id}: {msg}')
+				return None
+
+		ax_trees = await asyncio.gather(*[ _fetch_ax_tree(fid) for fid in all_frame_ids ], return_exceptions=False)
 
 		# Merge all AX nodes into a single array
 		merged_nodes: list[AXNode] = []
 		for ax_tree in ax_trees:
-			merged_nodes.extend(ax_tree['nodes'])
+			if not ax_tree:
+				continue
+			try:
+				merged_nodes.extend(ax_tree.get('nodes', []))
+			except Exception:
+				# Be defensive; skip malformed responses
+				continue
 
 		return {'nodes': merged_nodes}
 
@@ -290,48 +313,49 @@ class DomService:
 
 		# Get actual scroll positions for all iframes before capturing snapshot
 		iframe_scroll_positions = {}
-		try:
-			scroll_result = await cdp_session.cdp_client.send.Runtime.evaluate(
-				params={
-					'expression': """
-					(() => {
-						const scrollData = {};
-						const iframes = document.querySelectorAll('iframe');
-						iframes.forEach((iframe, index) => {
-							try {
-								const doc = iframe.contentDocument || iframe.contentWindow.document;
-								if (doc) {
-									scrollData[index] = {
-										scrollTop: doc.documentElement.scrollTop || doc.body.scrollTop || 0,
-										scrollLeft: doc.documentElement.scrollLeft || doc.body.scrollLeft || 0
-									};
+		if not self.skip_iframe_documents:
+			try:
+				scroll_result = await cdp_session.cdp_client.send.Runtime.evaluate(
+					params={
+						'expression': """
+						(() => {
+							const scrollData = {};
+							const iframes = document.querySelectorAll('iframe');
+							iframes.forEach((iframe, index) => {
+								try {
+									const doc = iframe.contentDocument || iframe.contentWindow.document;
+									if (doc) {
+										scrollData[index] = {
+											scrollTop: doc.documentElement.scrollTop || doc.body.scrollTop || 0,
+											scrollLeft: doc.documentElement.scrollLeft || doc.body.scrollLeft || 0
+										};
+									}
+								} catch (e) {
+									// Cross-origin iframe, can't access
 								}
-							} catch (e) {
-								// Cross-origin iframe, can't access
-							}
-						});
-						return scrollData;
-					})()
-					""",
-					'returnByValue': True,
-				},
-				session_id=cdp_session.session_id,
-			)
-			if scroll_result and 'result' in scroll_result and 'value' in scroll_result['result']:
-				iframe_scroll_positions = scroll_result['result']['value']
-				for idx, scroll_data in iframe_scroll_positions.items():
-					self.logger.debug(
-						f'🔍 DEBUG: Iframe {idx} actual scroll position - scrollTop={scroll_data.get("scrollTop", 0)}, scrollLeft={scroll_data.get("scrollLeft", 0)}'
-					)
-		except Exception as e:
-			self.logger.debug(f'Failed to get iframe scroll positions: {e}')
+							});
+							return scrollData;
+						})()
+						""",
+						'returnByValue': True,
+					},
+					session_id=cdp_session.session_id,
+				)
+				if scroll_result and 'result' in scroll_result and 'value' in scroll_result['result']:
+					iframe_scroll_positions = scroll_result['result']['value']
+					for idx, scroll_data in iframe_scroll_positions.items():
+						self.logger.debug(
+							f'🔍 DEBUG: Iframe {idx} actual scroll position - scrollTop={scroll_data.get("scrollTop", 0)}, scrollLeft={scroll_data.get("scrollLeft", 0)}'
+						)
+			except Exception as e:
+				self.logger.debug(f'Failed to get iframe scroll positions: {e}')
 
 		# Define CDP request factories to avoid duplication
 		def create_snapshot_request():
 			return cdp_session.cdp_client.send.DOMSnapshot.captureSnapshot(
 				params={
 					'computedStyles': REQUIRED_COMPUTED_STYLES,
-					'includePaintOrder': True,
+					'includePaintOrder': False,
 					'includeDOMRects': True,
 					'includeBlendedBackgroundColors': False,
 					'includeTextColorOpacities': False,
@@ -346,6 +370,9 @@ class DomService:
 
 		start = time.time()
 
+		# Extended timeouts for complex pages with many iframes
+		primary_timeout = 30.0  # Increased from 10.0
+
 		# Create initial tasks
 		tasks = {
 			'snapshot': asyncio.create_task(create_snapshot_request()),
@@ -355,7 +382,9 @@ class DomService:
 		}
 
 		# Wait for all tasks with timeout
-		done, pending = await asyncio.wait(tasks.values(), timeout=10.0)
+		self.logger.debug(f'🔍 Starting CDP calls with {primary_timeout}s timeout')
+		done, pending = await asyncio.wait(tasks.values(), timeout=primary_timeout)
+		self.logger.debug(f'🔍 Primary timeout completed, {len(done)} tasks done, {len(pending)} pending')
 
 		# Retry any failed or timed out tasks
 		if pending:
@@ -375,8 +404,11 @@ class DomService:
 				if task in pending and task in retry_map:
 					tasks[key] = retry_map[task]()
 
-			# Wait again with shorter timeout
-			done2, pending2 = await asyncio.wait([t for t in tasks.values() if not t.done()], timeout=2.0)
+			retry_timeout = 15.0  # Increased from 2.0
+
+			# Wait again with extended retry timeout
+			self.logger.debug(f'🔍 Retrying with {retry_timeout}s timeout')
+			done2, pending2 = await asyncio.wait([t for t in tasks.values() if not t.done()], timeout=retry_timeout)
 
 			if pending2:
 				for task in pending2:
@@ -389,21 +421,77 @@ class DomService:
 			if task.done() and not task.cancelled():
 				try:
 					results[key] = task.result()
+					self.logger.debug(f'🔍 ✅ {key} completed successfully')
 				except Exception as e:
 					self.logger.warning(f'CDP request {key} failed with exception: {e}')
 					failed.append(key)
 			else:
-				self.logger.warning(f'CDP request {key} timed out')
+				self.logger.warning(f'🔍 ❌ {key} timed out or was cancelled')
 				failed.append(key)
 
 		# If any required tasks failed, raise an exception
 		if failed:
-			raise TimeoutError(f'CDP requests failed or timed out: {", ".join(failed)}')
+			self.logger.warning(f'🔍 ❌ Failed CDP requests: {failed}')
+			
+			# For cloud browsers, try once more with even longer timeout
+			if len(failed) <= 2:  # If only 1-2 requests failed, try recovery
+				self.logger.debug('🔄 Attempting recovery with simplified requests...')
+				
+				recovery_results = {}
+				recovery_failed = []
+				
+				# Try simplified requests for failed operations
+				if 'snapshot' in failed:
+					try:
+						simplified_snapshot = await asyncio.wait_for(
+							cdp_session.cdp_client.send.DOMSnapshot.captureSnapshot(
+								params={
+									'computedStyles': ['display', 'visibility', 'opacity'],
+									'includePaintOrder': False,
+									'includeDOMRects': True,
+								},
+								session_id=cdp_session.session_id,
+							),
+							timeout=20.0
+						)
+						recovery_results['snapshot'] = simplified_snapshot
+						self.logger.debug('✅ Simplified snapshot succeeded')
+					except Exception as e:
+						self.logger.warning(f'❌ Simplified snapshot failed: {e}')
+						recovery_failed.append('snapshot')
+				
+				if 'dom_tree' in failed:
+					try:
+						simplified_dom = await asyncio.wait_for(
+							cdp_session.cdp_client.send.DOM.getDocument(
+								params={'depth': 3, 'pierce': False},
+								session_id=cdp_session.session_id
+							),
+							timeout=15.0
+						)
+						recovery_results['dom_tree'] = simplified_dom
+						self.logger.debug('✅ Simplified DOM tree succeeded')
+					except Exception as e:
+						self.logger.warning(f'❌ Simplified DOM tree failed: {e}')
+						recovery_failed.append('dom_tree')
+				
+				# Update results with recovery data
+				results.update(recovery_results)
+				failed = [f for f in failed if f not in recovery_results]
+				
+				if not failed:
+					self.logger.debug('✅ Recovery successful, continuing with partial data')
+			
+			# If still have failures, raise with details
+			if failed:
+				raise TimeoutError(f'CDP requests failed or timed out: {", ".join(failed)}')
+			else:
+				self.logger.debug('✅ Recovered from initial failures')
 
-		snapshot = results['snapshot']
-		dom_tree = results['dom_tree']
-		ax_tree = results['ax_tree']
-		device_pixel_ratio = results['device_pixel_ratio']
+		snapshot = results.get('snapshot', {'documents': []})
+		dom_tree = results.get('dom_tree', {'root': {'nodeId': 1, 'nodeType': 9, 'nodeName': '#document', 'children': []}})
+		ax_tree = results.get('ax_tree', {'nodes': []})
+		device_pixel_ratio = results.get('device_pixel_ratio', 1.0)
 		end = time.time()
 		cdp_timing = {'cdp_calls_total': end - start}
 
@@ -568,12 +656,14 @@ class DomService:
 					total_frame_offset.x += snapshot_data.bounds.x
 					total_frame_offset.y += snapshot_data.bounds.y
 
-			if 'contentDocument' in node and node['contentDocument']:
-				dom_tree_node.content_document = await _construct_enhanced_node(
-					node['contentDocument'], updated_html_frames, total_frame_offset
-				)
-				dom_tree_node.content_document.parent_node = dom_tree_node
-				# forcefully set the parent node to the content document node (helps traverse the tree)
+			# Optionally skip traversing into iframe documents
+			if not (self.skip_iframe_documents and node['nodeName'].upper() == 'IFRAME'):
+				if 'contentDocument' in node and node['contentDocument']:
+					dom_tree_node.content_document = await _construct_enhanced_node(
+						node['contentDocument'], updated_html_frames, total_frame_offset
+					)
+					dom_tree_node.content_document.parent_node = dom_tree_node
+					# forcefully set the parent node to the content document node (helps traverse the tree)
 
 			if 'shadowRoots' in node and node['shadowRoots']:
 				dom_tree_node.shadow_roots = []
