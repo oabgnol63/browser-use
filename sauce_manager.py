@@ -19,7 +19,7 @@ from browser_use.browser import ProxySettings
 def saucelabs_session_creation(profile: CloudBrowserProfile) -> str:
     """Test actual SauceLabs session creation"""
     
-    print("\n🌟 Testing SauceLabs Session Creation")
+    print("\n🌟 SauceLabs Session Creation")
     print("=" * 40)
 
     username = SAUCELABS_USERNAME
@@ -35,7 +35,7 @@ def saucelabs_session_creation(profile: CloudBrowserProfile) -> str:
     # Merge test-specific overrides without wiping defaults from profile
     capabilities.setdefault('sauce:options', {}).update({
         'experimental': True,
-        'maxDuration': 600,
+        'maxDuration': 900,
         'commandTimeout': 600,
         'idleTimeout': 600,
     })
@@ -517,55 +517,28 @@ async def _do_login_cdp_async(cdp_ws_url: str, login_url: str, username: str, pa
             password_submit_time = time.time() - login_start_time
             print(f"🔐 Password step result: {password_result} (completed in {password_submit_time:.2f}s total)")
 
-            # Wait for login to complete (password field disappears or redirect happens)
-            print("⏳ Waiting for login completion...")
+            # Wait for login to complete (URL returns to login_url)
+            print(f"⏳ Waiting for URL to return to: {login_url}")
             start = time.time()
             check_interval = 0.5  # Check every 0.5 seconds for faster response
             
             while time.time() - start < timeout:
-                login_complete = await _cdp_send(ws, "Runtime.evaluate", {
-                    "expression": """
-                    (() => {
-                        // Check if we're no longer on login page
-                        const loginSection = document.getElementById('login_password');
-                        const currentUrl = window.location.href;
-                        
-                        // Login is complete if:
-                        // 1. Password section is hidden/gone, OR
-                        // 2. URL has changed to indicate successful login, OR
-                        // 3. Success message is shown, OR
-                        // 4. We're not on a login-related page anymore, OR
-                        // 5. Document ready state changed and we're not on login page
-                        const passwordGone = !loginSection || loginSection.style.display === 'none';
-                        const urlChanged = !currentUrl.includes('/account/login') && !currentUrl.includes('chrome-error');
-                        const authSuccess = document.getElementById('menlo_auth_success') && 
-                                          document.getElementById('menlo_auth_success').style.display !== 'none';
-                        const hasError = document.querySelector('.error') && document.querySelector('.error').textContent.trim() !== '';
-                        const notLoginPage = !currentUrl.includes('login') && !currentUrl.includes('auth') && 
-                                           !currentUrl.includes('saml') && currentUrl !== 'about:blank';
-                        
-                        return {{
-                            complete: passwordGone || urlChanged || authSuccess || notLoginPage,
-                            passwordGone: passwordGone,
-                            urlChanged: urlChanged,
-                            authSuccess: authSuccess,
-                            notLoginPage: notLoginPage,
-                            hasError: hasError,
-                            currentUrl: currentUrl
-                        }};
-                    })()
-                    """,
+                current_url_result = await _cdp_send(ws, "Runtime.evaluate", {
+                    "expression": "window.location.href",
                     "returnByValue": True
                 }, seq, session_id=session_id)
                 
-                status = _extract_eval_value(login_complete)
-                if status and status.get('complete'):
-                    print("✅ Login appears to be complete!")
-                    print(f"📊 Login status: {status}")
+                current_url = _extract_eval_value(current_url_result)
+                print(f"🔍 Current URL: {current_url}")
+                
+                # Normalize URLs by removing trailing slashes for comparison
+                normalized_current = current_url.rstrip('/') if current_url else ''
+                normalized_login = login_url.rstrip('/')
+                
+                if current_url and normalized_current == normalized_login:
+                    print("✅ Login complete - URL returned to login page!")
                     break
-                elif status and status.get('hasError'):
-                    print(f"❌ Login error detected: {status}")
-                    break
+                    
                 await asyncio.sleep(check_interval)
 
             # Get final URL to confirm login status
@@ -581,11 +554,16 @@ async def _do_login_cdp_async(cdp_ws_url: str, login_url: str, username: str, pa
             total_time = time.time() - login_start_time
             print(f"⏱️ Total login execution time: {total_time:.2f} seconds")
             
-            if current_url and '/account/login' not in current_url and 'chrome-error' not in current_url:
-                print("🎉 Login successful - redirected away from login page!")
+            # Normalize URLs by removing trailing slashes for comparison
+            normalized_current = current_url.rstrip('/') if current_url else ''
+            normalized_login = login_url.rstrip('/')
+            
+            if current_url and normalized_current == normalized_login:
+                print("🎉 Login successful - URL returned to login page!")
                 return True
             else:
-                print("⚠️ Login may have failed or encountered an error")
+                print("⚠️ Login may have failed - URL did not return to login page")
+                print(f"🔍 Expected: {normalized_login}, Got: {normalized_current}")
                 return False
 
 

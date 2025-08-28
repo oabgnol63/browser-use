@@ -41,12 +41,12 @@ async def main():
         skip_iframe_documents=False,  # experimental, should not use
         stealth=True,
         enable_default_extensions=True,
-        viewport=ViewportSize(width=1920, height=1080),
+        viewport=ViewportSize(width=1440, height=900),
         proxy=ProxySettings(
             server=PROXY_URL,
             username=PROXY_USERNAME,
             password=PROXY_PASSWORD
-        )
+        ),
     )
 
     cdp_url = saucelabs_session_creation(cloud_profile)
@@ -56,17 +56,19 @@ async def main():
     cloud_profile.cdp_url = cdp_url
     await _do_login_cdp_async(cdp_url, login_url="https://example.com", username=PROXY_USERNAME or "", password=PROXY_PASSWORD or "")
     llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash", temperature=0)
-    page_extract_llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash-lite", temperature=0)
+    page_extract_llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash", temperature=0)
     llm_task = """
     Go to https://bbc.com\n
-    Locate "Only From The BBC" headline\n
+    Locate "More News" headline\n
     Click on the first article below this\n
     Fifty words to describe it?\n
     Click go backward button\n
     Click go forward button\n
     The content is the same?\n
     Click go backward button\n
-    Is it a homepage?
+    Is it a homepage?\n
+    Scroll down till the end. Page load success?\n
+    Subscribe to BBC news\n
     """
 
     agent = Agent(
