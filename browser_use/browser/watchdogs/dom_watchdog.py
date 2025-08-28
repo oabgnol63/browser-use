@@ -296,7 +296,12 @@ class DOMWatchdog(BaseWatchdog):
 					# Get the single handler result
 					screenshot_b64 = await screenshot_event.event_result(raise_if_any=True, raise_if_none=True)
 				except TimeoutError:
-					self.logger.warning('📸 Screenshot timed out after 6 seconds - no handler registered or slow page?')
+					try:
+						timeout_val = getattr(screenshot_event, 'event_timeout', None) or 0
+						timeout_str = f"{timeout_val:g} seconds" if timeout_val else "timeout"
+					except Exception:
+						timeout_str = "timeout"
+					self.logger.warning(f'📸 Screenshot timed out after {timeout_str} - no handler registered or slow page?')
 
 				except Exception as e:
 					self.logger.warning(f'📸 Screenshot failed: {type(e).__name__}: {e}')

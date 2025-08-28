@@ -18,6 +18,7 @@ from browser_use.browser.events import (
 	CloseTabEvent,
 	GetDropdownOptionsEvent,
 	GoBackEvent,
+	GoForwardEvent,
 	NavigateToUrlEvent,
 	ScrollEvent,
 	ScrollToTextEvent,
@@ -243,6 +244,21 @@ class Tools(Generic[Context]):
 				logger.error(f'Failed to dispatch GoBackEvent: {type(e).__name__}: {e}')
 				clean_msg = extract_llm_error_message(e)
 				error_msg = f'Failed to go back: {clean_msg}'
+				return ActionResult(error=error_msg)
+
+		@self.registry.action('Go forward', param_model=NoParamsAction)
+		async def go_forward(_: NoParamsAction, browser_session: BrowserSession):
+			try:
+				event = browser_session.event_bus.dispatch(GoForwardEvent())
+				await event
+				memory = 'Navigated forward'
+				msg = f'🔜  {memory}'
+				logger.info(msg)
+				return ActionResult(extracted_content=memory)
+			except Exception as e:
+				logger.error(f'Failed to dispatch GoForwardEvent: {type(e).__name__}: {e}')
+				clean_msg = extract_llm_error_message(e)
+				error_msg = f'Failed to go forward: {clean_msg}'
 				return ActionResult(error=error_msg)
 
 		@self.registry.action(

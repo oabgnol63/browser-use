@@ -159,7 +159,7 @@ class BrowserStateRequestEvent(BaseEvent[BrowserStateSummary]):
 	cache_clickable_elements_hashes: bool = True
 	include_recent_events: bool = False
 
-	event_timeout: float | None = 30.0  # seconds
+	event_timeout: float | None = 60.0  # seconds
 
 
 # class WaitForConditionEvent(BaseEvent):

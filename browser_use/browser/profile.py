@@ -1299,7 +1299,7 @@ class CloudBrowserProfile(
 		capabilities: dict[str, Any] = {
 			'browserName': self.browser_name,
 		}
-		
+		capabilities['acceptInsecureCerts'] = True
 		if self.browser_version:
 			capabilities['browserVersion'] = self.browser_version
 		if self.platform_name:
@@ -1348,6 +1348,7 @@ class CloudBrowserProfile(
 		capabilities: dict[str, Any] = {
 			'browserName': self.browser_name,
 		}
+		capabilities['acceptInsecureCerts'] = True
 		# Note: Sauce Labs returns se:cdp when devTools is enabled in sauce:options.
 		# Requesting webSocketUrl explicitly is not required and can cause conflicts on some setups.
 		if self.browser_version:

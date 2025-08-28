@@ -1193,6 +1193,108 @@ class BrowserSession(BaseModel):
 
 		return self
 
+	async def reconnect_cdp(self) -> None:
+		"""Re-establish the root CDP connection and refocus the current tab, quietly.
+
+		- Does not emit TabCreated/AgentFocus events to avoid duplicate side effects
+		- Clears dead per-target sessions and creates a fresh session for the focused tab
+		- Re-applies proxy/auth handlers if configured
+		"""
+
+		# Preserve prior focus info (best-effort)
+		prev_url = None
+		try:
+			if self.agent_focus:
+				prev_url = self.agent_focus.url
+		except Exception:
+			prev_url = None
+
+		self.logger.debug('🔌 Reconnecting CDP root client after disconnect...')
+
+		# Stop existing client (ignore errors)
+		try:
+			if self._cdp_client_root:
+				await self._cdp_client_root.stop()
+		except Exception:
+			pass
+
+		# Reset session pool; old sessions are invalid now
+		self._cdp_client_root = None
+		self._cdp_session_pool.clear()
+
+		# Ensure we have a CDP URL; if HTTP format, resolve to WebSocket like in connect()
+		if not self.cdp_url:
+			raise RuntimeError('Cannot reconnect CDP without a cdp_url')
+
+		if not self.cdp_url.startswith('ws'):
+			url = self.cdp_url.rstrip('/')
+			if not url.endswith('/json/version'):
+				url = url + '/json/version'
+			async with httpx.AsyncClient() as client:
+				headers = self.browser_profile.headers or {}
+				version_info = await client.get(url, headers=headers)
+				self.browser_profile.cdp_url = version_info.json()['webSocketDebuggerUrl']
+
+		assert self.cdp_url is not None
+
+		# Start a fresh root client
+		self._cdp_client_root = CDPClient(self.cdp_url)
+		await self._cdp_client_root.start()
+		await self._cdp_client_root.send.Target.setAutoAttach(
+			params={'autoAttach': True, 'waitForDebuggerOnStart': False, 'flatten': True}
+		)
+
+		# Choose a page to focus: prefer a tab with the previous URL, else last page, else create one
+		targets = await self._cdp_client_root.send.Target.getTargets()
+		page_targets: list[TargetInfo] = [
+			 t for t in targets.get('targetInfos', [])
+			 if self._is_valid_target(
+				 t,
+				 include_http=True,
+				 include_about=True,
+				 include_pages=True,
+				 include_iframes=False,
+				 include_workers=False,
+			 )
+		]
+
+		selected_target_id: str | None = None
+		if prev_url:
+			for t in page_targets:
+				if t.get('url') == prev_url:
+					selected_target_id = t['targetId']
+					break
+
+		if not selected_target_id:
+			if page_targets:
+				selected_target_id = page_targets[-1]['targetId']
+			else:
+				result = await self._cdp_client_root.send.Target.createTarget(params={'url': 'about:blank'})
+				selected_target_id = result['targetId']
+
+		# Attach a fresh session to the selected target using the shared root socket
+		self.agent_focus = await CDPSession.for_target(self._cdp_client_root, selected_target_id, new_socket=False)
+		self._cdp_session_pool[selected_target_id] = self.agent_focus
+
+		# Re-apply proxy/auth handlers if needed
+		await self._setup_proxy_auth()
+
+		# Sanity check by evaluating a trivial expression
+		try:
+			res = await asyncio.wait_for(
+				self.agent_focus.cdp_client.send.Runtime.evaluate(
+					params={'expression': '1+1', 'returnByValue': True}, session_id=self.agent_focus.session_id
+				),
+				timeout=2.0,
+			)
+			if res.get('result', {}).get('value') != 2:
+				raise RuntimeError('CDP sanity check failed after reconnect')
+		except Exception as e:
+			self.logger.debug(f'CDP sanity check warning after reconnect: {type(e).__name__}: {e}')
+
+		self.logger.debug('🔌 CDP reconnected and focus restored')
+
+	
 	async def _setup_proxy_auth(self) -> None:
 		"""Enable CDP Fetch auth handling for authenticated proxy, if credentials provided.
 

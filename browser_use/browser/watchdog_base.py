@@ -157,11 +157,28 @@ class BaseWatchdog(BaseModel):
 						else:
 							await browser_session.get_or_create_cdp_session(target_id=None, new_socket=True, focus=True)
 					except Exception as sub_error:
+						# If the underlying transport is closed, try a root-level reconnect once
 						if 'ConnectionClosedError' in str(type(sub_error)) or 'ConnectionError' in str(type(sub_error)):
 							browser_session.logger.error(
-								f'{red}🚌 {watchdog_and_handler_str} ❌ Browser closed or CDP Connection disconnected by remote. {red}{type(sub_error).__name__}: {sub_error}{reset}\n'
+								f'{red}🚌 {watchdog_and_handler_str} ❌ Browser closed or CDP Connection disconnected by remote. {red}{type(sub_error).__name__}: {sub_error}{reset}'
 							)
-							raise
+							try:
+								await browser_session.reconnect_cdp()
+								browser_session.logger.debug(
+									f'{yellow}🚌 {watchdog_and_handler_str} ♻️ Retrying handler once after CDP reconnect...{reset}'
+								)
+								retry_start = time.time()
+								result = await actual_handler(event)
+								retry_elapsed = time.time() - retry_start
+								browser_session.logger.debug(
+									f'{green}🚌 {watchdog_and_handler_str} ✅ Retry succeeded ({retry_elapsed:.2f}s){reset}'
+								)
+								return result
+							except Exception as retry_error:
+								browser_session.logger.error(
+									f'{red}🚌 {watchdog_and_handler_str} ❌ Retry after reconnect failed: {type(retry_error).__name__}: {retry_error}{reset}'
+								)
+								raise
 						else:
 							browser_session.logger.error(
 								f'{red}🚌 {watchdog_and_handler_str} ❌ CDP connected but failed to re-create CDP session after error "{type(original_error).__name__}: {original_error}" in {cyan}{actual_handler.__name__}({event.event_type}#{event.event_id[-4:]}){reset}: due to {red}{type(sub_error).__name__}: {sub_error}{reset}\n'
