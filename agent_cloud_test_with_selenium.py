@@ -10,8 +10,8 @@ os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'debug'
 os.environ['BROWSER_USE_CLOUD_SYNC'] = 'false'
 SAFEVIEW_URL = os.getenv("SAFEVIEW_URL")
 PROXY_URL = os.getenv("PROXY_URL")
-PROXY_USERNAME = os.getenv("PROXY_USERNAME", "msc@capp.com")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "Exploit99*")
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
 GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2') else GEMINI_API_KEY
 
@@ -91,17 +91,9 @@ async def main():
     page_extract_llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash", temperature=0)
     
     llm_task = """
-    I can see we're on the BBC website. Please:
-    1. Locate "More News" or similar headline section
-    2. Click on the first article below this
-    3. Provide a fifty-word description of the article
-    4. Click the browser's back button
-    5. Click the browser's forward button  
-    6. Confirm if the content is the same
-    7. Click the back button again
-    8. Confirm if we're back to the homepage
-    9. Scroll down to the end of the page
-    10. Look for a way to subscribe to BBC news
+    Go to https://tinhocngoisao.com/products/pc-star-karmish-b-plus-intel-core-i5-14400f-b760-ddr5-32gb-ssd-512-rtx-5060-wifi
+    Search for a table under "THÔNG SỐ KỸ THUẬT" header
+    Compare the sum of all components' prices with the price in the first page
     """
 
     # Run the browser-use agent

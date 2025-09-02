@@ -10,14 +10,13 @@ dotenv.load_dotenv()
 SAUCELABS_USERNAME = os.getenv("SAUCELABS_USERNAME")
 SAUCELABS_PRIVATEKEY = os.getenv("SAUCELABS_PRIVATEKEY")
 PROXY_URL = os.getenv("PROXY_URL")
-PROXY_USERNAME = os.getenv("PROXY_USERNAME", "msc@capp.com")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "Exploit99*")
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 
 from browser_use.browser.profile import CloudBrowserProfile
 from browser_use.browser import ProxySettings
 
 def saucelabs_session_creation(profile: CloudBrowserProfile) -> str:
-    """Test actual SauceLabs session creation"""
     
     print("\n🌟 SauceLabs Session Creation")
     print("=" * 40)
@@ -35,7 +34,7 @@ def saucelabs_session_creation(profile: CloudBrowserProfile) -> str:
     # Merge test-specific overrides without wiping defaults from profile
     capabilities.setdefault('sauce:options', {}).update({
         'experimental': True,
-        'maxDuration': 900,
+        'maxDuration': 1200,
         'commandTimeout': 600,
         'idleTimeout': 600,
     })

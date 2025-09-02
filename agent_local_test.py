@@ -11,6 +11,7 @@ GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2'
 
 from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.session import BrowserSession
+from browser_use.browser.profile import ViewportSize
 from browser_use import Agent
 from browser_use.llm import ChatGoogle
 
@@ -18,21 +19,17 @@ profile = BrowserProfile(
         minimum_wait_page_load_time=7,
         wait_for_network_idle_page_load_time=1.5,
         cross_origin_iframes=False,
+        window_size=ViewportSize(width=1920, height=1080),
     )
 
 async def main():
 
-        browser_session = BrowserSession(browser_profile=profile)
-
         llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash", temperature=0)
         page_extract_llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash-lite", temperature=0)
         llm_task = """
-        Go to https://bbc.com\n
-        Locate "Only From The BBC" headline\n
-        Click on the first article below this\n
-        Fifty words to describe it?\n
-        Click go backward button\n
-        Is it a homepage?
+        Go to https://tinhocngoisao.com/products/pc-star-karmish-b-plus-intel-core-i5-14400f-b760-ddr5-32gb-ssd-512-rtx-5060-wifi
+        Search for a table under "THÔNG SỐ KỸ THUẬT" header
+        Compare the sum of all components' prices with the price in the first page
         """
         
         agent = Agent(
@@ -41,7 +38,7 @@ async def main():
             page_extract_llm=page_extract_llm,
             flash_mode=True,
             use_thinking=False,
-            browser_session=browser_session,
+            browser_profile=profile,
             calculate_cost=True,
             use_vision=True,
             vision_detail_level='low',

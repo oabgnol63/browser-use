@@ -9,8 +9,8 @@ os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'debug'
 os.environ['BROWSER_USE_CLOUD_SYNC'] = 'false'
 SAFEVIEW_URL = os.getenv("SAFEVIEW_URL")
 PROXY_URL = os.getenv("PROXY_URL")
-PROXY_USERNAME = os.getenv("PROXY_USERNAME", "msc@capp.com")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "Exploit99*")
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
 GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2') else GEMINI_API_KEY
 
