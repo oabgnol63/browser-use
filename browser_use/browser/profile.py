@@ -1111,6 +1111,10 @@ class CloudBrowserProfile(
 		default=False,
 		description="Extensions not supported in cloud browsers - disable by default",
 	)
+	cookie_whitelist_domains: list[str] = Field(
+		default_factory=lambda: ['nature.com', 'qatarairways.com'],
+		description='List of domains to whitelist in the "I still don\'t care about cookies" extension, preventing automatic cookie banner handling on these sites.',
+	)
 	window_size: ViewportSize | None = Field(
 		default=None,
 		description='Browser window size (may not apply to all cloud services).',
@@ -1149,9 +1153,14 @@ class CloudBrowserProfile(
 	# --- UI/viewport/DOM ---
 
 	highlight_elements: bool = Field(default=True, description='Highlight interactive elements on the page.')
+	filter_highlight_ids: bool = Field(
+		default=True, description='Only show element IDs in highlights if llm_representation is less than 10 characters.'
+	)
 
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
+
+	profile_directory: str = 'Default'  # e.g. 'Profile 1', 'Profile 2', 'Custom Profile', etc.
 
 	# Chrome arguments and automation settings (ESSENTIAL for cloud browsers)
 	args: list[CliArgStr] = Field(
@@ -1186,8 +1195,8 @@ class CloudBrowserProfile(
 				f'⚠️ CloudBrowserProfile(window_width=..., window_height=...) are deprecated, use CloudBrowserProfile(window_size={"width": 1280, "height": 1100}) instead.'
 			)
 			window_size = self.window_size or ViewportSize(width=0, height=0)
-			window_size['width'] = window_size['width'] or self.window_width or 1280
-			window_size['height'] = window_size['height'] or self.window_height or 1100
+			window_size['width'] = window_size['width'] or self.window_width or 1920
+			window_size['height'] = window_size['height'] or self.window_height or 1080
 			self.window_size = window_size
 
 		return self
@@ -1230,6 +1239,10 @@ class CloudBrowserProfile(
 		# 	self.enable_default_extensions = False
 			
 		return self
+
+	def model_post_init(self, __context: Any) -> None:
+		"""Called after model initialization to set up display configuration."""
+		self.detect_display_configuration()
 
 	def get_args(self) -> list[str]:
 		"""Get the list of all Chrome CLI args for cloud browsers (compiled from defaults, user-provided, and cloud-specific)."""
@@ -1295,6 +1308,10 @@ class CloudBrowserProfile(
 			if proxy_bypass:
 				pre_conversion_args.append(f'--proxy-bypass-list={proxy_bypass}')
 
+		# User agent flag
+		if self.user_agent:
+			pre_conversion_args.append(f'--user-agent={self.user_agent}')
+
 		# convert to dict and back to dedupe and merge duplicate args
 		final_args_list = BrowserLaunchArgs.args_as_list(BrowserLaunchArgs.args_as_dict(pre_conversion_args))
 		return final_args_list
@@ -1326,6 +1343,12 @@ class CloudBrowserProfile(
 		"""Cloud browsers don't support local extension extraction."""
 		raise NotImplementedError('CloudBrowserProfile does not support local extension extraction.')
 
+	def _apply_minimal_extension_patch(self, ext_dir: Path, whitelist_domains: list[str]) -> None:
+		"""Cloud browsers don't support local extension patching."""
+		logger.warning('⚠️ CloudBrowserProfile: Local extension patching is not supported for cloud browsers.')
+		# Extension configuration would need to be handled via cloud service capabilities
+		# The whitelist_domains are used in _get_default_extensions_as_base64 instead
+
 	def _get_default_extensions_as_base64(self) -> list[str]:
 		"""Download default .crx files (if needed) and return base64-encoded payloads for cloud capabilities."""
 		# Definitions mirror BrowserProfile defaults
@@ -1333,17 +1356,17 @@ class CloudBrowserProfile(
 			{
 				'name': 'uBlock Origin Lite',
 				'id': 'ddkjiahejlhfcafbddmgiahcphecmpfh',
-				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dddkjiahejlhfcafbddmgiahcphecmpfh%26uc',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dddkjiahejlhfcafbddmgiahcphecmpfh%26uc',
 			},
 			{
 				'name': "I still don't care about cookies",
 				'id': 'edibdbjcniadpccecjdfdjjppcpchdlm',
-				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dedibdbjcniadpccecjdfdjjppcpchdlm%26uc',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dedibdbjcniadpccecjdfdjjppcpchdlm%26uc',
 			},
 			{
 				'name': 'ClearURLs',
 				'id': 'lckanjgmijmafbedllaakclkaicjfmnk',
-				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dlckanjgmijmafbedllaakclkaicjfmnk%26uc',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dlckanjgmijmafbedllaakclkaicjfmnk%26uc',
 			},
 		]
 
@@ -1371,14 +1394,13 @@ class CloudBrowserProfile(
 
 		return encoded
 
-	@observe_debug(ignore_input=True, ignore_output=True, name='detect_display_configuration')
 	def detect_display_configuration(self) -> None:
 		"""
 		Detect cloud browser display configuration. 
 		For cloud browsers, we use sensible defaults since we can't detect the remote display.
 		"""
 		# Cloud browsers: use default viewport configuration
-		default_viewport = ViewportSize(width=1280, height=1100)
+		default_viewport = ViewportSize(width=1920, height=1080)
 		self.screen = self.screen or default_viewport
 
 		# Cloud browsers are typically headless by nature
@@ -1465,8 +1487,12 @@ class CloudBrowserProfile(
 				encoded_exts = self._get_default_extensions_as_base64()
 				if encoded_exts:
 					capabilities.setdefault(options_key, {})['extensions'] = encoded_exts
-			except Exception as e:
-				logger.warning(f'⚠️ Failed to attach cloud extensions for SauceLabs: {e}')
+			except Exception:
+				# Log full traceback to help debugging; disable further automatic attempts
+				logger.exception('⚠️ Failed to attach cloud extensions for SauceLabs. Disabling automatic cloud extension attach.\n'
+					"Suggested workarounds: use Chromium (unbranded), use msedge, or install extensions via a Sauce Labs `prerun` script or provider-specific capability.")
+				# avoid retrying on subsequent capability builds
+				self.enable_default_extensions = False
 		
 		# SauceLabs specific options - ALL sauce-specific capabilities go here
 		sauce_options: dict[str, Any] = {
