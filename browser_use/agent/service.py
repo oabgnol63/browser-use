@@ -436,6 +436,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			self._last_known_downloads: list[str] = []
 			self.logger.debug('📁 Initialized download tracking for agent')
 
+		# Event-based pause control (kept out of AgentState for serialization)
 		self._external_pause_event = asyncio.Event()
 		self._external_pause_event.set()
 
@@ -616,8 +617,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			if await self.register_external_agent_status_raise_error_callback():
 				raise InterruptedError
 
-		if self.state.stopped or self.state.paused:
-			# self.logger.debug('Agent paused after getting state')
+		if self.state.stopped:
+			raise InterruptedError
+
+		if self.state.paused:
 			raise InterruptedError
 
 	@observe(name='agent.step', ignore_output=True, ignore_input=True)
@@ -1309,7 +1312,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		Returns:
 		        Tuple[bool, bool]: (is_done, is_valid)
 		"""
-		if len(self.history.history) == 0:
+		if step_info is not None and step_info.step_number == 0:
 			# First step
 			self._log_first_step_startup()
 			await self._execute_initial_actions()
@@ -1418,6 +1421,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 				self.state.session_initialized = True
 
+				# Brief delay to ensure session is created in backend before sending task
+				await asyncio.sleep(0.2)
+
 			self.logger.debug('📡 Dispatching CreateAgentTaskEvent...')
 			# Emit CreateAgentTaskEvent at the START of run()
 			self.eventbus.dispatch(CreateAgentTaskEvent.from_agent(self))
@@ -1447,10 +1453,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 			self.logger.debug(f'🔄 Starting main execution loop with max {max_steps} steps...')
 			for step in range(max_steps):
-				# Replace the polling with clean pause-wait
+				# Use the consolidated pause state management
 				if self.state.paused:
 					self.logger.debug(f'⏸️ Step {step}: Agent paused, waiting to resume...')
-					await self.wait_until_resumed()
+					await self._external_pause_event.wait()
 					signal_handler.reset()
 
 				# Check if we should stop due to too many failures, if final_response_after_failure is True, we try one last time
@@ -1466,12 +1472,6 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					self.logger.info('🛑 Agent stopped')
 					agent_run_error = 'Agent stopped programmatically'
 					break
-
-				while self.state.paused:
-					await asyncio.sleep(0.5)  # Small delay to prevent CPU spinning
-					if self.state.stopped:  # Allow stopping while paused
-						agent_run_error = 'Agent stopped programmatically while paused'
-						break
 
 				if on_step_start is not None:
 					await on_step_start(self)
@@ -1912,38 +1912,27 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			file_path = 'AgentHistory.json'
 		self.history.save_to_file(file_path)
 
-	async def wait_until_resumed(self):
-		await self._external_pause_event.wait()
-
 	def pause(self) -> None:
 		"""Pause the agent before the next step"""
-		print(
-			'\n\n⏸️  Got [Ctrl+C], paused the agent and left the browser open.\n\tPress [Enter] to resume or [Ctrl+C] again to quit.'
-		)
+		print('\n\n⏸️ Paused the agent and left the browser open.\n\tPress [Enter] to resume or [Ctrl+C] again to quit.')
 		self.state.paused = True
 		self._external_pause_event.clear()
 
-		# Task paused
-
-		# The signal handler will handle the asyncio pause logic for us
-		# No need to duplicate the code here
-
 	def resume(self) -> None:
 		"""Resume the agent"""
+		# TODO: Locally the browser got closed
 		print('----------------------------------------------------------------------')
-		print('▶️  Got Enter, resuming agent execution where it left off...\n')
+		print('▶️  Resuming agent execution where it left off...\n')
 		self.state.paused = False
 		self._external_pause_event.set()
-
-		# Task resumed
-
-		# The signal handler should have already reset the flags
-		# through its reset() method when called from run()
 
 	def stop(self) -> None:
 		"""Stop the agent"""
 		self.logger.info('⏹️ Agent stopping')
 		self.state.stopped = True
+
+		# Signal pause event to unblock any waiting code so it can check the stopped state
+		self._external_pause_event.set()
 
 		# Task stopped
 
@@ -2111,6 +2100,25 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				'complete_history': _get_complete_history_without_screenshots(self.history.model_dump()),
 			},
 		}
+
+	async def authenticate_cloud_sync(self, show_instructions: bool = True) -> bool:
+		"""
+		Authenticate with cloud service for future runs.
+
+		This is useful when users want to authenticate after a task has completed
+		so that future runs will sync to the cloud.
+
+		Args:
+			show_instructions: Whether to show authentication instructions to user
+
+		Returns:
+			bool: True if authentication was successful
+		"""
+		if not hasattr(self, 'cloud_sync') or self.cloud_sync is None:
+			self.logger.warning('Cloud sync is not available for this agent')
+			return False
+
+		return await self.cloud_sync.authenticate(show_instructions=show_instructions)
 
 	def run_sync(
 		self,

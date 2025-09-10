@@ -557,6 +557,7 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 
 	# custom options we provide that aren't native playwright kwargs
 	disable_security: bool = Field(default=False, description='Disable browser security features.')
+	stealth: bool = Field(default=True, description='Use stealth mode to avoid detection by anti-bot systems.')
 	deterministic_rendering: bool = Field(default=False, description='Enable deterministic rendering flags.')
 	allowed_domains: list[str] | None = Field(
 		default=None,
@@ -590,8 +591,17 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		description='Window position to use for the browser x,y from the top left when headless=False.',
 	)
 	cross_origin_iframes: bool = Field(
-		default=False,
-		description='Enable cross-origin iframe support (OOPIF/Out-of-Process iframes). When False (default), only same-origin frames are processed to avoid complexity and hanging.',
+		default=True,
+		description='Enable cross-origin iframe support (OOPIF/Out-of-Process iframes). When False, only same-origin frames are processed to avoid complexity and hanging.',
+	)
+	max_iframes: int = Field(
+		default=100,
+		description='Maximum number of iframe documents to process to prevent crashes.',
+	)
+	max_iframe_depth: int = Field(
+		ge=0,
+		default=5,
+		description='Maximum depth for cross-origin iframe recursion (default: 5 levels deep).',
 	)
 
 	# --- Page load/wait timings ---
@@ -607,6 +617,7 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 	filter_highlight_ids: bool = Field(
 		default=True, description='Only show element IDs in highlights if llm_representation is less than 10 characters.'
 	)
+	paint_order_filtering: bool = Field(default=True, description='Enable paint order filtering. Slightly experimental.')
 
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
@@ -617,6 +628,18 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 	# save_recording_path: alias of record_video_dir
 	# save_har_path: alias of record_har_path
 	# trace_path: alias of traces_dir
+
+	# these shadow the old playwright args on BrowserContextArgs, but it's ok
+	# because we handle them ourselves in a watchdog and we no longer use playwright, so they should live in the scope for our own config in BrowserProfile long-term
+	record_video_dir: Path | None = Field(
+		default=None,
+		description='Directory to save video recordings. If set, a video of the session will be recorded.',
+		validation_alias=AliasChoices('save_recording_path', 'record_video_dir'),
+	)
+	record_video_size: ViewportSize | None = Field(
+		default=None, description='Video frame size. If not set, it will use the viewport size.'
+	)
+	record_video_framerate: int = Field(default=30, description='The framerate to use for the video recording.')
 
 	# TODO: finish implementing extension support in extensions.py
 	# extension_ids_to_preinstall: list[str] = Field(
@@ -753,8 +776,36 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		if self.user_agent:
 			pre_conversion_args.append(f'--user-agent={self.user_agent}')
 
-		# convert to dict and back to dedupe and merge duplicate args
-		final_args_list = BrowserLaunchArgs.args_as_list(BrowserLaunchArgs.args_as_dict(pre_conversion_args))
+		# Special handling for --disable-features to merge values instead of overwriting
+		# This prevents disable_security=True from breaking extensions by ensuring
+		# both default features (including extension-related) and security features are preserved
+		disable_features_values = []
+		non_disable_features_args = []
+
+		# Extract and merge all --disable-features values
+		for arg in pre_conversion_args:
+			if arg.startswith('--disable-features='):
+				features = arg.split('=', 1)[1]
+				disable_features_values.extend(features.split(','))
+			else:
+				non_disable_features_args.append(arg)
+
+		# Remove duplicates while preserving order
+		if disable_features_values:
+			unique_features = []
+			seen = set()
+			for feature in disable_features_values:
+				feature = feature.strip()
+				if feature and feature not in seen:
+					unique_features.append(feature)
+					seen.add(feature)
+
+			# Add merged disable-features back
+			non_disable_features_args.append(f'--disable-features={",".join(unique_features)}')
+
+		# convert to dict and back to dedupe and merge other duplicate args
+		final_args_list = BrowserLaunchArgs.args_as_list(BrowserLaunchArgs.args_as_dict(non_disable_features_args))
+
 		return final_args_list
 
 	def _get_extension_args(self) -> list[str]:
@@ -1014,37 +1065,44 @@ async function initialize(checkInitialized, magic) {{
 		if self.headless is None:
 			self.headless = not has_screen_available
 
-		# set up window size and position if headful
+		# Determine viewport behavior based on mode and user preferences
+		user_provided_viewport = self.viewport is not None
+
 		if self.headless:
-			# headless mode: no window available, use viewport instead to constrain content size
+			# Headless mode: always use viewport for content size control
 			self.viewport = self.viewport or self.window_size or self.screen
-			self.window_position = None  # no windows to position in headless mode
+			self.window_position = None
 			self.window_size = None
-			self.no_viewport = False  # viewport is always enabled in headless mode
+			self.no_viewport = False
 		else:
-			# headful mode: use window, disable viewport by default, content fits to size of window
+			# Headful mode: respect user's viewport preference
 			self.window_size = self.window_size or self.screen
-			self.no_viewport = True if self.no_viewport is None else self.no_viewport
-			self.viewport = None if self.no_viewport else self.viewport
 
-		# automatically setup viewport if any config requires it
-		use_viewport = self.headless or self.viewport or self.device_scale_factor
-		self.no_viewport = not use_viewport if self.no_viewport is None else self.no_viewport
-		use_viewport = not self.no_viewport
+			if user_provided_viewport:
+				# User explicitly set viewport - enable viewport mode
+				self.no_viewport = False
+			else:
+				# Default headful: content fits to window (no viewport)
+				self.no_viewport = True if self.no_viewport is None else self.no_viewport
 
-		if use_viewport:
-			# if we are using viewport, make device_scale_factor and screen are set to real values to avoid easy fingerprinting
+		# Handle special requirements (device_scale_factor forces viewport mode)
+		if self.device_scale_factor and self.no_viewport is None:
+			self.no_viewport = False
+
+		# Finalize configuration
+		if self.no_viewport:
+			# No viewport mode: content adapts to window
+			self.viewport = None
+			self.device_scale_factor = None
+			self.screen = None
+			assert self.viewport is None
+			assert self.no_viewport is True
+		else:
+			# Viewport mode: ensure viewport is set
 			self.viewport = self.viewport or self.screen
 			self.device_scale_factor = self.device_scale_factor or 1.0
 			assert self.viewport is not None
 			assert self.no_viewport is False
-		else:
-			# device_scale_factor and screen are not supported non-viewport mode, the system monitor determines these
-			self.viewport = None
-			self.device_scale_factor = None  # only supported in viewport mode
-			self.screen = None  # only supported in viewport mode
-			assert self.viewport is None
-			assert self.no_viewport is True
 
 		assert not (self.headless and self.no_viewport), 'headless=True and no_viewport=True cannot both be set at the same time'
 
@@ -1115,6 +1173,19 @@ class CloudBrowserProfile(
 		default_factory=lambda: ['nature.com', 'qatarairways.com'],
 		description='List of domains to whitelist in the "I still don\'t care about cookies" extension, preventing automatic cookie banner handling on these sites.',
 	)
+	max_iframes: int = Field(
+		default=100,
+		description='Maximum number of iframe documents to process to prevent crashes.',
+	)
+	max_iframe_depth: int = Field(
+		ge=0,
+		default=5,
+		description='Maximum depth for cross-origin iframe recursion (default: 5 levels deep).',
+	)
+	paint_order_filtering: bool = Field(
+		default=True,
+		description='Enable paint order filtering. Slightly experimental.',
+	)
 	window_size: ViewportSize | None = Field(
 		default=None,
 		description='Browser window size (may not apply to all cloud services).',
@@ -1126,8 +1197,8 @@ class CloudBrowserProfile(
 		description='Window position (may not apply to cloud browsers).',
 	)
 	cross_origin_iframes: bool = Field(
-		default=False,
-		description='Enable cross-origin iframe support (OOPIF/Out-of-Process iframes). When False (default), only same-origin frames are processed to avoid complexity and hanging.',
+		default=True,
+		description='Enable cross-origin iframe support (OOPIF/Out-of-Process iframes). When False, only same-origin frames are processed to avoid complexity and hanging.',
 	)
 
 	# DOM/AX options
@@ -1354,9 +1425,9 @@ class CloudBrowserProfile(
 		# Definitions mirror BrowserProfile defaults
 		extensions = [
 			{
-				'name': 'uBlock Origin Lite',
-				'id': 'ddkjiahejlhfcafbddmgiahcphecmpfh',
-				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dddkjiahejlhfcafbddmgiahcphecmpfh%26uc',
+				'name': 'uBlock Origin',
+				'id': 'cjpalhdlnbpafiamejdnhcphjbkeiagm',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dcjpalhdlnbpafiamejdnhcphjbkeiagm%26uc',
 			},
 			{
 				'name': "I still don't care about cookies",
