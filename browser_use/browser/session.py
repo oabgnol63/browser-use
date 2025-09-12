@@ -971,7 +971,6 @@ class BrowserSession(BaseModel):
 			self.event_bus.dispatch(
 				BrowserStateRequestEvent(
 					include_dom=True,
-					event_timeout=100,
 					include_screenshot=include_screenshot,
 					cache_clickable_elements_hashes=cache_clickable_elements_hashes,
 					include_recent_events=include_recent_events,

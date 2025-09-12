@@ -887,8 +887,9 @@ class DefaultActionWatchdog(BaseWatchdog):
 				params={'backendNodeId': backend_node_id},
 				session_id=cdp_session.session_id,
 			)
-			self.logger.debug(f'Element focused using CDP DOM.focus (result: {result})')
-			return True
+			if result != {}:
+				self.logger.debug(f'Element focused using CDP DOM.focus (result: {result})')
+				return True
 
 		except Exception as e:
 			self.logger.debug(f'❌ CDP DOM.focus threw exception: {type(e).__name__}: {e}')

@@ -5,15 +5,23 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'debug'
 os.environ['BROWSER_USE_CLOUD_SYNC'] = 'false'
+os.environ['BROWSER_USE_SCREENSHOT_FILE'] = 'debug_screenshot.png'
+os.environ['TIMEOUT_ClickElementEvent'] = '30'
+os.environ['TIMEOUT_NavigationCompleteEvent'] = '30'
+os.environ['TIMEOUT_ScreenshotEvent'] = '90'
+os.environ['TIMEOUT_BrowserStateRequestEvent'] = '180'
+
 SAFEVIEW_URL = os.getenv("SAFEVIEW_URL")
 PROXY_URL = os.getenv("PROXY_URL")
 PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
 GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2') else GEMINI_API_KEY
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from browser_use.browser.profile import ViewportSize
 from browser_use.browser import ProxySettings, CloudBrowserProfile
@@ -34,16 +42,7 @@ async def main():
         is_local=False,
         # optional
         # disable_security=True,  # don't set it as it will conflict with extensions loading
-        minimum_wait_page_load_time=7,
-        maximum_wait_page_load_time=10,
-        wait_for_network_idle_page_load_time=1.5,
-        default_navigation_timeout=30000,
-        timeout=60000,
-        cross_origin_iframes=False,
-        skip_iframe_documents=False,  # experimental, should not use
-        stealth=True,
-        enable_default_extensions=True,
-        viewport=ViewportSize(width=1440, height=900),
+        window_size=ViewportSize(width=1440, height=900),
         proxy=ProxySettings(
             server=PROXY_URL,
             username=PROXY_USERNAME,
@@ -77,7 +76,7 @@ async def main():
     
     # Use Selenium to navigate to the starting page for the agent
     print("🌐 Using Selenium to navigate to BBC...")
-    selenium_client.navigate_to("https://bbc.com")
+    selenium_client.navigate_to("https://cnn.com")
     time.sleep(3)
     
     # Verify navigation with Selenium
@@ -91,9 +90,13 @@ async def main():
     page_extract_llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash", temperature=0)
     
     llm_task = """
-    Go to https://tinhocngoisao.com/products/pc-star-karmish-b-plus-intel-core-i5-14400f-b760-ddr5-32gb-ssd-512-rtx-5060-wifi
-    Search for a table under "THÔNG SỐ KỸ THUẬT" header
-    Compare the sum of all components' prices with the price in the first page
+        Go to https://www.cnn.com. Perform the following actions in sequence:
+        1. Locate "More Top Stories" header. If scrolling is needed, only scroll 0.9 page each time. Click on the first article below this
+        2. Click the browser's back button. Then forward again
+        Click the back button again. Confirm if we're back to the homepage
+        3. Locate search box and search for "football". Note that after typing text, press Enter key to submit search
+        Articles with "football" must be shown. Note that after clicking search button, the page elements may change position, so re-evaluate the page before typing text or clicking search button
+        4. Return to the homepage. Scroll down to the end of the page and up again to see if scrolling smooth
     """
 
     # Run the browser-use agent

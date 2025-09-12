@@ -363,7 +363,7 @@ class DomService:
 			return cdp_session.cdp_client.send.DOMSnapshot.captureSnapshot(
 				params={
 					'computedStyles': REQUIRED_COMPUTED_STYLES,
-					'includePaintOrder': False,
+					'includePaintOrder': True,
 					'includeDOMRects': True,
 					'includeBlendedBackgroundColors': False,
 					'includeTextColorOpacities': False,
@@ -379,7 +379,7 @@ class DomService:
 		start = time.time()
 
 		# Extended timeouts for complex pages with many iframes
-		primary_timeout = 30.0  # Increased from 10.0
+		primary_timeout = 100.0  # Increased from 10.0
 
 		# Create initial tasks
 		tasks = {
@@ -454,8 +454,8 @@ class DomService:
 						simplified_snapshot = await asyncio.wait_for(
 							cdp_session.cdp_client.send.DOMSnapshot.captureSnapshot(
 								params={
-									'computedStyles': ['display', 'visibility', 'opacity'],
-									'includePaintOrder': False,
+									'computedStyles': REQUIRED_COMPUTED_STYLES,
+									'includePaintOrder': True,
 									'includeDOMRects': True,
 								},
 								session_id=cdp_session.session_id,
