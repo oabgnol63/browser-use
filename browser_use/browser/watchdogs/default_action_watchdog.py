@@ -71,7 +71,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				msg = f'Downloaded file to {download_path}'
 				self.logger.info(f'💾 {msg}')
 			else:
-				msg = f'Clicked button with index {index_for_logging}: {element_node.get_all_children_text(max_depth=2)}'
+				msg = f'Clicked button {element_node.node_name}: {element_node.get_all_children_text(max_depth=2)}'
 				self.logger.debug(f'🖱️ {msg}')
 			self.logger.debug(f'Element xpath: {element_node.xpath}')
 
@@ -127,15 +127,32 @@ class DefaultActionWatchdog(BaseWatchdog):
 			if not element_node.element_index or element_node.element_index == 0:
 				# Type to the page without focusing any specific element
 				await self._type_to_page(event.text)
-				self.logger.info(f'⌨️ Typed "{event.text}" to the page (current focus)')
+				# Log with sensitive data protection
+				if event.is_sensitive:
+					if event.sensitive_key_name:
+						self.logger.info(f'⌨️ Typed <{event.sensitive_key_name}> to the page (current focus)')
+					else:
+						self.logger.info('⌨️ Typed <sensitive> to the page (current focus)')
+				else:
+					self.logger.info(f'⌨️ Typed "{event.text}" to the page (current focus)')
 				return None  # No coordinates available for page typing
 			else:
 				try:
 					# Try to type to the specific element
 					input_metadata = await self._input_text_element_node_impl(
-						element_node, event.text, clear_existing=event.clear_existing or (not event.text)
+						element_node,
+						event.text,
+						clear_existing=event.clear_existing or (not event.text),
+						is_sensitive=event.is_sensitive,
 					)
-					self.logger.info(f'⌨️ Typed "{event.text}" into element with index {index_for_logging}')
+					# Log with sensitive data protection
+					if event.is_sensitive:
+						if event.sensitive_key_name:
+							self.logger.info(f'⌨️ Typed <{event.sensitive_key_name}> into element with index {index_for_logging}')
+						else:
+							self.logger.info(f'⌨️ Typed <sensitive> into element with index {index_for_logging}')
+					else:
+						self.logger.info(f'⌨️ Typed "{event.text}" into element with index {index_for_logging}')
 					self.logger.debug(f'Element xpath: {element_node.xpath}')
 					return input_metadata  # Return coordinates if available
 				except Exception as e:
@@ -146,7 +163,14 @@ class DefaultActionWatchdog(BaseWatchdog):
 					except Exception as e:
 						pass
 					await self._type_to_page(event.text)
-					self.logger.info(f'⌨️ Typed "{event.text}" to the page as fallback')
+					# Log with sensitive data protection
+					if event.is_sensitive:
+						if event.sensitive_key_name:
+							self.logger.info(f'⌨️ Typed <{event.sensitive_key_name}> to the page as fallback')
+						else:
+							self.logger.info('⌨️ Typed <sensitive> to the page as fallback')
+					else:
+						self.logger.info(f'⌨️ Typed "{event.text}" to the page as fallback')
 					return None  # No coordinates available for fallback typing
 
 			# Note: We don't clear cached state here - let multi_act handle DOM change detection
@@ -563,30 +587,62 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			# Type the text character by character to the focused element
 			for char in text:
-				# Send keydown
-				await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
-					params={
-						'type': 'keyDown',
-						'key': char,
-					},
-					session_id=cdp_session.session_id,
-				)
-				# Send char for actual text input
-				await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
-					params={
-						'type': 'char',
-						'text': char,
-					},
-					session_id=cdp_session.session_id,
-				)
-				# Send keyup
-				await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
-					params={
-						'type': 'keyUp',
-						'key': char,
-					},
-					session_id=cdp_session.session_id,
-				)
+				# Handle newline characters as Enter key
+				if char == '\n':
+					# Send proper Enter key sequence
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyDown',
+							'key': 'Enter',
+							'code': 'Enter',
+							'windowsVirtualKeyCode': 13,
+						},
+						session_id=cdp_session.session_id,
+					)
+					# Send char event with carriage return
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'char',
+							'text': '\r',
+						},
+						session_id=cdp_session.session_id,
+					)
+					# Send keyup
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyUp',
+							'key': 'Enter',
+							'code': 'Enter',
+							'windowsVirtualKeyCode': 13,
+						},
+						session_id=cdp_session.session_id,
+					)
+				else:
+					# Handle regular characters
+					# Send keydown
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyDown',
+							'key': char,
+						},
+						session_id=cdp_session.session_id,
+					)
+					# Send char for actual text input
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'char',
+							'text': char,
+						},
+						session_id=cdp_session.session_id,
+					)
+					# Send keyup
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyUp',
+							'key': char,
+						},
+						session_id=cdp_session.session_id,
+					)
 				# Add 18ms delay between keystrokes
 				await asyncio.sleep(0.018)
 
@@ -935,7 +991,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 		return False
 
 	async def _input_text_element_node_impl(
-		self, element_node: EnhancedDOMTreeNode, text: str, clear_existing: bool = True
+		self, element_node: EnhancedDOMTreeNode, text: str, clear_existing: bool = True, is_sensitive: bool = False
 	) -> dict | None:
 		"""
 		Input text into an element using pure CDP with improved focus fallbacks.
@@ -1005,51 +1061,94 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			# Step 3: Type the text character by character using proper human-like key events
 			# This emulates exactly how a human would type, which modern websites expect
-			self.logger.debug(f'🎯 Typing text character by character: "{text}"')
+			if is_sensitive:
+				# Note: sensitive_key_name is not passed to this low-level method,
+				# but we could extend the signature if needed for more granular logging
+				self.logger.debug('🎯 Typing <sensitive> character by character')
+			else:
+				self.logger.debug(f'🎯 Typing text character by character: "{text}"')
 
 			for i, char in enumerate(text):
-				# Get proper modifiers, VK code, and base key for the character
-				modifiers, vk_code, base_key = self._get_char_modifiers_and_vk(char)
-				key_code = self._get_key_code_for_char(base_key)
+				# Handle newline characters as Enter key
+				if char == '\n':
+					# Send proper Enter key sequence
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyDown',
+							'key': 'Enter',
+							'code': 'Enter',
+							'windowsVirtualKeyCode': 13,
+						},
+						session_id=cdp_session.session_id,
+					)
 
-				# self.logger.debug(f'🎯 Typing character {i + 1}/{len(text)}: "{char}" (base_key: {base_key}, code: {key_code}, modifiers: {modifiers}, vk: {vk_code})')
+					# Small delay to emulate human typing speed
+					await asyncio.sleep(0.001)
 
-				# Step 1: Send keyDown event (NO text parameter)
-				await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
-					params={
-						'type': 'keyDown',
-						'key': base_key,
-						'code': key_code,
-						'modifiers': modifiers,
-						'windowsVirtualKeyCode': vk_code,
-					},
-					session_id=cdp_session.session_id,
-				)
+					# Send char event with carriage return
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'char',
+							'text': '\r',
+							'key': 'Enter',
+						},
+						session_id=cdp_session.session_id,
+					)
 
-				# Small delay to emulate human typing speed
-				await asyncio.sleep(0.001)
+					# Send keyUp event
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyUp',
+							'key': 'Enter',
+							'code': 'Enter',
+							'windowsVirtualKeyCode': 13,
+						},
+						session_id=cdp_session.session_id,
+					)
+				else:
+					# Handle regular characters
+					# Get proper modifiers, VK code, and base key for the character
+					modifiers, vk_code, base_key = self._get_char_modifiers_and_vk(char)
+					key_code = self._get_key_code_for_char(base_key)
 
-				# Step 2: Send char event (WITH text parameter) - this is crucial for text input
-				await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
-					params={
-						'type': 'char',
-						'text': char,
-						'key': char,
-					},
-					session_id=cdp_session.session_id,
-				)
+					# self.logger.debug(f'🎯 Typing character {i + 1}/{len(text)}: "{char}" (base_key: {base_key}, code: {key_code}, modifiers: {modifiers}, vk: {vk_code})')
 
-				# Step 3: Send keyUp event (NO text parameter)
-				await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
-					params={
-						'type': 'keyUp',
-						'key': base_key,
-						'code': key_code,
-						'modifiers': modifiers,
-						'windowsVirtualKeyCode': vk_code,
-					},
-					session_id=cdp_session.session_id,
-				)
+					# Step 1: Send keyDown event (NO text parameter)
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyDown',
+							'key': base_key,
+							'code': key_code,
+							'modifiers': modifiers,
+							'windowsVirtualKeyCode': vk_code,
+						},
+						session_id=cdp_session.session_id,
+					)
+
+					# Small delay to emulate human typing speed
+					await asyncio.sleep(0.001)
+
+					# Step 2: Send char event (WITH text parameter) - this is crucial for text input
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'char',
+							'text': char,
+							'key': char,
+						},
+						session_id=cdp_session.session_id,
+					)
+
+					# Step 3: Send keyUp event (NO text parameter)
+					await cdp_session.cdp_client.send.Input.dispatchKeyEvent(
+						params={
+							'type': 'keyUp',
+							'key': base_key,
+							'code': key_code,
+							'modifiers': modifiers,
+							'windowsVirtualKeyCode': vk_code,
+						},
+						session_id=cdp_session.session_id,
+					)
 
 				# Small delay between characters to look human (realistic typing speed)
 				await asyncio.sleep(0.001)
@@ -1814,7 +1913,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			self.logger.error(msg)
 			raise BrowserError(message=msg, long_term_memory=msg)
 		except Exception as e:
-			msg = f'Failed to get dropdown options for element with index {index_for_logging}'
+			msg = 'Failed to get dropdown options'
 			error_msg = f'{msg}: {str(e)}'
 			self.logger.error(error_msg)
 			raise BrowserError(

@@ -19,6 +19,8 @@ DEFAULT_INCLUDE_ATTRIBUTES = [
 	'title',
 	'type',
 	'checked',
+	# 'class',
+	'id',
 	'name',
 	'role',
 	'value',
@@ -50,6 +52,51 @@ DEFAULT_INCLUDE_ATTRIBUTES = [
 	# Accessibility name (contains text content for StaticText elements)
 	'ax_name',
 ]
+
+STATIC_ATTRIBUTES = {
+	'class',
+	'id',
+	'name',
+	'type',
+	'placeholder',
+	'aria-label',
+	'title',
+	# 'aria-expanded',
+	'role',
+	'data-testid',
+	'data-test',
+	'data-cy',
+	'data-selenium',
+	'for',
+	'required',
+	'disabled',
+	'readonly',
+	'checked',
+	'selected',
+	'multiple',
+	'href',
+	'target',
+	'rel',
+	'aria-describedby',
+	'aria-labelledby',
+	'aria-controls',
+	'aria-owns',
+	'aria-live',
+	'aria-atomic',
+	'aria-busy',
+	'aria-disabled',
+	'aria-hidden',
+	'aria-pressed',
+	'aria-checked',
+	'aria-selected',
+	'tabindex',
+	'alt',
+	'src',
+	'lang',
+	'itemscope',
+	'itemtype',
+	'itemprop',
+}
 
 
 @dataclass
@@ -93,6 +140,7 @@ class SimplifiedNode:
 
 	ignored_by_paint_order: bool = False  # More info in dom/serializer/paint_order.py
 	excluded_by_parent: bool = False  # New field for bbox filtering
+	is_shadow_host: bool = False  # New field for shadow DOM hosts
 
 	def _clean_original_node_json(self, node_json: dict) -> dict:
 		"""Recursively remove children_nodes and shadow_roots from original_node JSON."""
@@ -145,6 +193,17 @@ class DOMRect:
 	y: float
 	width: float
 	height: float
+
+	def to_dict(self) -> dict[str, Any]:
+		return {
+			'x': self.x,
+			'y': self.y,
+			'width': self.width,
+			'height': self.height,
+		}
+
+	def __json__(self) -> dict:
+		return self.to_dict()
 
 
 @dataclass(slots=True)
@@ -672,8 +731,9 @@ class EnhancedDOMTreeNode:
 		parent_branch_path = self._get_parent_branch_path()
 		parent_branch_path_string = '/'.join(parent_branch_path)
 
-		# Get attributes hash
-		attributes_string = ''.join(f'{key}={value}' for key, value in self.attributes.items())
+		attributes_string = ''.join(
+			f'{k}={v}' for k, v in sorted((k, v) for k, v in self.attributes.items() if k in STATIC_ATTRIBUTES)
+		)
 
 		# Combine both for final hash
 		combined_string = f'{parent_branch_path_string}|{attributes_string}'
@@ -758,11 +818,16 @@ class DOMInteractedElement:
 
 	def to_dict(self) -> dict[str, Any]:
 		return {
+			'node_id': self.node_id,
+			'backend_node_id': self.backend_node_id,
+			'frame_id': self.frame_id,
 			'node_type': self.node_type.value,
 			'node_value': self.node_value,
 			'node_name': self.node_name,
 			'attributes': self.attributes,
 			'x_path': self.x_path,
+			'element_hash': self.element_hash,
+			'bounds': self.bounds.to_dict() if self.bounds else None,
 		}
 
 	@classmethod

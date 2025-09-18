@@ -424,6 +424,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			self.cloud_sync = cloud_sync or CloudSync()
 			# Register cloud sync handler
 			self.eventbus.on('*', self.cloud_sync.handle_event)
+		else:
+			self.cloud_sync = None
 
 		if self.settings.save_conversation_path:
 			self.settings.save_conversation_path = Path(self.settings.save_conversation_path).expanduser().resolve()
@@ -835,15 +837,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					action_dict = action.model_dump() if hasattr(action, 'model_dump') else {}
 					actions_data.append(action_dict)
 
-			# Emit CreateAgentStepEvent
-			step_event = CreateAgentStepEvent.from_agent_step(
-				self,
-				self.state.last_model_output,
-				self.state.last_result,
-				actions_data,
-				browser_state_summary,
-			)
-			self.eventbus.dispatch(step_event)
+			# Emit CreateAgentStepEvent only if cloud sync is enabled
+			if self.enable_cloud_sync:
+				step_event = CreateAgentStepEvent.from_agent_step(
+					self,
+					self.state.last_model_output,
+					self.state.last_result,
+					actions_data,
+					browser_state_summary,
+				)
+				self.eventbus.dispatch(step_event)
 
 		# Increment step counter after step is fully completed
 		self.state.n_steps += 1
@@ -1415,37 +1418,23 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 			# Only dispatch session events if this is the first run
 			if not self.state.session_initialized:
-				self.logger.debug('📡 Dispatching CreateAgentSessionEvent...')
-				# Emit CreateAgentSessionEvent at the START of run()
-				self.eventbus.dispatch(CreateAgentSessionEvent.from_agent(self))
+				if self.enable_cloud_sync:
+					self.logger.debug('📡 Dispatching CreateAgentSessionEvent...')
+					# Emit CreateAgentSessionEvent at the START of run()
+					self.eventbus.dispatch(CreateAgentSessionEvent.from_agent(self))
+
+					# Brief delay to ensure session is created in backend before sending task
+					await asyncio.sleep(0.2)
 
 				self.state.session_initialized = True
 
-				# Brief delay to ensure session is created in backend before sending task
-				await asyncio.sleep(0.2)
-
-			self.logger.debug('📡 Dispatching CreateAgentTaskEvent...')
-			# Emit CreateAgentTaskEvent at the START of run()
-			self.eventbus.dispatch(CreateAgentTaskEvent.from_agent(self))
+			if self.enable_cloud_sync:
+				self.logger.debug('📡 Dispatching CreateAgentTaskEvent...')
+				# Emit CreateAgentTaskEvent at the START of run()
+				self.eventbus.dispatch(CreateAgentTaskEvent.from_agent(self))
 
 			# Start browser session and attach watchdogs
-			assert self.browser_session is not None, 'Browser session must be initialized before starting'
-			self.logger.debug('🌐 Starting browser session...')
-
-			from browser_use.browser.events import BrowserStartEvent
-
-			event = self.browser_session.event_bus.dispatch(BrowserStartEvent())
-			await event
-			# Check if browser startup actually succeeded by getting the result
-			await event.event_result(raise_if_any=True, raise_if_none=False)
-
-			self.logger.debug('🔧 Browser session started with watchdogs attached')
-
-			# Ensure browser focus is properly established before executing initial actions
-			if self.browser_session and self.browser_session.agent_focus:
-				self.logger.debug(f'🎯 Browser focus established on target: {self.browser_session.agent_focus.target_id[-4:]}')
-			else:
-				self.logger.warning('⚠️ No browser focus established, may cause navigation issues')
+			await self.browser_session.start()
 
 			await self._execute_initial_actions()
 			# Log startup message on first step (only if we haven't already done steps)
@@ -1572,7 +1561,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# not when they are completed
 
 			# Emit UpdateAgentTaskEvent at the END of run() with final task state
-			self.eventbus.dispatch(UpdateAgentTaskEvent.from_agent(self))
+			if self.enable_cloud_sync:
+				self.eventbus.dispatch(UpdateAgentTaskEvent.from_agent(self))
 
 			# Generate GIF if needed before stopping event bus
 			if self.settings.generate_gif:
@@ -1591,7 +1581,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					self.eventbus.dispatch(output_event)
 
 			# Wait briefly for cloud auth to start and print the URL, but don't block for completion
-			if self.enable_cloud_sync and hasattr(self, 'cloud_sync'):
+			if self.enable_cloud_sync and hasattr(self, 'cloud_sync') and self.cloud_sync is not None:
 				if self.cloud_sync.auth_task and not self.cloud_sync.auth_task.done():
 					try:
 						# Wait up to 1 second for auth to start and print URL
@@ -1721,7 +1711,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				).replace('{', '').replace('}', '').replace("'", '').strip().strip(',')
 				# Ensure action_params is always a string before checking length
 				action_params = str(action_params)
-				action_params = f'{action_params[:122]}...' if len(action_params) > 128 else action_params
+				action_params = f'{action_params[:522]}...' if len(action_params) > 528 else action_params
 				time_start = time.time()
 				self.logger.info(f'  🦾 {blue}[ACTION {i + 1}/{total_actions}]{reset} {action_params}')
 
@@ -1782,23 +1772,26 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		Returns:
 		                List of action results
 		"""
-		# Execute initial actions if provided
-		if self.initial_actions:
-			result = await self.multi_act(self.initial_actions)
-			self.state.last_result = result
+		# Skip cloud sync session events for rerunning (we're replaying, not starting new)
+		self.state.session_initialized = True
+
+		# Initialize browser session
+		await self.browser_session.start()
 
 		results = []
 
 		for i, history_item in enumerate(history.history):
 			goal = history_item.model_output.current_state.next_goal if history_item.model_output else ''
-			self.logger.info(f'Replaying step {i + 1}/{len(history.history)}: goal: {goal}')
+			step_num = history_item.metadata.step_number if history_item.metadata else i
+			step_name = 'Initial actions' if step_num == 0 else f'Step {step_num}'
+			self.logger.info(f'Replaying {step_name} ({i + 1}/{len(history.history)}): {goal}')
 
 			if (
 				not history_item.model_output
 				or not history_item.model_output.action
 				or history_item.model_output.action == [None]
 			):
-				self.logger.warning(f'Step {i + 1}: No action to replay, skipping')
+				self.logger.warning(f'{step_name}: No action to replay, skipping')
 				results.append(ActionResult(error='No action to replay'))
 				continue
 
@@ -1812,15 +1805,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				except Exception as e:
 					retry_count += 1
 					if retry_count == max_retries:
-						error_msg = f'Step {i + 1} failed after {max_retries} attempts: {str(e)}'
+						error_msg = f'{step_name} failed after {max_retries} attempts: {str(e)}'
 						self.logger.error(error_msg)
 						if not skip_failures:
 							results.append(ActionResult(error=error_msg))
 							raise RuntimeError(error_msg)
 					else:
-						self.logger.warning(f'Step {i + 1} failed (attempt {retry_count}/{max_retries}), retrying...')
+						self.logger.warning(f'{step_name} failed (attempt {retry_count}/{max_retries}), retrying...')
 						await asyncio.sleep(delay_between_actions)
 
+		await self.close()
 		return results
 
 	async def _execute_initial_actions(self) -> None:
@@ -1832,6 +1826,40 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			if result and self.initial_url and result[0].long_term_memory:
 				result[0].long_term_memory = f'Found initial url and automatically loaded it. {result[0].long_term_memory}'
 			self.state.last_result = result
+
+			# Save initial actions to history as step 0 for rerun capability
+			# Skip browser state capture for initial actions (usually just URL navigation)
+			model_output = self.AgentOutput(
+				evaluation_previous_goal='Starting agent with initial actions',
+				memory='',
+				next_goal='Execute initial navigation or setup actions',
+				action=self.initial_actions,
+			)
+
+			metadata = StepMetadata(
+				step_number=0,
+				step_start_time=time.time(),
+				step_end_time=time.time(),
+			)
+
+			# Create minimal browser state history for initial actions
+			state_history = BrowserStateHistory(
+				url=self.initial_url or '',
+				title='Initial Actions',
+				tabs=[],
+				interacted_element=[None] * len(self.initial_actions),  # No DOM elements needed
+				screenshot_path=None,
+			)
+
+			history_item = AgentHistory(
+				model_output=model_output,
+				result=result,
+				state=state_history,
+				metadata=metadata,
+			)
+
+			self.history.add_item(history_item)
+			self.logger.debug('📝 Saved initial actions to history as step 0')
 			self.logger.debug('Initial actions completed')
 
 	async def _execute_history_step(self, history_item: AgentHistory, delay: float) -> list[ActionResult]:
@@ -1907,10 +1935,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		return await self.rerun_history(history, **kwargs)
 
 	def save_history(self, file_path: str | Path | None = None) -> None:
-		"""Save the history to a file"""
+		"""Save the history to a file with sensitive data filtering"""
 		if not file_path:
 			file_path = 'AgentHistory.json'
-		self.history.save_to_file(file_path)
+		self.history.save_to_file(file_path, sensitive_data=self.sensitive_data)
 
 	def pause(self) -> None:
 		"""Pause the agent before the next step"""
@@ -2097,7 +2125,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# AgentHistoryList methods
 				'structured_output': structured_output_json,
 				'final_result_response': final_result,
-				'complete_history': _get_complete_history_without_screenshots(self.history.model_dump()),
+				'complete_history': _get_complete_history_without_screenshots(
+					self.history.model_dump(sensitive_data=self.sensitive_data)
+				),
 			},
 		}
 
