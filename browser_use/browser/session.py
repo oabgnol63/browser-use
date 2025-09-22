@@ -1349,6 +1349,19 @@ class BrowserSession(BaseModel):
 		self.agent_focus = await CDPSession.for_target(self._cdp_client_root, selected_target_id, new_socket=False)
 		self._cdp_session_pool[selected_target_id] = self.agent_focus
 
+		# Re-apply viewport settings if configured
+		if self.browser_profile.viewport and not self.browser_profile.no_viewport:
+			try:
+				viewport_width = self.browser_profile.viewport.width
+				viewport_height = self.browser_profile.viewport.height
+				device_scale_factor = self.browser_profile.device_scale_factor or 1.0
+
+				await self._cdp_set_viewport(viewport_width, viewport_height, device_scale_factor, target_id=selected_target_id)
+
+				self.logger.debug(f'Reapplied viewport {viewport_width}x{viewport_height} after CDP reconnection')
+			except Exception as e:
+				self.logger.warning(f'Failed to reapply viewport after CDP reconnection: {e}')
+
 		# Re-apply proxy/auth handlers if needed
 		await self._setup_proxy_auth()
 

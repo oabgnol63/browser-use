@@ -57,7 +57,7 @@ class DomService:
 		self.paint_order_filtering = paint_order_filtering
 		self.max_iframes = max_iframes
 		self.max_iframe_depth = max_iframe_depth
-		# When True, do not traverse into iframe content documents and restrict AX tree to main frame
+		# When True, skip all iframe content processing in both DOM tree and AX tree construction
 		self.skip_iframe_documents = skip_iframe_documents
 
 	async def __aenter__(self):
@@ -679,7 +679,7 @@ class DomService:
 					total_frame_offset.y += snapshot_data.bounds.y
 
 			# Optionally skip traversing into iframe documents
-			if not (self.skip_iframe_documents and node['nodeName'].upper() == 'IFRAME'):
+			if not self.skip_iframe_documents:
 				if 'contentDocument' in node and node['contentDocument']:
 					dom_tree_node.content_document = await _construct_enhanced_node(
 						node['contentDocument'], updated_html_frames, total_frame_offset
@@ -724,8 +724,9 @@ class DomService:
 
 			# handle cross origin iframe (just recursively call the main function with the proper target if it exists in iframes)
 			# only do this if the iframe is visible (otherwise it's not worth it)
-
+			# Skip cross-origin iframe processing when skip_iframe_documents is True
 			if (
+				not self.skip_iframe_documents and 
 				# TODO: hacky way to disable cross origin iframes for now
 				self.cross_origin_iframes and node['nodeName'].upper() == 'IFRAME' and node.get('contentDocument', None) is None
 			):  # None meaning there is no content
