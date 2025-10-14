@@ -1208,9 +1208,17 @@ class CloudBrowserProfile(
 	stealth: bool = Field(default=True, description='Use stealth mode to avoid detection by anti-bot systems.')
 	disable_security: bool = Field(default=False, description='Disable browser security features.')
 	deterministic_rendering: bool = Field(default=False, description='Enable deterministic rendering flags.')
-	allowed_domains: list[str] | None = Field(
+	allowed_domains: list[str] | set[str] | None = Field(
 		default=None,
-		description='List of allowed domains for navigation e.g. ["*.google.com", "https://example.com", "chrome-extension://*"]',
+		description='List of allowed domains for navigation e.g. ["*.google.com", "https://example.com", "chrome-extension://*"]. Lists with 100+ items are auto-optimized to sets (no pattern matching).',
+	)
+	prohibited_domains: list[str] | set[str] | None = Field(
+		default=None,
+		description='List of prohibited domains for navigation e.g. ["*.google.com", "https://example.com", "chrome-extension://*"]. Allowed domains take precedence over prohibited domains. Lists with 100+ items are auto-optimized to sets (no pattern matching).',
+	)
+	block_ip_addresses: bool = Field(
+		default=False,
+		description='Block navigation to URLs containing IP addresses (both IPv4 and IPv6). When True, blocks all IP-based URLs including localhost and private networks.',
 	)
 	keep_alive: bool | None = Field(default=None, description='Keep browser alive after agent run.')
 
@@ -1228,19 +1236,7 @@ class CloudBrowserProfile(
 		default_factory=lambda: ['nature.com', 'qatarairways.com'],
 		description='List of domains to whitelist in the "I still don\'t care about cookies" extension, preventing automatic cookie banner handling on these sites.',
 	)
-	max_iframes: int = Field(
-		default=100,
-		description='Maximum number of iframe documents to process to prevent crashes.',
-	)
-	max_iframe_depth: int = Field(
-		ge=0,
-		default=5,
-		description='Maximum depth for cross-origin iframe recursion (default: 5 levels deep).',
-	)
-	paint_order_filtering: bool = Field(
-		default=True,
-		description='Enable paint order filtering. Slightly experimental.',
-	)
+
 	window_size: ViewportSize | None = Field(
 		default=None,
 		description='Browser window size (may not apply to all cloud services).',
@@ -1254,6 +1250,15 @@ class CloudBrowserProfile(
 	cross_origin_iframes: bool = Field(
 		default=True,
 		description='Enable cross-origin iframe support (OOPIF/Out-of-Process iframes). When False, only same-origin frames are processed to avoid complexity and hanging.',
+	)
+	max_iframes: int = Field(
+		default=100,
+		description='Maximum number of iframe documents to process to prevent crashes.',
+	)
+	max_iframe_depth: int = Field(
+		ge=0,
+		default=5,
+		description='Maximum depth for cross-origin iframe recursion (default: 5 levels deep).',
 	)
 
 	# DOM/AX options
@@ -1279,9 +1284,18 @@ class CloudBrowserProfile(
 	# --- UI/viewport/DOM ---
 
 	highlight_elements: bool = Field(default=True, description='Highlight interactive elements on the page.')
+	dom_highlight_elements: bool = Field(
+		default=False, description='Highlight interactive elements in the DOM (only for debugging purposes).'
+	)
 	filter_highlight_ids: bool = Field(
 		default=True, description='Only show element IDs in highlights if llm_representation is less than 10 characters.'
 	)
+	paint_order_filtering: bool = Field(default=True, description='Enable paint order filtering. Slightly experimental.')
+	interaction_highlight_color: str = Field(
+		default='rgb(255, 127, 39)',
+		description='Color to use for highlighting elements during interactions (CSS color string).',
+	)
+	interaction_highlight_duration: float = Field(default=1.0, description='Duration in seconds to show interaction highlights.')
 
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
@@ -1305,6 +1319,15 @@ class CloudBrowserProfile(
 	# Recording and debugging (if supported by cloud service)
 	record_video: bool = Field(default=False, description='Enable video recording if supported by cloud service')
 	record_screenshots: bool = Field(default=False, description='Enable screenshot recording')
+	record_video_dir: Path | None = Field(
+		default=None,
+		description='Directory to save video recordings. If set, a video of the session will be recorded.',
+		validation_alias=AliasChoices('save_recording_path', 'record_video_dir'),
+	)
+	record_video_size: ViewportSize | None = Field(
+		default=None, description='Video frame size. If not set, it will use the viewport size.'
+	)
+	record_video_framerate: int = Field(default=30, description='The framerate to use for the video recording.')
 	
 	def __repr__(self) -> str:
 		service_info = f"{self.service_url or 'cloud'}"
@@ -1348,6 +1371,34 @@ class CloudBrowserProfile(
 		"""Ensure proxy configuration is consistent."""
 		if self.proxy and (self.proxy.bypass and not self.proxy.server):
 			logger.warning('CloudBrowserProfile.proxy.bypass provided but proxy has no server; bypass will be ignored.')
+		return self
+
+	@field_validator('allowed_domains', 'prohibited_domains', mode='after')
+	@classmethod
+	def optimize_large_domain_lists(cls, v: list[str] | set[str] | None) -> list[str] | set[str] | None:
+		"""Convert large domain lists (>=100 items) to sets for O(1) lookup performance."""
+		if v is None or isinstance(v, set):
+			return v
+
+		if len(v) >= DOMAIN_OPTIMIZATION_THRESHOLD:
+			logger.warning(
+				f'🔧 Optimizing domain list with {len(v)} items to set for O(1) lookup. '
+				f'Note: Pattern matching (*.domain.com, etc.) is not supported for lists >= {DOMAIN_OPTIMIZATION_THRESHOLD} items. '
+				f'Use exact domains only or keep list size < {DOMAIN_OPTIMIZATION_THRESHOLD} for pattern support.'
+			)
+			return set(v)
+
+		return v
+
+	@model_validator(mode='after')
+	def validate_highlight_elements_conflict(self) -> Self:
+		"""Ensure highlight_elements and dom_highlight_elements are not both enabled, with dom_highlight_elements taking priority."""
+		if self.highlight_elements and self.dom_highlight_elements:
+			logger.warning(
+				'⚠️ Both highlight_elements and dom_highlight_elements are enabled. '
+				'dom_highlight_elements takes priority. Setting highlight_elements=False.'
+			)
+			self.highlight_elements = False
 		return self
 
 	@model_validator(mode='after')
@@ -1493,6 +1544,11 @@ class CloudBrowserProfile(
 				'name': 'ClearURLs',
 				'id': 'lckanjgmijmafbedllaakclkaicjfmnk',
 				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dlckanjgmijmafbedllaakclkaicjfmnk%26uc',
+			},
+			{
+				'name': 'Force Background Tab',
+				'id': 'gidlfommnbibbmegmgajdbikelkdcmcl',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dgidlfommnbibbmegmgajdbikelkdcmcl%26uc',
 			},
 		]
 
