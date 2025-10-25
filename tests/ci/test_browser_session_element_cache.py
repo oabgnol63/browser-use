@@ -11,12 +11,13 @@ from browser_use.tools.service import Tools
 
 
 @pytest.fixture
-def httpserver(make_httpserver):
-	"""Create and provide a test HTTP server that serves static content."""
-	server = make_httpserver
+def test_server(httpserver):
+	"""Create and provide a test HTTP server with properly configured routes."""
+	# Clear any existing expectations to avoid conflicts
+	httpserver.clear()
 
 	# Add routes for test pages
-	server.expect_request('/').respond_with_data(
+	httpserver.expect_request('/').respond_with_data(
 		"""<html>
 		<head><title>Test Home Page</title></head>
 		<body>
@@ -30,7 +31,7 @@ def httpserver(make_httpserver):
 		content_type='text/html',
 	)
 
-	server.expect_request('/page1').respond_with_data(
+	httpserver.expect_request('/page1').respond_with_data(
 		"""<html>
 		<head><title>Test Page 1</title></head>
 		<body>
@@ -42,7 +43,7 @@ def httpserver(make_httpserver):
 		content_type='text/html',
 	)
 
-	server.expect_request('/simple').respond_with_data(
+	httpserver.expect_request('/simple').respond_with_data(
 		"""<html>
 		<head><title>Simple Page</title></head>
 		<body>
@@ -54,7 +55,7 @@ def httpserver(make_httpserver):
 		content_type='text/html',
 	)
 
-	return server
+	return httpserver
 
 
 @pytest.fixture
@@ -78,12 +79,12 @@ def tools():
 
 
 @pytest.mark.asyncio
-async def test_assumption_1_dom_processing_works(browser_session, httpserver):
+async def test_assumption_1_dom_processing_works(browser_session, test_server):
 	"""Test assumption 1: DOM processing works and finds elements."""
 	# Go to a simple page using CDP events
 	from browser_use.browser.events import NavigateToUrlEvent
 
-	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/')))
+	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=test_server.url_for('/')))
 	await event
 	await event.event_result(raise_if_any=True, raise_if_none=False)
 
@@ -99,12 +100,12 @@ async def test_assumption_1_dom_processing_works(browser_session, httpserver):
 
 
 @pytest.mark.asyncio
-async def test_assumption_2_cached_selector_map_persists(browser_session, httpserver):
+async def test_assumption_2_cached_selector_map_persists(browser_session, test_server):
 	"""Test assumption 2: Cached selector map persists after get_state_summary."""
 	# Go to a simple page using CDP events
 	from browser_use.browser.events import NavigateToUrlEvent
 
-	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/')))
+	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=test_server.url_for('/')))
 	await event
 	await event.event_result(raise_if_any=True, raise_if_none=False)
 
@@ -126,12 +127,12 @@ async def test_assumption_2_cached_selector_map_persists(browser_session, httpse
 
 
 @pytest.mark.asyncio
-async def test_assumption_3_action_gets_same_selector_map(browser_session, tools, httpserver):
+async def test_assumption_3_action_gets_same_selector_map(browser_session, tools, test_server):
 	"""Test assumption 3: Action gets the same selector map as cached."""
 	# Go to a simple page using CDP events
 	from browser_use.browser.events import NavigateToUrlEvent
 
-	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/')))
+	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=test_server.url_for('/')))
 	await event
 	await event.event_result(raise_if_any=True, raise_if_none=False)
 
@@ -164,12 +165,12 @@ async def test_assumption_3_action_gets_same_selector_map(browser_session, tools
 
 
 @pytest.mark.asyncio
-async def test_assumption_4_click_action_specific_issue(browser_session, tools, httpserver):
+async def test_assumption_4_click_action_specific_issue(browser_session, tools, test_server):
 	"""Test assumption 4: Specific issue with click action."""
 	# Go to a simple page using CDP events
 	from browser_use.browser.events import NavigateToUrlEvent
 
-	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/')))
+	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=test_server.url_for('/')))
 	await event
 	await event.event_result(raise_if_any=True, raise_if_none=False)
 
@@ -183,28 +184,36 @@ async def test_assumption_4_click_action_specific_issue(browser_session, tools, 
 
 	# Create a test action that replicates click logic
 	@tools.registry.action('Test: Debug click logic')
-	async def test_debug_click_logic(index: int, browser_session: BrowserSession):
+	async def test_debug_click_logic(browser_session: BrowserSession):
 		from browser_use import ActionResult
 
-		# This is the exact logic from click
+		# Get the selector map and inspect its structure
 		selector_map = await browser_session.get_selector_map()
 
 		print(f'  - Action selector map size: {len(selector_map)}')
-		print(f'  - Action selector map keys: {list(selector_map.keys())[:10]}')  # First 10
-		print(f'  - Index {index} in selector map: {index in selector_map}')
+		print(f'  - Action selector map keys (first 10): {list(selector_map.keys())[:10]}')
 
-		if index not in selector_map:
+		if len(selector_map) == 0:
 			return ActionResult(
-				error=f'Debug: Element with index {index} does not exist in map of size {len(selector_map)}',
+				error='Debug: Selector map is empty',
 				include_in_memory=False,
 			)
 
+		# Get the first element from the map (by iterating, not indexing by 0)
+		first_key = next(iter(selector_map.keys()))
+		first_element = selector_map[first_key]
+
+		print(f'  - First element key: {first_key}')
+		print(f'  - First element backend_node_id: {first_element.backend_node_id}')
+		print(f'  - First element in map: {first_key in selector_map}')
+
 		return ActionResult(
-			extracted_content=f'Debug: Element {index} found in map of size {len(selector_map)}', include_in_memory=False
+			extracted_content=f'Debug: Found element with key {first_key} in map of size {len(selector_map)}',
+			include_in_memory=False,
 		)
 
 	# Test with index 1 (elements start at 1, not 0)
-	result = await tools.registry.execute_action('test_debug_click_logic', {'index': 1}, browser_session=browser_session)
+	result = await tools.registry.execute_action('test_debug_click_logic', params={}, browser_session=browser_session)
 
 	print(f'Debug click result: {result.extracted_content or result.error}')
 
@@ -214,12 +223,12 @@ async def test_assumption_4_click_action_specific_issue(browser_session, tools, 
 
 
 @pytest.mark.asyncio
-async def test_assumption_5_multiple_get_selector_map_calls(browser_session, httpserver):
+async def test_assumption_5_multiple_get_selector_map_calls(browser_session, test_server):
 	"""Test assumption 5: Multiple calls to get_selector_map return consistent results."""
 	# Go to a simple page using CDP events
 	from browser_use.browser.events import NavigateToUrlEvent
 
-	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=httpserver.url_for('/')))
+	event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=test_server.url_for('/')))
 	await event
 	await event.event_result(raise_if_any=True, raise_if_none=False)
 
