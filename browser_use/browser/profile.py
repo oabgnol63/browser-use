@@ -1530,11 +1530,11 @@ class CloudBrowserProfile(
 		"""Download default .crx files (if needed) and return base64-encoded payloads for cloud capabilities."""
 		# Definitions mirror BrowserProfile defaults
 		extensions = [
-			# {
-			# 	'name': 'uBlock Origin',
-			# 	'id': 'cjpalhdlnbpafiamejdnhcphjbkeiagm',
-			# 	'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=133&acceptformat=crx3&x=id%3Dcjpalhdlnbpafiamejdnhcphjbkeiagm%26uc',
-			# },
+			{
+				'name': 'uBlock Origin Lite',
+				'id': 'ddkjiahejlhfcafbddmgiahcphecmpfh',
+				'url': 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130&acceptformat=crx3&x=id%3Dddkjiahejlhfcafbddmgiahcphecmpfh%26uc',
+			},
 			{
 				'name': "I still don't care about cookies",
 				'id': 'edibdbjcniadpccecjdfdjjppcpchdlm',

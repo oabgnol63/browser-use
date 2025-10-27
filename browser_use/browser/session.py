@@ -4,7 +4,7 @@ import asyncio
 import logging
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, Self, Union, cast
 
 import httpx
 from bubus import EventBus
@@ -364,6 +364,7 @@ class BrowserSession(BaseModel):
 	_cached_browser_state_summary: Any = PrivateAttr(default=None)
 	_cached_selector_map: dict[int, EnhancedDOMTreeNode] = PrivateAttr(default_factory=dict)
 	_downloaded_files: list[str] = PrivateAttr(default_factory=list)  # Track files downloaded during this session
+	_reconnect_attempts: int = PrivateAttr(default=0)  # Track consecutive reconnection attempts
 
 	# Watchdogs
 	_crash_watchdog: Any | None = PrivateAttr(default=None)
@@ -428,6 +429,7 @@ class BrowserSession(BaseModel):
 		self._cached_browser_state_summary = None
 		self._cached_selector_map.clear()
 		self._downloaded_files.clear()
+		self._reconnect_attempts = 0  # Reset reconnection counter
 
 		self.agent_focus = None
 		if self.is_local:
@@ -674,15 +676,20 @@ class BrowserSession(BaseModel):
 			# Dispatch navigation started
 			await self.event_bus.dispatch(NavigationStartedEvent(target_id=target_id, url=event.url))
 
-			# Navigate to URL
-			await self.agent_focus.cdp_client.send.Page.navigate(
-				params={
-					'url': event.url,
-					'transitionType': 'address_bar',
-					# 'referrer': 'https://www.google.com',
-				},
-				session_id=self.agent_focus.session_id,
-			)
+			# Navigate to URL with auto-reconnect
+			assert self.agent_focus is not None
+			async def _navigate():
+				assert self.agent_focus is not None
+				return await self.agent_focus.cdp_client.send.Page.navigate(
+					params={
+						'url': event.url,
+						'transitionType': 'address_bar',
+						# 'referrer': 'https://www.google.com',
+					},
+					session_id=self.agent_focus.session_id,
+				)
+			
+			await self._cdp_call_with_reconnect(_navigate)
 
 			# # Wait a bit to ensure page starts loading
 			# await asyncio.sleep(0.5)
@@ -843,11 +850,16 @@ class BrowserSession(BaseModel):
 		if self.agent_focus:
 			self.logger.debug('🔄 Testing tab responsiveness...')
 			try:
-				test_result = await asyncio.wait_for(
-					self.agent_focus.cdp_client.send.Runtime.evaluate(
+				async def _test_responsiveness():
+					assert self.agent_focus is not None
+					test_result = await self.agent_focus.cdp_client.send.Runtime.evaluate(
 						params={'expression': '1 + 1', 'returnByValue': True}, session_id=self.agent_focus.session_id
-					),
-					timeout=2.0,
+					)
+					return test_result
+				
+				test_result = await asyncio.wait_for(
+					self._cdp_call_with_reconnect(_test_responsiveness),
+					timeout=5.0,  # Increased timeout to account for reconnection attempts
 				)
 				if test_result.get('result', {}).get('value') == 2:
 					# self.logger.debug('🔄 ✅ Browser is responsive after focus change')
@@ -1581,6 +1593,123 @@ class BrowserSession(BaseModel):
 
 		self.logger.debug('🔌 CDP reconnected and focus restored')
 
+	def _is_connection_error(self, error: Exception) -> bool:
+		"""Check if an exception is a WebSocket/connection-related error.
+		
+		Args:
+			error: The exception to check
+			
+		Returns:
+			True if it's a connection error that should trigger reconnection
+		"""
+		error_type_str = str(type(error))
+		error_msg = str(error).lower()
+		
+		# Check for common connection error patterns
+		connection_indicators = [
+			'ConnectionClosedError',
+			'ConnectionError', 
+			'ConnectionResetError',
+			'ConnectionAbortedError',
+			'ConnectionRefusedError',
+			'websocket',
+			'WebSocketException',
+			'ClientError',
+			'aiohttp.ClientError',
+		]
+		
+		# Check type name
+		for indicator in connection_indicators:
+			if indicator in error_type_str:
+				return True
+		
+		# Check error message for connection-related keywords
+		message_indicators = [
+			'connection closed',
+			'connection lost',
+			'connection reset',
+			'websocket',
+			'ws connection',
+			'transport closed',
+			'socket closed',
+			'connection aborted',
+		]
+		
+		for indicator in message_indicators:
+			if indicator in error_msg:
+				return True
+				
+		return False
+
+	async def _cdp_call_with_reconnect(self, cdp_call_func: Callable[[], Any], max_retries: int = 2) -> Any:
+		"""Execute a CDP call with automatic reconnection on connection errors.
+		
+		Args:
+			cdp_call_func: Async function that performs the CDP call
+			max_retries: Maximum number of reconnection attempts (default: 2)
+			
+		Returns:
+			Result from the CDP call
+			
+		Raises:
+			Original exception if not a connection error or max retries exceeded
+		"""
+		last_error = None
+		
+		for attempt in range(max_retries + 1):
+			try:
+				result = await cdp_call_func()
+				# Success - reset reconnect counter
+				self._reconnect_attempts = 0
+				return result
+				
+			except Exception as e:
+				last_error = e
+				
+				# Check if it's a connection error
+				if not self._is_connection_error(e):
+					# Not a connection error - re-raise immediately
+					raise
+				
+				# It's a connection error
+				if attempt < max_retries:
+					self._reconnect_attempts += 1
+					self.logger.warning(
+						f'🔌 CDP connection error detected (attempt {attempt + 1}/{max_retries + 1}): '
+						f'{type(e).__name__}: {e}'
+					)
+					
+					# Check if we've had too many consecutive reconnection attempts
+					if self._reconnect_attempts > 5:
+						self.logger.error(
+							f'🔌 Too many consecutive reconnection attempts ({self._reconnect_attempts}). '
+							'Browser may be permanently disconnected.'
+						)
+						raise
+					
+					try:
+						# Attempt to reconnect
+						self.logger.info('🔌 Attempting to reconnect CDP...')
+						await self.reconnect_cdp()
+						self.logger.info('🔌 CDP reconnection successful, retrying operation...')
+						# Continue to next iteration to retry the call
+						
+					except Exception as reconnect_error:
+						self.logger.error(
+							f'🔌 Failed to reconnect CDP: {type(reconnect_error).__name__}: {reconnect_error}'
+						)
+						# If reconnection fails, re-raise the original error
+						raise last_error
+				else:
+					# Max retries exceeded
+					self.logger.error(
+						f'🔌 Max reconnection attempts ({max_retries}) exceeded. Giving up.'
+					)
+					raise
+		
+		# Should never reach here, but just in case
+		if last_error:
+			raise last_error
 	
 	async def _setup_proxy_auth(self) -> None:
 		"""Enable CDP Fetch auth handling for authenticated proxy, if credentials provided.
@@ -2525,23 +2654,27 @@ class BrowserSession(BaseModel):
 		# Safety check - return empty list if browser not connected yet
 		if not self._cdp_client_root:
 			return []
-		targets = await self.cdp_client.send.Target.getTargets()
-		# Filter for valid page/tab targets only
-		return [
-			t
-			for t in targets.get('targetInfos', [])
-			if self._is_valid_target(
-				t,
-				include_http=include_http,
-				include_about=include_about,
-				include_pages=include_pages,
-				include_iframes=include_iframes,
-				include_workers=include_workers,
-				include_chrome=include_chrome,
-				include_chrome_extensions=include_chrome_extensions,
-				include_chrome_error=include_chrome_error,
-			)
-		]
+		
+		async def _get_targets():
+			targets = await self.cdp_client.send.Target.getTargets()
+			# Filter for valid page/tab targets only
+			return [
+				t
+				for t in targets.get('targetInfos', [])
+				if self._is_valid_target(
+					t,
+					include_http=include_http,
+					include_about=include_about,
+					include_pages=include_pages,
+					include_iframes=include_iframes,
+					include_workers=include_workers,
+					include_chrome=include_chrome,
+					include_chrome_extensions=include_chrome_extensions,
+					include_chrome_error=include_chrome_error,
+				)
+			]
+		
+		return await self._cdp_call_with_reconnect(_get_targets)
 
 	async def _cdp_create_new_page(self, url: str = 'about:blank', background: bool = False, new_window: bool = False) -> str:
 		"""Create a new page/tab using CDP Target.createTarget. Returns target ID."""
