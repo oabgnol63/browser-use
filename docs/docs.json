@@ -144,7 +144,8 @@
           "introduction",
           "quickstart",
           "quickstart_llm",
-          "supported-models"
+          "supported-models",
+          "production"
         ]
       },
       {
@@ -213,6 +214,16 @@
               "customize/integrations/docs-mcp",
               "customize/integrations/mcp-server"
             ]
+          },
+          {
+            "group": "Sandbox",
+            "icon": "box",
+            "isDefaultOpen": false,
+            "pages": [
+              "customize/sandbox/quickstart",
+              "customize/sandbox/events",
+              "customize/sandbox/all-parameters"
+            ]
           }
         ]
       },
@@ -270,6 +281,7 @@
             "isDefaultOpen": false,
             "pages": [
               "development/monitoring/observability",
+              "development/monitoring/openlit",
               "development/monitoring/telemetry",
               "development/monitoring/costs"
             ]

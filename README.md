@@ -1,14 +1,14 @@
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"">
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/774a46d5-27a0-490c-b7d0-e65fcbbfa358">
-  <img alt="Shows a black Browser Use Logo in light color mode and a white one in dark color mode." src="https://github.com/user-attachments/assets/774a46d5-27a0-490c-b7d0-e65fcbbfa358"  width="full">
+  <img alt="Shows a black Browser Use Logo in light color mode and a white one in dark color mode." src="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"  width="full">
 </picture>
 
 <div align="center">
     <picture>
     <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"">
     <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/6797d09b-8ac3-4cb9-ba07-b289e080765a">
-    <img alt="The AI browser agent." src="https://github.com/user-attachments/assets/6797d09b-8ac3-4cb9-ba07-b289e080765a"  width="400">
+    <img alt="The AI browser agent." src="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"  width="400">
     </picture>
 </div>
 
@@ -57,15 +57,15 @@ uv add browser-use
 uv sync
 ```
 
-**3. Get your API key from [Browser Use Cloud](https://cloud.browser-use.com/dashboard/api) and add it to your `.env` file (new signups get $10 free credits):**
+**3. Get your API key from [Browser Use Cloud](https://cloud.browser-use.com/new-api-key) and add it to your `.env` file (new signups get $10 free credits):**
 ```
 # .env
 BROWSER_USE_API_KEY=your-key
 ```
 
-**4. Download chromium using playwright's shortcut:**
+**4. Install Chromium browser:**
 ```bash
-uvx playwright install chromium --with-deps --no-shell
+uvx browser-use install
 ```
 
 **5. Run your first agent:**
@@ -94,6 +94,48 @@ if __name__ == "__main__":
 ```
 
 Check out the [library docs](https://docs.browser-use.com) and the [cloud docs](https://docs.cloud.browser-use.com) for more!
+
+<br/>
+
+# 🔥 Deploy on Sandboxes
+
+We handle agents, browsers, persistence, auth, cookies, and LLMs. The agent runs right next to the browser for minimal latency.
+
+```python
+from browser_use import Browser, sandbox, ChatBrowserUse
+from browser_use.agent.service import Agent
+import asyncio
+
+@sandbox()
+async def my_task(browser: Browser):
+    agent = Agent(task="Find the top HN post", browser=browser, llm=ChatBrowserUse())
+    await agent.run()
+
+# Just call it like any async function
+asyncio.run(my_task())
+```
+
+See [Going to Production](https://docs.browser-use.com/production) for more details.
+
+<br/>
+
+# 🚀 Template Quickstart
+
+**Want to get started even faster?** Generate a ready-to-run template:
+
+```bash
+uvx browser-use init --template default
+```
+
+This creates a `browser_use_default.py` file with a working example. Available templates:
+- `default` - Minimal setup to get started quickly
+- `advanced` - All configuration options with detailed comments
+- `tools` - Examples of custom tools and extending the agent
+
+You can also specify a custom output path:
+```bash
+uvx browser-use init --template default --output my_agent.py
+```
 
 <br/>
 
@@ -137,7 +179,12 @@ https://github.com/user-attachments/assets/ac34f75c-057a-43ef-ad06-5b2c9d42bf06
 
 We optimized **ChatBrowserUse()** specifically for browser automation tasks. On avg it completes tasks 3-5x faster than other models with SOTA accuracy.
 
-For other LLM providers, see our [supported models documentation](https://docs.browser-use.com/category/llm-integration).
+**Pricing (per 1M tokens):**
+- Input tokens: $0.50
+- Output tokens: $3.00  
+- Cached tokens: $0.10
+
+For other LLM providers, see our [supported models documentation](https://docs.browser-use.com/supported-models).
 </details>
 
 
@@ -147,22 +194,22 @@ For other LLM providers, see our [supported models documentation](https://docs.b
 Yes! You can add custom tools to extend the agent's capabilities:
 
 ```python
-from browser_use.tools import Tool
+from browser_use import Tools
 
-@Tool()
+tools = Tools()
+
+@tools.action(description='Description of what this tool does.')
 def custom_tool(param: str) -> str:
-    """Description of what this tool does."""
     return f"Result: {param}"
 
 agent = Agent(
     task="Your task",
     llm=llm,
     browser=browser,
-    use_custom_tools=[custom_tool],
+    tools=tools,
 )
 ```
 
-See our [Custom Tools documentation](https://docs.browser-use.com/custom-tools) for more examples.
 </details>
 
 <details>
