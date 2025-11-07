@@ -1333,6 +1333,7 @@ class BrowserSession(BaseModel):
 		from browser_use.browser.watchdogs.local_browser_watchdog import LocalBrowserWatchdog
 		from browser_use.browser.watchdogs.permissions_watchdog import PermissionsWatchdog
 		from browser_use.browser.watchdogs.popups_watchdog import PopupsWatchdog
+		from browser_use.browser.watchdogs.modal_overlay_watchdog import ModalOverlayWatchdog
 		from browser_use.browser.watchdogs.recording_watchdog import RecordingWatchdog
 		from browser_use.browser.watchdogs.screenshot_watchdog import ScreenshotWatchdog
 		from browser_use.browser.watchdogs.security_watchdog import SecurityWatchdog
@@ -1409,6 +1410,11 @@ class BrowserSession(BaseModel):
 		# self.event_bus.on(TabCreatedEvent, self._popups_watchdog.on_TabCreatedEvent)
 		# self.event_bus.on(DialogCloseEvent, self._popups_watchdog.on_DialogCloseEvent)
 		self._popups_watchdog.attach_to_session()
+
+		# Initialize ModalOverlayWatchdog (handles DOM-based modal overlays, newsletter popups, advertisements)
+		ModalOverlayWatchdog.model_rebuild()
+		self._modal_overlay_watchdog = ModalOverlayWatchdog(event_bus=self.event_bus, browser_session=self)
+		self._modal_overlay_watchdog.attach_to_session()
 
 		# Initialize PermissionsWatchdog (handles granting and revoking browser permissions like clipboard, microphone, camera, etc.)
 		PermissionsWatchdog.model_rebuild()

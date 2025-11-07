@@ -1641,6 +1641,53 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		return False
 
+	async def _is_popup_or_ad_present(self, browser_state: BrowserStateSummary) -> bool:
+		"""
+		Heuristically detects if a popup or ad is present on the page.
+		"""
+		if not browser_state or not browser_state.dom_state:
+			return False
+
+		for element in browser_state.dom_state.selector_map.values():
+			if element.attributes.get("role") in ["dialog", "alertdialog"]:
+				self.logger.info("Popup detected based on role='dialog' or 'alertdialog'.")
+				return True
+		return False
+
+	async def _try_to_close_popup(self, browser_state: BrowserStateSummary) -> bool:
+		"""
+		Tries to find and click a close button on a popup.
+		"""
+		if not browser_state or not browser_state.dom_state:
+			return False
+
+		close_button_candidates = []
+		for index, element in browser_state.dom_state.selector_map.items():
+			aria_label = element.attributes.get("aria-label", "").lower()
+			text_content = element.text.lower() if element.text else ""
+
+			if "close" in aria_label or "dismiss" in aria_label or text_content == "x":
+				close_button_candidates.append(index)
+
+		if close_button_candidates:
+			close_button_index = close_button_candidates[0]
+			self.logger.info(f"Found a potential close button with index {close_button_index}. Clicking it.")
+
+			from browser_use.tools.registry.views import ActionModel
+			action = ActionModel(click={"index": close_button_index})
+			result = await self.tools.act(
+				action=action,
+				browser_session=self.browser_session,
+				file_system=self.file_system,
+				page_extraction_llm=self.settings.page_extraction_llm,
+				sensitive_data=self.sensitive_data,
+				available_file_paths=self.available_file_paths,
+			)
+			if not result.error:
+				return True
+
+		return False
+
 	@observe(name='agent.run', ignore_input=True, ignore_output=True)
 	@time_execution_async('--run')
 	async def run(
@@ -1900,6 +1947,21 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					sensitive_data=self.sensitive_data,
 					available_file_paths=self.available_file_paths,
 				)
+
+				browser_state_after_action = await self.browser_session.get_browser_state_summary()
+				if await self._is_popup_or_ad_present(browser_state_after_action):
+					self.logger.info("Popup or ad detected. Attempting to close it.")
+					closed = await self._try_to_close_popup(browser_state_after_action)
+					if closed:
+						self.logger.info("Popup closed. Retrying the action.")
+						result = await self.tools.act(
+							action=action,
+							browser_session=self.browser_session,
+							file_system=self.file_system,
+							page_extraction_llm=self.settings.page_extraction_llm,
+							sensitive_data=self.sensitive_data,
+							available_file_paths=self.available_file_paths,
+						)
 
 				time_end = time.time()
 				time_elapsed = time_end - time_start
