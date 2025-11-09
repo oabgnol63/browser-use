@@ -451,6 +451,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self._external_pause_event = asyncio.Event()
 		self._external_pause_event.set()
 
+		# Initialize timing attributes - will be updated during run()
+		self._session_start_time: float | None = None
+		self._task_start_time: float | None = None
+
 	def _enhance_task_with_schema(self, task: str, output_model_schema: type[AgentStructuredOutput] | None) -> str:
 		"""Enhance task description with output schema information if provided."""
 		if output_model_schema is None:
@@ -1257,11 +1261,19 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.logger.debug(f'🤖 Browser-Use Library Version {self.version} ({self.source})')
 
 		# Check for latest version and log upgrade message if needed
-		latest_version = await check_latest_browser_use_version()
-		if latest_version and latest_version != self.version:
-			self.logger.info(
-				f'📦 Newer version available: {latest_version} (current: {self.version}). Upgrade with: uv add browser-use@{latest_version}'
-			)
+		# Wrap in try-except to handle any network or cancellation issues
+		try:
+			latest_version = await asyncio.wait_for(check_latest_browser_use_version(), timeout=5.0)
+			if latest_version and latest_version != self.version:
+				self.logger.info(
+					f'📦 Newer version available: {latest_version} (current: {self.version}). Upgrade with: uv add browser-use@{latest_version}'
+				)
+		except (asyncio.TimeoutError, asyncio.CancelledError):
+			# Silently ignore timeout or cancellation - version check is not critical
+			pass
+		except Exception:
+			# Silently ignore any other errors - version check is not critical
+			pass
 
 	def _log_first_step_startup(self) -> None:
 		"""Log startup message only on the first step"""

@@ -591,6 +591,10 @@ async def check_latest_browser_use_version() -> str | None:
 			if response.status_code == 200:
 				data = response.json()
 				return data['info']['version']
+	except asyncio.CancelledError:
+		# Don't catch CancelledError - let it propagate or handle gracefully
+		# This ensures the task can be properly cancelled without hanging
+		pass
 	except Exception:
 		# Silently fail - we don't want to break agent startup due to network issues
 		pass

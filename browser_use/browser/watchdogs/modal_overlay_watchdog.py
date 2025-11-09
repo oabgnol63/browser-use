@@ -15,7 +15,7 @@ from typing import ClassVar
 from bubus import BaseEvent
 from pydantic import PrivateAttr
 
-from browser_use.browser.events import NavigateToUrlEvent
+from browser_use.browser.events import BrowserStateRequestEvent, NavigateToUrlEvent
 from browser_use.browser.watchdog_base import BaseWatchdog
 
 
@@ -23,17 +23,18 @@ class ModalOverlayWatchdog(BaseWatchdog):
 	"""Detects and automatically closes DOM-based modal overlays and advertisement popups.
 
 	This watchdog:
-	1. Listens to NavigateToUrlEvent after page navigation
+	1. Listens to NavigateToUrlEvent and BrowserStateRequestEvent
 	2. Scans for modal overlays using role="dialog" and other modal indicators
 	3. Finds close buttons using multiple strategies (aria-label, text, classes)
-	4. Clicks close buttons to dismiss modals
+	4. Clicks close buttons to dismiss modals anytime they appear
 	5. Waits for modal to disappear before returning
 
 	This complements PopupsWatchdog which only handles JavaScript dialogs (alert, confirm, prompt).
+	Modals can appear anytime during page interaction, not just during navigation.
 	"""
 
 	# Events this watchdog listens to and emits
-	LISTENS_TO: ClassVar[list[type[BaseEvent]]] = [NavigateToUrlEvent]
+	LISTENS_TO: ClassVar[list[type[BaseEvent]]] = [NavigateToUrlEvent, BrowserStateRequestEvent]  # type: ignore
 	EMITS: ClassVar[list[type[BaseEvent]]] = []
 
 	# Track recently closed modals to avoid repeated closure attempts
@@ -298,4 +299,24 @@ class ModalOverlayWatchdog(BaseWatchdog):
 		except Exception as e:
 			self.logger.error(
 				f"❌ Error in ModalOverlayWatchdog.on_NavigateToUrlEvent: {type(e).__name__}: {e}"
+			)
+
+	async def on_BrowserStateRequestEvent(self, event: BrowserStateRequestEvent) -> None:
+		"""React to browser state requests by checking and closing any visible modals.
+
+		This is called whenever the agent requests the browser state, allowing modals
+		that appear anytime (not just during navigation) to be detected and closed.
+		"""
+		try:
+			# Try to close modal if one is present
+			closed = await self._try_close_modal()
+
+			if closed:
+				# Wait a moment for the modal to disappear from the DOM
+				await asyncio.sleep(0.5)
+				self.logger.info("Modal closed successfully during browser state check")
+
+		except Exception as e:
+			self.logger.error(
+				f"❌ Error in ModalOverlayWatchdog.on_BrowserStateRequestEvent: {type(e).__name__}: {e}"
 			)
