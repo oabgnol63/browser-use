@@ -89,7 +89,12 @@ class DownloadsWatchdog(BaseWatchdog):
 		pass  # No cleanup needed, browser context handles target lifecycle
 
 	async def on_BrowserStateRequestEvent(self, event: BrowserStateRequestEvent) -> None:
-		"""Handle browser state request events."""
+		"""Handle browser state request events.
+		
+		Dispatches NavigationCompleteEvent on a background task to avoid blocking
+		the BrowserStateRequestEvent handler chain. The expensive PDF check will
+		run asynchronously via the dispatched event.
+		"""
 		cdp_session = self.browser_session.agent_focus
 		if not cdp_session:
 			return
@@ -99,14 +104,28 @@ class DownloadsWatchdog(BaseWatchdog):
 			return
 
 		target_id = cdp_session.target_id
-		self.event_bus.dispatch(
-			NavigationCompleteEvent(
-				event_type='NavigationCompleteEvent',
-				url=url,
-				target_id=target_id,
-				event_parent_id=event.event_id,
-			)
+		
+		# Dispatch NavigationCompleteEvent asynchronously on a background task
+		# to avoid blocking the handler chain with expensive PDF checks
+		task = asyncio.create_task(
+			self._dispatch_navigation_complete(target_id, url, event.event_id)
 		)
+		self._cdp_event_tasks.add(task)
+		task.add_done_callback(lambda t: self._cdp_event_tasks.discard(t))
+
+	async def _dispatch_navigation_complete(self, target_id: TargetID, url: str, parent_event_id: str) -> None:
+		"""Dispatch NavigationCompleteEvent asynchronously."""
+		try:
+			self.event_bus.dispatch(
+				NavigationCompleteEvent(
+					event_type='NavigationCompleteEvent',
+					url=url,
+					target_id=target_id,
+					event_parent_id=parent_event_id,
+				)
+			)
+		except Exception as e:
+			self.logger.debug(f'[DownloadsWatchdog] Error dispatching NavigationCompleteEvent: {e}')
 
 	async def on_BrowserStoppedEvent(self, event: BrowserStoppedEvent) -> None:
 		"""Clean up when browser stops."""
@@ -940,9 +959,23 @@ class DownloadsWatchdog(BaseWatchdog):
 
 		This method avoids JavaScript execution that can crash WebSocket connections.
 		Returns True if a PDF is detected and should be downloaded.
+		
+		Uses a 5-second timeout to prevent hanging on connection issues.
 		"""
 		self.logger.debug(f'[DownloadsWatchdog] Checking if target {target_id} is PDF viewer...')
 
+		try:
+			# Add timeout to prevent hanging on CDP operations
+			return await asyncio.wait_for(self._check_for_pdf_viewer_internal(target_id), timeout=5.0)
+		except asyncio.TimeoutError:
+			self.logger.warning(f'[DownloadsWatchdog] ⏱️ Timeout checking PDF viewer for {target_id}')
+			return False
+		except Exception as e:
+			self.logger.warning(f'[DownloadsWatchdog] ❌ Error checking for PDF viewer: {e}')
+			return False
+
+	async def _check_for_pdf_viewer_internal(self, target_id: TargetID) -> bool:
+		"""Internal PDF viewer check with timeout wrapper."""
 		# Get target info to get URL
 		cdp_client = self.browser_session.cdp_client
 		targets = await cdp_client.send.Target.getTargets()
@@ -959,36 +992,30 @@ class DownloadsWatchdog(BaseWatchdog):
 			self.logger.debug(f'[DownloadsWatchdog] Using cached PDF check result for {page_url}: {cached_result}')
 			return cached_result
 
-		try:
-			# Method 1: Check URL patterns (fastest, most reliable)
-			url_is_pdf = self._check_url_for_pdf(page_url)
-			if url_is_pdf:
-				self.logger.debug(f'[DownloadsWatchdog] PDF detected via URL pattern: {page_url}')
-				self._pdf_viewer_cache[page_url] = True
-				return True
+		# Method 1: Check URL patterns (fastest, most reliable)
+		url_is_pdf = self._check_url_for_pdf(page_url)
+		if url_is_pdf:
+			self.logger.debug(f'[DownloadsWatchdog] PDF detected via URL pattern: {page_url}')
+			self._pdf_viewer_cache[page_url] = True
+			return True
 
-			# Method 2: Check network response headers via CDP (safer than JavaScript)
-			header_is_pdf = await self._check_network_headers_for_pdf(target_id)
-			if header_is_pdf:
-				self.logger.debug(f'[DownloadsWatchdog] PDF detected via network headers: {page_url}')
-				self._pdf_viewer_cache[page_url] = True
-				return True
+		# Method 2: Check network response headers via CDP (safer than JavaScript)
+		header_is_pdf = await self._check_network_headers_for_pdf(target_id)
+		if header_is_pdf:
+			self.logger.debug(f'[DownloadsWatchdog] PDF detected via network headers: {page_url}')
+			self._pdf_viewer_cache[page_url] = True
+			return True
 
-			# Method 3: Check Chrome's PDF viewer specific URLs
-			chrome_pdf_viewer = self._is_chrome_pdf_viewer_url(page_url)
-			if chrome_pdf_viewer:
-				self.logger.debug(f'[DownloadsWatchdog] Chrome PDF viewer detected: {page_url}')
-				self._pdf_viewer_cache[page_url] = True
-				return True
+		# Method 3: Check Chrome's PDF viewer specific URLs
+		chrome_pdf_viewer = self._is_chrome_pdf_viewer_url(page_url)
+		if chrome_pdf_viewer:
+			self.logger.debug(f'[DownloadsWatchdog] Chrome PDF viewer detected: {page_url}')
+			self._pdf_viewer_cache[page_url] = True
+			return True
 
-			# Not a PDF
-			self._pdf_viewer_cache[page_url] = False
-			return False
-
-		except Exception as e:
-			self.logger.warning(f'[DownloadsWatchdog] ❌ Error checking for PDF viewer: {e}')
-			self._pdf_viewer_cache[page_url] = False
-			return False
+		# Not a PDF
+		self._pdf_viewer_cache[page_url] = False
+		return False
 
 	def _check_url_for_pdf(self, url: str) -> bool:
 		"""Check if URL indicates a PDF file."""
