@@ -155,11 +155,13 @@ class ModalOverlayWatchdog(BaseWatchdog):
 		"""
 		try:
 			# Get the DOM state directly from the session without dispatching a new event
-			if not self.browser_session.agent_focus:
+			if not self.browser_session.agent_focus_target_id:
 				self.logger.debug("No agent focus session available for modal detection")
 				return False
 
-			cdp_session = self.browser_session.agent_focus
+			cdp_session = await self.browser_session.get_or_create_cdp_session(
+				self.browser_session.agent_focus_target_id, focus=False
+			)
 
 			# Get DOM snapshot directly
 			try:
@@ -220,10 +222,12 @@ class ModalOverlayWatchdog(BaseWatchdog):
 		3. Clicks them if found
 		"""
 		try:
-			if not self.browser_session.agent_focus:
+			if not self.browser_session.agent_focus_target_id:
 				return False
 
-			cdp_session = self.browser_session.agent_focus
+			cdp_session = await self.browser_session.get_or_create_cdp_session(
+				self.browser_session.agent_focus_target_id, focus=False
+			)
 
 			# JavaScript to find and click close buttons on modals
 			close_script = """

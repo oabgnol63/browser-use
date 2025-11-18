@@ -338,6 +338,9 @@ class DomService:
 
 		start_cdp_calls = time.time()
 
+		# Define timeouts for CDP operations
+		primary_timeout = 30.0  # Initial timeout for CDP calls
+
 		# Create initial tasks
 		tasks = {
 			'snapshot': create_task_with_error_handling(create_snapshot_request(), name='get_snapshot'),
