@@ -25,6 +25,7 @@ from browser_use.browser.events import (
 	TabCreatedEvent,
 )
 from browser_use.browser.watchdog_base import BaseWatchdog
+from browser_use.utils import create_task_with_error_handling
 
 if TYPE_CHECKING:
 	pass
@@ -89,18 +90,23 @@ class DownloadsWatchdog(BaseWatchdog):
 		pass  # No cleanup needed, browser context handles target lifecycle
 
 	async def on_BrowserStateRequestEvent(self, event: BrowserStateRequestEvent) -> None:
-		"""Handle browser state request events.
-		
-		Dispatches NavigationCompleteEvent on a background task to avoid blocking
-		the BrowserStateRequestEvent handler chain. The expensive PDF check will
-		run asynchronously via the dispatched event.
-		"""
-		cdp_session = self.browser_session.agent_focus
-		if not cdp_session:
-			return
+		"""Handle browser state request events."""
+		# Use public API - automatically validates and waits for recovery if needed
+		self.logger.debug(f'[DownloadsWatchdog] on_BrowserStateRequestEvent started, event_id={event.event_id[-4:]}')
+		try:
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+		except ValueError:
+			self.logger.warning(f'[DownloadsWatchdog] No valid focus, skipping BrowserStateRequestEvent {event.event_id[-4:]}')
+			return  # No valid focus, skip
 
+		self.logger.debug(
+			f'[DownloadsWatchdog] About to call get_current_page_url(), target_id={cdp_session.target_id[-4:] if cdp_session.target_id else "None"}'
+		)
 		url = await self.browser_session.get_current_page_url()
+		self.logger.debug(f'[DownloadsWatchdog] Got URL: {url[:80] if url else "None"}')
+
 		if not url:
+			self.logger.warning(f'[DownloadsWatchdog] No URL found for BrowserStateRequestEvent {event.event_id[-4:]}')
 			return
 
 		target_id = cdp_session.target_id
@@ -116,16 +122,18 @@ class DownloadsWatchdog(BaseWatchdog):
 	async def _dispatch_navigation_complete(self, target_id: TargetID, url: str, parent_event_id: str) -> None:
 		"""Dispatch NavigationCompleteEvent asynchronously."""
 		try:
+			self.logger.debug(f'[DownloadsWatchdog] About to dispatch NavigationCompleteEvent for target {target_id[-4:]}')
 			self.event_bus.dispatch(
-				NavigationCompleteEvent(
-					event_type='NavigationCompleteEvent',
-					url=url,
-					target_id=target_id,
-					event_parent_id=parent_event_id,
+					NavigationCompleteEvent(
+						event_type='NavigationCompleteEvent',
+						url=url,
+						target_id=target_id,
+						event_parent_id=parent_event_id,
+					)
 				)
-			)
 		except Exception as e:
 			self.logger.debug(f'[DownloadsWatchdog] Error dispatching NavigationCompleteEvent: {e}')
+		self.logger.debug('[DownloadsWatchdog] Successfully completed BrowserStateRequestEvent')
 
 	async def on_BrowserStoppedEvent(self, event: BrowserStoppedEvent) -> None:
 		"""Clean up when browser stops."""
@@ -171,6 +179,7 @@ class DownloadsWatchdog(BaseWatchdog):
 		self.logger.debug(f'[DownloadsWatchdog] Got target_id={target_id} for tab #{event.target_id[-4:]}')
 
 		is_pdf = await self.check_for_pdf_viewer(target_id)
+
 		if is_pdf:
 			self.logger.debug(f'[DownloadsWatchdog] 📄 PDF detected at {event.url}, triggering auto-download...')
 			download_path = await self.trigger_pdf_download(target_id)
@@ -200,7 +209,12 @@ class DownloadsWatchdog(BaseWatchdog):
 			except (AssertionError, KeyError):
 				pass
 			# Create and track the task
-			task = asyncio.create_task(self._handle_cdp_download(event, target_id, session_id))
+			task = create_task_with_error_handling(
+				self._handle_cdp_download(event, target_id, session_id),
+				name='handle_cdp_download',
+				logger_instance=self.logger,
+				suppress_exceptions=True,
+			)
 			self._cdp_event_tasks.add(task)
 			# Remove from set when done
 			task.add_done_callback(lambda t: self._cdp_event_tasks.discard(t))
@@ -333,8 +347,13 @@ class DownloadsWatchdog(BaseWatchdog):
 					This callback is registered globally and uses session_id to determine the correct target.
 					"""
 					try:
+						# Check if session_manager exists (may be None during browser shutdown)
+						if not self.browser_session.session_manager:
+							self.logger.warning('[DownloadsWatchdog] Session manager not found, skipping network monitoring')
+							return
+
 						# Look up target_id from session_id
-						event_target_id = self.browser_session.get_target_id_from_session_id(session_id)
+						event_target_id = self.browser_session.session_manager.get_target_id_from_session_id(session_id)
 						if not event_target_id:
 							# Session not in pool - might be a stale session or not yet tracked
 							return
@@ -449,7 +468,12 @@ class DownloadsWatchdog(BaseWatchdog):
 								self.logger.error(f'[DownloadsWatchdog] Error downloading in background: {type(e).__name__}: {e}')
 
 						# Create background task
-						task = asyncio.create_task(download_in_background())
+						task = create_task_with_error_handling(
+							download_in_background(),
+							name='download_in_background',
+							logger_instance=self.logger,
+							suppress_exceptions=True,
+						)
 						self._cdp_event_tasks.add(task)
 						task.add_done_callback(lambda t: self._cdp_event_tasks.discard(t))
 
@@ -984,7 +1008,12 @@ class DownloadsWatchdog(BaseWatchdog):
 			self.logger.warning(f'[DownloadsWatchdog] No target info found for {target_id}')
 			return False
 
-		page_url = target_info.get('url', '')
+		# Get URL from target
+		target = self.browser_session.session_manager.get_target(target_id)
+		if not target:
+			self.logger.warning(f'[DownloadsWatchdog] No target found for {target_id}')
+			return False
+		page_url = target.url
 
 		# Check cache first
 		if page_url in self._pdf_viewer_cache:
