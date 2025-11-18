@@ -417,26 +417,7 @@ class BrowserSession(BaseModel):
 			profile_cls = CloudBrowserProfile if isinstance(browser_profile, CloudBrowserProfile) else BrowserProfile
 			resolved_browser_profile = profile_cls(**merged_kwargs)
 		else:
-			# Auto-detect cloud profile usage from kwargs
-			cloud_keys = {
-				'service_url',
-				'username',
-				'access_key',
-				'browser_name',
-				'browser_version',
-				'platform_name',
-				'session_name',
-				'build_name',
-				'tags',
-				'record_video',
-				'record_screenshots',
-				'skip_iframe_documents',
-				'default_navigation_timeout',
-				'default_timeout',
-				'timeout',
-			}
-			use_cloud = any(k in profile_kwargs for k in cloud_keys)
-			resolved_browser_profile = (CloudBrowserProfile if use_cloud else BrowserProfile)(**profile_kwargs)
+			resolved_browser_profile = BrowserProfile(**profile_kwargs)
 
 		# Initialize the Pydantic model
 		super().__init__(
