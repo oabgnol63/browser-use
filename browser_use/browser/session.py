@@ -4,7 +4,8 @@ import asyncio
 import logging
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Self, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Self, Union, cast, overload
+from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
 import httpx
@@ -911,11 +912,8 @@ class BrowserSession(BaseModel):
 
 		# Switch to the target
 		assert event.target_id is not None, 'target_id must be set at this point'
-		# Ensure session exists
+		# Ensure session exists and update agent focus (only for page/tab targets)
 		cdp_session = await self.get_or_create_cdp_session(target_id=event.target_id, focus=True)
-
-		# Update agent focus to this target
-		self.agent_focus_target_id = event.target_id
 
 		# Visually switch to the tab in the browser
 		# The Force Background Tab extension prevents Chrome from auto-switching when links create new tabs,
@@ -996,13 +994,24 @@ class BrowserSession(BaseModel):
 		self._cached_selector_map.clear()
 		self.logger.debug('🔄 Cached browser state cleared')
 
-		# Update agent focus if a specific target_id is provided
+		# Update agent focus if a specific target_id is provided (only for page/tab targets)
 		if event.target_id:
-			# Ensure session exists for this target
+			# Ensure session exists and update agent focus (validates target_type internally)
 			await self.get_or_create_cdp_session(target_id=event.target_id, focus=True)
-			# Update agent focus target
-			self.agent_focus_target_id = event.target_id
-			self.logger.debug(f'🔄 Updated agent focus to tab target_id=...{event.target_id[-4:]}')
+
+			# Apply viewport settings to the newly focused tab
+			if self.browser_profile.viewport and not self.browser_profile.no_viewport:
+				try:
+					viewport_width = self.browser_profile.viewport.width
+					viewport_height = self.browser_profile.viewport.height
+					device_scale_factor = self.browser_profile.device_scale_factor or 1.0
+
+					# Use the helper method with the current tab's target_id
+					await self._cdp_set_viewport(viewport_width, viewport_height, device_scale_factor, target_id=event.target_id)
+
+					self.logger.debug(f'Applied viewport {viewport_width}x{viewport_height} to tab {event.target_id[-8:]}')
+				except Exception as e:
+					self.logger.warning(f'Failed to set viewport for tab {event.target_id[-8:]}: {e}')
 		else:
 			raise RuntimeError('AgentFocusChangedEvent received with no target_id for newly focused tab')
 
@@ -1124,6 +1133,26 @@ class BrowserSession(BaseModel):
 			targets.append(PageActor(self, target.target_id))
 
 		return targets
+
+	def get_focused_target(self) -> 'Target | None':
+		"""Get the target that currently has agent focus.
+
+		Returns:
+			Target object if agent has focus, None otherwise.
+		"""
+		if not self.session_manager:
+			return None
+		return self.session_manager.get_focused_target()
+
+	def get_page_targets(self) -> list['Target']:
+		"""Get all page/tab targets (excludes iframes, workers, etc.).
+
+		Returns:
+			List of Target objects for all page/tab targets.
+		"""
+		if not self.session_manager:
+			return []
+		return self.session_manager.get_all_page_targets()
 
 	async def close_page(self, page: 'Union[Page, str]') -> None:
 		"""Close a page by Page object or target ID."""
@@ -1500,9 +1529,15 @@ class BrowserSession(BaseModel):
 
 		if not self.cdp_url.startswith('ws'):
 			# If it's an HTTP URL, fetch the WebSocket URL from /json/version endpoint
-			url = self.cdp_url.rstrip('/')
-			if not url.endswith('/json/version'):
-				url = url + '/json/version'
+			parsed_url = urlparse(self.cdp_url)
+			path = parsed_url.path.rstrip('/')
+
+			if not path.endswith('/json/version'):
+				path = path + '/json/version'
+
+			url = urlunparse(
+				(parsed_url.scheme, parsed_url.netloc, path, parsed_url.params, parsed_url.query, parsed_url.fragment)
+			)
 
 			# Run a tiny HTTP client to query for the WebSocket URL from the /json/version endpoint
 			async with httpx.AsyncClient() as client:
@@ -1518,9 +1553,12 @@ class BrowserSession(BaseModel):
 
 		try:
 			# Create and store the CDP client for direct CDP communication
+			headers = getattr(self.browser_profile, 'headers', None)
 			self._cdp_client_root = CDPClient(
-				self.cdp_url, max_ws_frame_size=200 * 1024 * 1024
-			)  # Use 200MB limit to handle pages with very large DOMs
+				self.cdp_url,
+				additional_headers=headers,
+				max_ws_frame_size=200 * 1024 * 1024,  # Use 200MB limit to handle pages with very large DOMs
+			)
 			assert self._cdp_client_root is not None
 			await self._cdp_client_root.start()
 
@@ -1934,6 +1972,117 @@ class BrowserSession(BaseModel):
 	async def get_element_by_index(self, index: int) -> EnhancedDOMTreeNode | None:
 		"""Alias for get_dom_element_by_index for backwards compatibility."""
 		return await self.get_dom_element_by_index(index)
+
+	async def get_dom_element_at_coordinates(self, x: int, y: int) -> EnhancedDOMTreeNode | None:
+		"""Get DOM element at coordinates as EnhancedDOMTreeNode.
+
+		First checks the cached selector_map for a matching element, then falls back
+		to CDP DOM.describeNode if not found. This ensures safety checks (e.g., for
+		<select> elements and file inputs) work correctly.
+
+		Args:
+			x: X coordinate relative to viewport
+			y: Y coordinate relative to viewport
+
+		Returns:
+			EnhancedDOMTreeNode at the coordinates, or None if no element found
+		"""
+		from browser_use.dom.views import NodeType
+
+		# Get current page to access CDP session
+		page = await self.get_current_page()
+		if page is None:
+			raise RuntimeError('No active page found')
+
+		# Get session ID for CDP call
+		session_id = await page._ensure_session()
+
+		try:
+			# Call CDP DOM.getNodeForLocation to get backend_node_id
+			result = await self.cdp_client.send.DOM.getNodeForLocation(
+				params={
+					'x': x,
+					'y': y,
+					'includeUserAgentShadowDOM': False,
+					'ignorePointerEventsNone': False,
+				},
+				session_id=session_id,
+			)
+
+			backend_node_id = result.get('backendNodeId')
+			if backend_node_id is None:
+				self.logger.debug(f'No element found at coordinates ({x}, {y})')
+				return None
+
+			# Try to find element in cached selector_map (avoids extra CDP call)
+			if self._cached_selector_map:
+				for node in self._cached_selector_map.values():
+					if node.backend_node_id == backend_node_id:
+						self.logger.debug(f'Found element at ({x}, {y}) in cached selector_map')
+						return node
+
+			# Not in cache - fall back to CDP DOM.describeNode to get actual node info
+			try:
+				describe_result = await self.cdp_client.send.DOM.describeNode(
+					params={'backendNodeId': backend_node_id},
+					session_id=session_id,
+				)
+				node_info = describe_result.get('node', {})
+				node_name = node_info.get('nodeName', '')
+
+				# Parse attributes from flat list [key1, val1, key2, val2, ...] to dict
+				attrs_list = node_info.get('attributes', [])
+				attributes = {attrs_list[i]: attrs_list[i + 1] for i in range(0, len(attrs_list), 2)}
+
+				return EnhancedDOMTreeNode(
+					node_id=result.get('nodeId', 0),
+					backend_node_id=backend_node_id,
+					node_type=NodeType(node_info.get('nodeType', NodeType.ELEMENT_NODE.value)),
+					node_name=node_name,
+					node_value=node_info.get('nodeValue', '') or '',
+					attributes=attributes,
+					is_scrollable=None,
+					frame_id=result.get('frameId'),
+					session_id=session_id,
+					target_id=self.agent_focus_target_id or '',
+					content_document=None,
+					shadow_root_type=None,
+					shadow_roots=None,
+					parent_node=None,
+					children_nodes=None,
+					ax_node=None,
+					snapshot_node=None,
+					is_visible=None,
+					absolute_position=None,
+				)
+			except Exception as e:
+				self.logger.debug(f'DOM.describeNode failed for backend_node_id={backend_node_id}: {e}')
+				# Fall back to minimal node if describeNode fails
+				return EnhancedDOMTreeNode(
+					node_id=result.get('nodeId', 0),
+					backend_node_id=backend_node_id,
+					node_type=NodeType.ELEMENT_NODE,
+					node_name='',
+					node_value='',
+					attributes={},
+					is_scrollable=None,
+					frame_id=result.get('frameId'),
+					session_id=session_id,
+					target_id=self.agent_focus_target_id or '',
+					content_document=None,
+					shadow_root_type=None,
+					shadow_roots=None,
+					parent_node=None,
+					children_nodes=None,
+					ax_node=None,
+					snapshot_node=None,
+					is_visible=None,
+					absolute_position=None,
+				)
+
+		except Exception as e:
+			self.logger.warning(f'Failed to get DOM element at coordinates ({x}, {y}): {e}')
+			return None
 
 	async def get_target_id_from_tab_id(self, tab_id: str) -> TargetID:
 		"""Get the full-length TargetID from the truncated 4-char tab_id using SessionManager."""

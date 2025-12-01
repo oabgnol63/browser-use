@@ -1,5 +1,4 @@
 import asyncio
-import enum
 import json
 import logging
 import os
@@ -14,6 +13,7 @@ from pydantic import BaseModel
 from browser_use.agent.views import ActionModel, ActionResult
 from browser_use.browser import BrowserSession
 from browser_use.browser.events import (
+	ClickCoordinateEvent,
 	ClickElementEvent,
 	CloseTabEvent,
 	GetDropdownOptionsEvent,
@@ -105,11 +105,11 @@ def handle_browser_error(e: BrowserError) -> ActionResult:
 class Tools(Generic[Context]):
 	def __init__(
 		self,
-		exclude_actions: list[str] = [],
+		exclude_actions: list[str] | None = None,
 		output_model: type[T] | None = None,
 		display_files_in_done_text: bool = True,
 	):
-		self.registry = Registry[Context](exclude_actions)
+		self.registry = Registry[Context](exclude_actions if exclude_actions is not None else [])
 		self.display_files_in_done_text = display_files_in_done_text
 
 		"""Register all default browser actions"""
@@ -282,15 +282,20 @@ class Tools(Generic[Context]):
 				# Highlight the coordinate being clicked (truly non-blocking)
 				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
-				# Use Actor (page.mouse.click) for coordinate-based clicking
-				page = await browser_session.get_current_page()
-				if page is None:
-					return ActionResult(error='No active page found')
+				# Dispatch ClickCoordinateEvent - handler will check for safety and click
+				event = browser_session.event_bus.dispatch(
+					ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
+				)
+				await event
+				# Wait for handler to complete and get any exception or metadata
+				click_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
 
-				mouse = await page.mouse
-				await mouse.click(actual_x, actual_y)
+				# Check for validation errors (only happens when force=False)
+				if isinstance(click_metadata, dict) and 'validation_error' in click_metadata:
+					error_msg = click_metadata['validation_error']
+					return ActionResult(error=error_msg)
 
-				memory = f'Clicked on coordinate {actual_x}, {actual_y}'
+				memory = f'Clicked on coordinate {params.coordinate_x}, {params.coordinate_y}'
 				msg = f'🖱️ {memory}'
 				logger.info(msg)
 
@@ -298,6 +303,8 @@ class Tools(Generic[Context]):
 					extracted_content=memory,
 					metadata={'click_x': actual_x, 'click_y': actual_y},
 				)
+			except BrowserError as e:
+				return handle_browser_error(e)
 			except Exception as e:
 				error_msg = f'Failed to click at coordinates ({params.coordinate_x}, {params.coordinate_y}).'
 				return ActionResult(error=error_msg)
@@ -376,7 +383,7 @@ class Tools(Generic[Context]):
 				return await _click_by_coordinate(params, browser_session)
 
 		@self.registry.action(
-			'Input text into element with index.',
+			'Input text into element with index. Only works with index, NEVER use coordinates for inputting text.',
 			param_model=InputTextAction,
 		)
 		async def input(
@@ -796,7 +803,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				raise RuntimeError(str(e))
 
 		@self.registry.action(
-			"""Scroll by pages (down=True/False, pages=0.5-10.0, default 1.0). Use index for scroll containers (dropdowns/custom UI). High pages (10) reaches bottom. Multi-page scrolls sequentially. Viewport-based height, fallback 1000px/page.""",
+			"""Scroll by pages. REQUIRED: down=True/False (True=scroll down, False=scroll up, default=True). Optional: pages=0.5-10.0 (default 1.0). Use index for scroll containers (dropdowns/custom UI). High pages (10) reaches bottom. Multi-page scrolls sequentially. Viewport-based height, fallback 1000px/page.""",
 			param_model=ScrollAction,
 		)
 		async def scroll(params: ScrollAction, browser_session: BrowserSession):
@@ -1190,8 +1197,23 @@ Validated Code (after quote fixing):
 				# Don't log the code - it's already visible in the user's cell
 				logger.debug(f'JavaScript executed successfully, result length: {len(result_text)}')
 
+				# Memory handling: keep full result in extracted_content for current step,
+				# but use truncated version in long_term_memory if too large
+				MAX_MEMORY_LENGTH = 1000
+				if len(result_text) < MAX_MEMORY_LENGTH:
+					memory = result_text
+					include_extracted_content_only_once = False
+				else:
+					memory = f'JavaScript executed successfully, result length: {len(result_text)} characters.'
+					include_extracted_content_only_once = True
+
 				# Return only the result, not the code (code is already in user's cell)
-				return ActionResult(extracted_content=result_text, metadata=metadata)
+				return ActionResult(
+					extracted_content=result_text,
+					long_term_memory=memory,
+					include_extracted_content_only_once=include_extracted_content_only_once,
+					metadata=metadata,
+				)
 
 			except Exception as e:
 				# CDP communication or other system errors
@@ -1213,7 +1235,7 @@ Validated Code (after quote fixing):
 		fixed_code = re.sub(r'\\\\([.*+?^${}()|[\]])', r'\\\1', fixed_code)
 
 		# Pattern 3: Fix XPath expressions with mixed quotes
-		xpath_pattern = r'document\.evaluate\s*\(\s*"([^"]*\'[^"]*)"'
+		xpath_pattern = r'document\.evaluate\s*\(\s*"([^"]*)"\s*,'
 
 		def fix_xpath_quotes(match):
 			xpath_with_quotes = match.group(1)
@@ -1222,7 +1244,7 @@ Validated Code (after quote fixing):
 		fixed_code = re.sub(xpath_pattern, fix_xpath_quotes, fixed_code)
 
 		# Pattern 4: Fix querySelector/querySelectorAll with mixed quotes
-		selector_pattern = r'(querySelector(?:All)?)\s*\(\s*"([^"]*\'[^"]*)"'
+		selector_pattern = r'(querySelector(?:All)?)\s*\(\s*"([^"]*)"\s*\)'
 
 		def fix_selector_quotes(match):
 			method_name = match.group(1)
@@ -1232,7 +1254,7 @@ Validated Code (after quote fixing):
 		fixed_code = re.sub(selector_pattern, fix_selector_quotes, fixed_code)
 
 		# Pattern 5: Fix closest() calls with mixed quotes
-		closest_pattern = r'\.closest\s*\(\s*"([^"]*\'[^"]*)"'
+		closest_pattern = r'\.closest\s*\(\s*"([^"]*)"\s*\)'
 
 		def fix_closest_quotes(match):
 			selector_with_quotes = match.group(1)
@@ -1241,7 +1263,7 @@ Validated Code (after quote fixing):
 		fixed_code = re.sub(closest_pattern, fix_closest_quotes, fixed_code)
 
 		# Pattern 6: Fix .matches() calls with mixed quotes (similar to closest)
-		matches_pattern = r'\.matches\s*\(\s*"([^"]*\'[^"]*)"'
+		matches_pattern = r'\.matches\s*\(\s*"([^"]*)"\s*\)'
 
 		def fix_matches_quotes(match):
 			selector_with_quotes = match.group(1)
@@ -1274,12 +1296,8 @@ Validated Code (after quote fixing):
 			)
 			async def done(params: StructuredOutputAction):
 				# Exclude success from the output JSON since it's an internal parameter
-				output_dict = params.data.model_dump()
-
-				# Enums are not serializable, convert to string
-				for key, value in output_dict.items():
-					if isinstance(value, enum.Enum):
-						output_dict[key] = value.value
+				# Use mode='json' to properly serialize enums at all nesting levels
+				output_dict = params.data.model_dump(mode='json')
 
 				return ActionResult(
 					is_done=True,
@@ -1344,6 +1362,17 @@ Validated Code (after quote fixing):
 		@param description: Describe the LLM what the function does (better description == better function calling)
 		"""
 		return self.registry.action(description, **kwargs)
+
+	def exclude_action(self, action_name: str) -> None:
+		"""Exclude an action from the tools registry.
+
+		This method can be used to remove actions after initialization,
+		useful for enforcing constraints like disabling screenshot when use_vision != 'auto'.
+
+		Args:
+			action_name: Name of the action to exclude (e.g., 'screenshot')
+		"""
+		self.registry.exclude_action(action_name)
 
 	# Act --------------------------------------------------------------------
 	@observe_debug(ignore_input=True, ignore_output=True, name='act')
