@@ -22,6 +22,28 @@ from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 T = TypeVar('T', bound=BaseModel)
 
 
+def _remove_placeholders(data: Any) -> Any:
+	"""
+	Recursively remove _placeholder fields that were added to satisfy Gemini's
+	requirement that objects must have properties.
+	
+	Args:
+		data: The data structure to clean (dict, list, or primitive)
+		
+	Returns:
+		Cleaned data with _placeholder fields removed
+	"""
+	if isinstance(data, dict):
+		# Remove _placeholder key if it exists and the dict only contains it
+		if '_placeholder' in data and len(data) == 1:
+			return {}
+		# Otherwise recursively clean all values and remove _placeholder keys
+		return {k: _remove_placeholders(v) for k, v in data.items() if k != '_placeholder'}
+	elif isinstance(data, list):
+		return [_remove_placeholders(item) for item in data]
+	return data
+
+
 VerifiedGeminiModels = Literal[
 	'gemini-2.0-flash',
 	'gemini-2.0-flash-exp',
@@ -308,8 +330,10 @@ class ChatGoogle(BaseChatModel):
 
 									# Parse the JSON text and validate with the Pydantic model
 									parsed_data = json.loads(text)
+									# Remove _placeholder fields added for Gemini schema compatibility
+									cleaned_data = _remove_placeholders(parsed_data)
 									return ChatInvokeCompletion(
-										completion=output_format.model_validate(parsed_data),
+										completion=output_format.model_validate(cleaned_data),
 										usage=usage,
 										stop_reason=self._get_stop_reason(response),
 									)
@@ -338,8 +362,10 @@ class ChatGoogle(BaseChatModel):
 							)
 						else:
 							# If it's not the expected type, try to validate it
+							# Remove _placeholder fields added for Gemini schema compatibility
+							cleaned_parsed = _remove_placeholders(response.parsed)
 							return ChatInvokeCompletion(
-								completion=output_format.model_validate(response.parsed),
+								completion=output_format.model_validate(cleaned_parsed),
 								usage=usage,
 								stop_reason=self._get_stop_reason(response),
 							)
@@ -389,8 +415,10 @@ class ChatGoogle(BaseChatModel):
 
 								# Parse and validate
 								parsed_data = json.loads(text)
+								# Remove _placeholder fields added for Gemini schema compatibility
+								cleaned_data = _remove_placeholders(parsed_data)
 								return ChatInvokeCompletion(
-									completion=output_format.model_validate(parsed_data),
+									completion=output_format.model_validate(cleaned_data),
 									usage=usage,
 									stop_reason=self._get_stop_reason(response),
 								)
