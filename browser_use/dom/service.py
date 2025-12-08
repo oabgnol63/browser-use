@@ -339,7 +339,7 @@ class DomService:
 		start_cdp_calls = time.time()
 
 		# Define timeouts for CDP operations
-		primary_timeout = 30.0  # Initial timeout for CDP calls
+		primary_timeout = 90.0  # Initial timeout for CDP calls
 
 		# Create initial tasks
 		tasks = {

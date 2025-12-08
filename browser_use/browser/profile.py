@@ -649,6 +649,12 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 		description='Color to use for highlighting elements during interactions (CSS color string).',
 	)
 	interaction_highlight_duration: float = Field(default=1.0, description='Duration in seconds to show interaction highlights.')
+	
+	# --- CDP Rate Limiting ---
+	cdp_rate_limit: float | None = Field(
+		default=None,
+		description='Maximum number of CDP commands per second. If None, no limit is applied. Useful for avoiding rate limits or reducing CPU usage.',
+	)
 
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
@@ -775,6 +781,9 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 	@model_validator(mode='after')
 	def validate_highlight_elements_conflict(self) -> Self:
 		"""Ensure highlight_elements and dom_highlight_elements are not both enabled, with dom_highlight_elements taking priority."""
+		if not hasattr(self, 'highlight_elements') or not hasattr(self, 'dom_highlight_elements'):
+			return self
+
 		if self.highlight_elements and self.dom_highlight_elements:
 			logger.warning(
 				'⚠️ Both highlight_elements and dom_highlight_elements are enabled. '
@@ -1349,6 +1358,12 @@ class CloudBrowserProfile(
 	)
 	interaction_highlight_duration: float = Field(default=1.0, description='Duration in seconds to show interaction highlights.')
 
+	# --- CDP Rate Limiting ---
+	cdp_rate_limit: float | None = Field(
+		default=None,
+		description='Maximum number of CDP commands per second. If None, no limit is applied.',
+	)
+
 	# --- Downloads ---
 	auto_download_pdfs: bool = Field(default=True, description='Automatically download PDFs when navigating to PDF viewer pages.')
 
@@ -1445,6 +1460,9 @@ class CloudBrowserProfile(
 	@model_validator(mode='after')
 	def validate_highlight_elements_conflict(self) -> Self:
 		"""Ensure highlight_elements and dom_highlight_elements are not both enabled, with dom_highlight_elements taking priority."""
+		if not hasattr(self, 'highlight_elements') or not hasattr(self, 'dom_highlight_elements'):
+			return self
+
 		if self.highlight_elements and self.dom_highlight_elements:
 			logger.warning(
 				'⚠️ Both highlight_elements and dom_highlight_elements are enabled. '
