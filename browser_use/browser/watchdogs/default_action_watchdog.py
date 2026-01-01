@@ -372,7 +372,12 @@ class DefaultActionWatchdog(BaseWatchdog):
 					return None
 
 			# Perform target-level scroll
-			await self._scroll_with_cdp_gesture(pixels)
+			success = await self._scroll_with_cdp_gesture(pixels)
+
+			if not success:
+				# Fallback to JavaScript scroll
+				self.logger.debug('CDP gesture scroll failed, falling back to JavaScript scroll')
+				await self._scroll_page_with_js(pixels)
 
 			# Note: We don't clear cached state here - let multi_act handle DOM change detection
 			# by explicitly rebuilding and comparing when needed
@@ -1813,6 +1818,19 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# Not critical - JavaScript fallback will handle scrolling
 			self.logger.debug(f'CDP gesture scroll failed ({type(e).__name__}: {e}), falling back to JS')
 			return False
+
+	async def _scroll_page_with_js(self, pixels: int) -> None:
+		"""Scroll the page using JavaScript window.scrollBy()."""
+		try:
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			await cdp_session.cdp_client.send.Runtime.evaluate(
+				params={'expression': f'window.scrollBy(0, {pixels})', 'awaitPromise': True},
+				session_id=cdp_session.session_id,
+			)
+			self.logger.debug(f'📄 Scrolled via JS fallback: {pixels}px')
+		except Exception as e:
+			self.logger.warning(f'JS scroll fallback failed: {e}')
+			raise
 
 	async def _scroll_element_container(self, element_node, pixels: int) -> bool:
 		"""Try to scroll an element's container using CDP."""

@@ -70,8 +70,14 @@ def build_snapshot_lookup(
 			for i, backend_node_id in enumerate(nodes['backendNodeId']):
 				backend_node_to_snapshot_index[backend_node_id] = i
 
+
 		# Log document info
 		doc_url = strings[document.get('documentURL', 0)] if document.get('documentURL', 0) < len(strings) else 'N/A'
+		
+		# FILTER: Skip about:blank and tc_frame URLs
+		if doc_url == 'about:blank' or 'tc_frame' in doc_url:
+			continue
+
 		logger.debug(
 			f'🔍 SNAPSHOT doc[{doc_idx}]: url={doc_url[:80]}... has {len(backend_node_to_snapshot_index)} nodes, '
 			f'layout has {len(layout.get("nodeIndex", []))} entries'

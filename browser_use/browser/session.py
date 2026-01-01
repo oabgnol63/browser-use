@@ -52,57 +52,7 @@ if TYPE_CHECKING:
 	from browser_use.browser.demo_mode import DemoMode
 
 
-class ThrottledDomain:
-	def __init__(self, original_domain: Any, throttler: 'ThrottledCDPClient'):
-		self._original_domain = original_domain
-		self._throttler = throttler
 
-	def __getattr__(self, name: str) -> Any:
-		original_method = getattr(self._original_domain, name)
-
-		async def wrapped_method(*args: Any, **kwargs: Any) -> Any:
-			await self._throttler._wait_for_token()
-			return await original_method(*args, **kwargs)
-
-		return wrapped_method
-
-
-class ThrottledSend:
-	def __init__(self, original_send: Any, throttler: 'ThrottledCDPClient'):
-		self._original_send = original_send
-		self._throttler = throttler
-
-	def __getattr__(self, name: str) -> Any:
-		return ThrottledDomain(getattr(self._original_send, name), self._throttler)
-
-
-class ThrottledCDPClient:
-	"""Wrapper around CDPClient to enforce rate limits on commands."""
-
-	def __init__(self, client: CDPClient, rate_limit: float):
-		self._client = client
-		self._rate_limit = rate_limit
-		self._last_request_time = 0.0
-		self._lock = asyncio.Lock()
-		self._throttled_send = ThrottledSend(client.send, self)
-
-	def __getattr__(self, name: str) -> Any:
-		return getattr(self._client, name)
-
-	@property
-	def send(self) -> Any:
-		return self._throttled_send
-
-	async def _wait_for_token(self) -> None:
-		if self._rate_limit <= 0:
-			return
-		async with self._lock:
-			now = asyncio.get_running_loop().time()
-			min_interval = 1.0 / self._rate_limit
-			elapsed = now - self._last_request_time
-			if elapsed < min_interval:
-				await asyncio.sleep(min_interval - elapsed)
-			self._last_request_time = asyncio.get_running_loop().time()
 
 
 DEFAULT_BROWSER_PROFILE = BrowserProfile()
@@ -136,7 +86,7 @@ class CDPSession(BaseModel):
 
 	model_config = ConfigDict(arbitrary_types_allowed=True, revalidate_instances='never')
 
-	cdp_client: Union[CDPClient, ThrottledCDPClient]
+	cdp_client: CDPClient
 	target_id: TargetID
 	session_id: SessionID
 
@@ -1603,15 +1553,8 @@ class BrowserSession(BaseModel):
 			self._cdp_client_root = CDPClient(
 				self.cdp_url,
 				additional_headers=headers,
-				max_ws_frame_size=200 * 1024 * 1024,  # Use 200MB limit to handle pages with very large DOMs
+				max_ws_frame_size=20 * 1024 * 1024,  # Use 200MB limit to handle pages with very large DOMs
 			)
-
-			if self.browser_profile.cdp_rate_limit:
-				self.logger.info(f'🚀 CDP Rate Limiting enabled: {self.browser_profile.cdp_rate_limit} req/s')
-				self._cdp_client_root = ThrottledCDPClient(  # type: ignore
-					self._cdp_client_root,
-					self.browser_profile.cdp_rate_limit,
-				)
 
 			assert self._cdp_client_root is not None
 			await self._cdp_client_root.start()

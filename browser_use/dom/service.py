@@ -417,6 +417,18 @@ class DomService:
 
 		# DEBUG: Log snapshot info and limit documents to prevent explosion
 		if snapshot and 'documents' in snapshot:
+			strings = snapshot['strings']
+			
+			# Filter out irrelevant documents (about:blank, tc_frame)
+			filtered_documents = []
+			for doc in snapshot['documents']:
+				doc_url = strings[doc.get('documentURL', 0)] if doc.get('documentURL', 0) < len(strings) else 'N/A'
+				if doc_url == 'about:blank' or 'tc_frame' in doc_url:
+					continue
+				filtered_documents.append(doc)
+			
+			snapshot['documents'] = filtered_documents
+			
 			original_doc_count = len(snapshot['documents'])
 			# Limit to max_iframes documents to prevent iframe explosion
 			if original_doc_count > self.max_iframes:
