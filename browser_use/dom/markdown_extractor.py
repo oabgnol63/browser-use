@@ -142,11 +142,11 @@ def _preprocess_markdown_content(content: str, max_newlines: int = 3) -> tuple[s
 
 	# Remove JSON blobs (common in SPAs like LinkedIn, Facebook, etc.)
 	# These are often embedded as `{"key":"value",...}` and can be massive
-	# Match JSON objects/arrays that are at least 100 chars long
-	# This catches SPA state/config data without removing small inline JSON
+	# Match JSON objects/arrays that are at least 1500 chars long
+	# This avoids removing valid text that might coincidentally look like small JSON
 	content = re.sub(r'`\{["\w].*?\}`', '', content, flags=re.DOTALL)  # Remove JSON in code blocks
-	content = re.sub(r'\{"\$type":[^}]{100,}\}', '', content)  # Remove JSON with $type fields (common pattern)
-	content = re.sub(r'\{"[^"]{5,}":\{[^}]{100,}\}', '', content)  # Remove nested JSON objects
+	content = re.sub(r'\{"\$type":[^}]{1500,}\}', '', content)  # Remove JSON with $type fields
+	content = re.sub(r'\{"[^"]{5,}":\{[^}]{1500,}\}', '', content)  # Remove nested JSON objects
 
 	# Compress consecutive newlines (4+ newlines become max_newlines)
 	content = re.sub(r'\n{4,}', '\n' * max_newlines, content)

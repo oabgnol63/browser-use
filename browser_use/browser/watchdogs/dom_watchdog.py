@@ -277,10 +277,14 @@ class DOMWatchdog(BaseWatchdog):
 		if not not_a_meaningful_website:
 			self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ⏳ Waiting for page stability...')
 			try:
+				# Use profile wait time, defaulting to 1s if not set or zero
+				wait_time = self.browser_session.browser_profile.minimum_wait_page_load_time or 1.0
 				if pending_requests_before_wait:
-					# Reduced from 1s to 0.3s for faster DOM builds while still allowing critical resources to load
-					await asyncio.sleep(0.3)
-				self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ Page stability complete')
+					# Increase wait time slightly if there are pending requests
+					wait_time = max(wait_time, 1.0)
+				
+				await asyncio.sleep(wait_time)
+				self.logger.debug(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ Page stability complete after {wait_time}s')
 			except Exception as e:
 				self.logger.warning(
 					f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: Network waiting failed: {e}, continuing anyway...'

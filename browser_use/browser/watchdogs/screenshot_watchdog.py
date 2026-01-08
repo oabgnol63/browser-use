@@ -52,6 +52,12 @@ class ScreenshotWatchdog(BaseWatchdog):
 
 			cdp_session = await self.browser_session.get_or_create_cdp_session(target_id, focus=True)
 
+			# Ensure previous highlights are removed for a clean screenshot
+			try:
+				await self.browser_session.remove_highlights()
+			except Exception as e:
+				self.logger.warning(f'[ScreenshotWatchdog] Failed to remove highlights before screenshot: {e}')
+
 			# Prepare screenshot parameters
 			params = CaptureScreenshotParameters(format='png', captureBeyondViewport=False)
 

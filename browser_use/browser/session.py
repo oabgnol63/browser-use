@@ -2201,23 +2201,14 @@ class BrowserSession(BaseModel):
 			# Remove highlights via JavaScript - be thorough
 			script = """
 			(function() {
-				// Remove all browser-use highlight elements
-				const highlights = document.querySelectorAll('[data-browser-use-highlight]');
-				console.log('Removing', highlights.length, 'browser-use highlight elements');
-				highlights.forEach(el => el.remove());
-
-				// Also remove by ID in case selector missed anything
+				// Optimization: Remove the container first using ID (O(1))
+				// This removes all highlights instantly without scanning the whole DOM
 				const highlightContainer = document.getElementById('browser-use-debug-highlights');
 				if (highlightContainer) {
-					console.log('Removing highlight container by ID');
 					highlightContainer.remove();
 				}
 
-				// Final cleanup - remove any orphaned tooltips
-				const orphanedTooltips = document.querySelectorAll('[data-browser-use-highlight="tooltip"]');
-				orphanedTooltips.forEach(el => el.remove());
-
-				return { removed: highlights.length };
+				return { removed: highlightContainer ? 1 : 0 };
 			})();
 			"""
 			result = await cdp_session.cdp_client.send.Runtime.evaluate(
@@ -2662,15 +2653,7 @@ class BrowserSession(BaseModel):
 				// Double-check: Remove any existing highlight container first
 				const existingContainer = document.getElementById('browser-use-debug-highlights');
 				if (existingContainer) {{
-					console.log('⚠️ Found existing highlight container, removing it first');
 					existingContainer.remove();
-				}}
-
-				// Also remove any stray highlight elements
-				const strayHighlights = document.querySelectorAll('[data-browser-use-highlight]');
-				if (strayHighlights.length > 0) {{
-					console.log('⚠️ Found', strayHighlights.length, 'stray highlight elements, removing them');
-					strayHighlights.forEach(el => el.remove());
 				}}
 
 				// Use maximum z-index for visibility

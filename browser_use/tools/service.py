@@ -679,7 +679,7 @@ class Tools(Generic[Context]):
 			file_system: FileSystem,
 		):
 			# Constants
-			MAX_CHAR_LIMIT = 30000
+			MAX_CHAR_LIMIT = 300000
 			query = params['query'] if isinstance(params, dict) else params.query
 			extract_links = params['extract_links'] if isinstance(params, dict) else params.extract_links
 			start_from_char = params['start_from_char'] if isinstance(params, dict) else params.start_from_char
@@ -751,13 +751,14 @@ You will be given a query and the markdown of a webpage that has been filtered t
 - You are tasked to extract information from the webpage that is relevant to the query.
 - You should ONLY use the information available in the webpage to answer the query. Do not make up information or provide guess from your own knowledge.
 - If the information relevant to the query is not available in the page, your response should mention that.
-- If the query asks for all items, products, etc., make sure to directly list all of them.
+- If the query asks for all items, products, etc., make sure to directly list all of them. Do not summarize or use "..." to skip items. Extract every single relevant item found.
 - If the content was truncated and you need more information, note that the user can use start_from_char parameter to continue from where truncation occurred.
 </instructions>
 
 <output>
-- Your output should present ALL the information relevant to the query in a concise way.
+- Your output should present ALL the information relevant to the query in a concise but complete way.
 - Do not answer in conversational format - directly output the relevant information or that the information is unavailable.
+- If you find 50 items, list all 50. Do not stop after 10 or 20.
 </output>
 """.strip()
 
@@ -785,7 +786,9 @@ You will be given a query and the markdown of a webpage that has been filtered t
 					include_extracted_content_only_once = False
 				else:
 					file_name = await file_system.save_extracted_content(extracted_content)
-					memory = f'Query: {query}\nContent in {file_name} and once in <read_state>.'
+					# Provide a preview plus the filename so the agent knows what it found
+					preview = extracted_content[:1500] + "\n... (content truncated, full version in " + file_name + ")"
+					memory = f'Query: {query}\nContent saved to {file_name}.\nPreview:\n{preview}'
 					include_extracted_content_only_once = True
 
 				logger.info(f'📄 {memory}')
