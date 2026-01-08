@@ -89,12 +89,19 @@ class ChatGoogle(BaseChatModel):
 		retryable_status_codes: List of HTTP status codes to retry on (default: [429, 500, 502, 503, 504])
 		retry_base_delay: Base delay in seconds for exponential backoff (default: 1.0)
 		retry_max_delay: Maximum delay in seconds between retries (default: 60.0)
+		safety_settings: Safety settings for the model (e.g., list of SafetySetting or dict).
 
 	Example:
 		from google.genai import types
 
 		llm = ChatGoogle(
 			model='gemini-2.0-flash-exp',
+			safety_settings=[
+				types.SafetySetting(
+					category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+					threshold=types.HarmBlockThreshold.BLOCK_NONE,
+				)
+			],
 			config={
 				'tools': [types.Tool(code_execution=types.ToolCodeExecution())]
 			},
@@ -112,6 +119,7 @@ class ChatGoogle(BaseChatModel):
 	seed: int | None = None
 	thinking_budget: int | None = None  # for gemini-2.5 flash and flash-lite models, default will be set to 0
 	max_output_tokens: int | None = 8096
+	safety_settings: list[types.SafetySetting] | list[types.SafetySettingDict] | dict[Any, Any] | None = None
 	config: types.GenerateContentConfigDict | None = None
 	include_system_in_user: bool = False
 	supports_structured_output: bool = True  # New flag
@@ -262,6 +270,12 @@ class ChatGoogle(BaseChatModel):
 
 		if self.max_output_tokens is not None:
 			config['max_output_tokens'] = self.max_output_tokens
+
+		if self.safety_settings is not None:
+			if isinstance(self.safety_settings, dict):
+				config['safety_settings'] = [{'category': k, 'threshold': v} for k, v in self.safety_settings.items()]  # type: ignore
+			else:
+				config['safety_settings'] = self.safety_settings
 
 		async def _make_api_call():
 			start_time = time.time()
