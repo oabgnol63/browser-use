@@ -761,15 +761,30 @@ def create_task_with_error_handling(
 
 
 def sanitize_surrogates(text: str) -> str:
-	"""Remove surrogate characters that can't be encoded in UTF-8.
+	"""Remove surrogate characters and replace special characters that LLMs might struggle with.
 
-	Surrogate pairs (U+D800 to U+DFFF) are invalid in UTF-8 when unpaired.
-	These often appear in DOM content from mathematical symbols or emojis.
+	- Surrogate pairs (U+D800 to U+DFFF) are invalid in UTF-8 when unpaired.
+	- Smart quotes and other typographic characters are replaced with ASCII equivalents.
 
 	Args:
 		text: The text to sanitize
 
 	Returns:
-		Text with surrogate characters removed
+		Text with problematic characters sanitized
 	"""
+	# Replace smart quotes and other typographic characters
+	# These can sometimes cause issues with certain LLM tokenizers or JSON parsing
+	replacements = {
+		'\u2018': "'",  # Left single quote
+		'\u2019': "'",  # Right single quote
+		'\u201c': '"',  # Left double quote
+		'\u201d': '"',  # Right double quote
+		'\u2013': '-',  # En dash
+		'\u2014': '-',  # Em dash
+		'\u2026': '...',  # Ellipsis
+	}
+
+	for old, new in replacements.items():
+		text = text.replace(old, new)
+
 	return text.encode('utf-8', errors='ignore').decode('utf-8')

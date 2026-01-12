@@ -56,7 +56,7 @@ token.json
 
 
 temp-profile-*
-.bu_venv/
+bu_venv/
 
 screenshot.png
 

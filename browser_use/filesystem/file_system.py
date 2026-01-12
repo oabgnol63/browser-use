@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import os
 import re
 import shutil
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 INVALID_FILENAME_ERROR_MESSAGE = 'Error: Invalid filename format. Must be alphanumeric with supported extension.'
 DEFAULT_FILE_SYSTEM_PATH = 'browseruse_agent_data'
@@ -394,10 +397,12 @@ class FileSystem:
 
 		file_obj = self.get_file(full_filename)
 		if not file_obj:
+			logger.warning(f'Read failed: File {full_filename} not found')
 			result['message'] = f"File '{full_filename}' not found."
 			return result
 
 		try:
+			logger.debug(f'Reading file {full_filename}')
 			content = file_obj.read()
 			result['message'] = f'Read from file {full_filename}.\n<content>\n{content}\n</content>'
 			return result
@@ -431,10 +436,12 @@ class FileSystem:
 			if full_filename in self.files:
 				file_obj = self.files[full_filename]
 			else:
+				logger.debug(f'Creating new file {full_filename}')
 				file_obj = file_class(name=name_without_ext)
 				self.files[full_filename] = file_obj  # Use full filename as key
 
 			# Use file-specific write method
+			logger.debug(f'Writing content to {full_filename}')
 			await file_obj.write(content, self.data_dir)
 			return f'Data written to file {full_filename} successfully.'
 		except FileSystemError as e:
@@ -447,11 +454,21 @@ class FileSystem:
 		if not self._is_valid_filename(full_filename):
 			return INVALID_FILENAME_ERROR_MESSAGE
 
-		file_obj = self.get_file(full_filename)
-		if not file_obj:
-			return f"File '{full_filename}' not found."
-
 		try:
+			name_without_ext, extension = self._parse_filename(full_filename)
+			file_class = self._get_file_type_class(extension)
+			if not file_class:
+				raise ValueError(f"Error: Invalid file extension '{extension}' for file '{full_filename}'.")
+
+			# Create or get existing file using full filename as key
+			if full_filename in self.files:
+				file_obj = self.files[full_filename]
+			else:
+				logger.info(f'File {full_filename} not found in memory - creating new file for append')
+				file_obj = file_class(name=name_without_ext)
+				self.files[full_filename] = file_obj  # Use full filename as key
+
+			logger.debug(f'Appending content to {full_filename}')
 			await file_obj.append(content, self.data_dir)
 			return f'Data appended to file {full_filename} successfully.'
 		except FileSystemError as e:
