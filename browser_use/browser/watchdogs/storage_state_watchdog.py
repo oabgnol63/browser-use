@@ -127,19 +127,24 @@ class StorageStateWatchdog(BaseWatchdog):
 
 	async def _monitor_storage_changes(self) -> None:
 		"""Periodically check for storage changes and auto-save."""
-		while True:
-			try:
-				await asyncio.sleep(self.auto_save_interval)
+		self.logger.debug('[StorageStateWatchdog] Starting storage monitoring loop')
+		try:
+			while True:
+				try:
+					await asyncio.sleep(self.auto_save_interval)
 
-				# Check if cookies have changed
-				if await self._have_cookies_changed():
-					self.logger.debug('[StorageStateWatchdog] Detected changes to sync with storage_state.json')
-					await self._save_storage_state()
+					# Check if cookies have changed
+					if await self._have_cookies_changed():
+						self.logger.debug('[StorageStateWatchdog] Detected changes to sync with storage_state.json')
+						await self._save_storage_state()
 
-			except asyncio.CancelledError:
-				break
-			except Exception as e:
-				self.logger.error(f'[StorageStateWatchdog] Error in monitoring loop: {e}')
+				except asyncio.CancelledError:
+					self.logger.debug('[StorageStateWatchdog] Monitoring loop cancelled')
+					raise
+				except Exception as e:
+					self.logger.error(f'[StorageStateWatchdog] Error in monitoring loop: {e}')
+		finally:
+			self.logger.debug('[StorageStateWatchdog] Storage monitoring loop exited')
 
 	async def _have_cookies_changed(self) -> bool:
 		"""Check if cookies have changed since last save."""

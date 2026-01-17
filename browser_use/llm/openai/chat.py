@@ -1,3 +1,5 @@
+import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, overload
@@ -9,7 +11,7 @@ from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.shared.chat_model import ChatModel
 from openai.types.shared_params.reasoning_effort import ReasoningEffort
 from openai.types.shared_params.response_format_json_schema import JSONSchema, ResponseFormatJSONSchema
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.exceptions import ModelProviderError, ModelRateLimitError
@@ -254,8 +256,53 @@ class ChatOpenAI(BaseChatModel):
 					)
 
 				usage = self._get_usage(response)
-
-				parsed = output_format.model_validate_json(response.choices[0].message.content)
+	
+				# Extract JSON from response (handles markdown fences and text prefixes)
+				content = response.choices[0].message.content.strip()
+				
+				# Handle text before markdown fence (e.g., "I will start by creating...\n```json\n{...")
+				if '```' in content:
+					# Find the first markdown fence
+					fence_start = content.find('```')
+					# Extract everything from the fence onwards
+					content = content[fence_start:]
+					# Remove opening fence (```json or ```)
+					first_newline = content.find('\n')
+					if first_newline != -1:
+						content = content[first_newline + 1:]
+					# Remove closing fence
+					if content.endswith('```'):
+						content = content[:-3].strip()
+					# Handle case where closing fence might have text after it
+					elif '```' in content:
+						closing_fence = content.rfind('```')
+						content = content[:closing_fence].strip()
+				
+				# Handle text before raw JSON (e.g., "I will start by...\n{...}")
+				# Find the first { that starts a JSON object
+				if not content.startswith('{') and not content.startswith('['):
+					# Try to find JSON object start
+					json_start = content.find('{')
+					if json_start == -1:
+						json_start = content.find('[')
+					if json_start != -1:
+						# Find matching closing bracket
+						bracket_count = 0
+						json_end = -1
+						start_bracket = content[json_start]
+						end_bracket = '}' if start_bracket == '{' else ']'
+						for i, char in enumerate(content[json_start:], json_start):
+							if char == start_bracket:
+								bracket_count += 1
+							elif char == end_bracket:
+								bracket_count -= 1
+								if bracket_count == 0:
+									json_end = i + 1
+									break
+						if json_end != -1:
+							content = content[json_start:json_end]
+	
+				parsed = output_format.model_validate_json(content)
 
 				return ChatInvokeCompletion(
 					completion=parsed,

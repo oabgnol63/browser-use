@@ -13,7 +13,7 @@ T_ExpectedEvent = TypeVar('T_ExpectedEvent', bound='BaseEvent[Any]')
 
 # Increase the hardcoded memory limit from 50MB to a more reasonable default for browser automation
 # This prevents constant warnings when running multiple agents.
-MEMORY_LIMIT_MB = int(os.getenv('BUBUS_MEMORY_LIMIT_MB', '512'))
+MEMORY_LIMIT_MB = int(os.getenv('BUBUS_MEMORY_LIMIT_MB', '64'))
 
 def _patched_check_total_memory_usage(self) -> None:
 	"""Patched version of bubus memory check with configurable limit."""
