@@ -893,6 +893,8 @@ class SerializedDOMState:
 	"""Not meant to be used directly, use `llm_representation` instead"""
 
 	selector_map: DOMSelectorMap
+	_node_to_selector_index: dict[int, int] | None = None
+	"""Maps node id to selector index for contiguous indexing (used by Selenium)"""
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='llm_representation')
 	def llm_representation(
@@ -907,7 +909,16 @@ class SerializedDOMState:
 
 		include_attributes = include_attributes or DEFAULT_INCLUDE_ATTRIBUTES
 
-		return DOMTreeSerializer.serialize_tree(self._root, include_attributes)
+		# Create serializer and set up node-to-index mapping for contiguous indices
+		serializer = DOMTreeSerializer(
+			self._root,  # type: ignore
+			enable_bbox_filtering=False,  # Already filtered
+			paint_order_filtering=False,  # Already done
+			force_contiguous_indices=bool(self._node_to_selector_index),
+			node_to_selector_index=self._node_to_selector_index,
+		)
+
+		return serializer.serialize_tree(self._root, include_attributes)
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='eval_representation')
 	def eval_representation(

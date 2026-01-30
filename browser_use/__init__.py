@@ -90,6 +90,8 @@ _LAZY_IMPORTS = {
 	'Controller': ('browser_use.tools.service', 'Controller'),  # alias
 	# DOM service (moderate weight)
 	'DomService': ('browser_use.dom.service', 'DomService'),
+	# Browser types
+	'BrowserType': ('browser_use.browser.profile', 'BrowserType'),
 	# Chat models (very heavy imports)
 	'ChatOpenAI': ('browser_use.llm.openai.chat', 'ChatOpenAI'),
 	'ChatGoogle': ('browser_use.llm.google.chat', 'ChatGoogle'),
@@ -138,6 +140,7 @@ __all__ = [
 	'Browser',  # Alias for BrowserSession
 	'BrowserProfile',
 	'CloudBrowserProfile',
+	'BrowserType',  # Browser type enum (CHROMIUM, FIREFOX, WEBKIT)
 	'Controller',
 	'DomService',
 	'SystemPrompt',

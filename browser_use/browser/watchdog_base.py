@@ -131,32 +131,37 @@ class BaseWatchdog(BaseModel):
 					)
 
 					# attempt to repair potentially crashed CDP session
-					try:
-						if browser_session.agent_focus_target_id:
-							# With event-driven sessions, Chrome will send detach/attach events
-							# SessionManager handles pool cleanup automatically
-							target_id_to_restore = browser_session.agent_focus_target_id
-							browser_session.logger.debug(
-								f'🚌 {watchdog_and_handler_str} ⚠️ Session error detected, waiting for CDP events to sync (target: {target_id_to_restore})'
-							)
+					if getattr(browser_session, '_cdp_client_root', None) is not None:
+						try:
+							if browser_session.agent_focus_target_id:
+								# With event-driven sessions, Chrome will send detach/attach events
+								# SessionManager handles pool cleanup automatically
+								target_id_to_restore = browser_session.agent_focus_target_id
+								browser_session.logger.debug(
+									f'🚌 {watchdog_and_handler_str} ⚠️ Session error detected, waiting for CDP events to sync (target: {target_id_to_restore})'
+								)
 
-							# Wait for new attach event to restore the session
-							# This will raise ValueError if target doesn't re-attach
-							await browser_session.get_or_create_cdp_session(target_id=target_id_to_restore, focus=True)
-						else:
-							# Try to get any available session
-							await browser_session.get_or_create_cdp_session(target_id=None, focus=True)
-					except Exception as sub_error:
-						# If the underlying transport is closed, try a root-level reconnect once
-						if 'ConnectionClosedError' in str(type(sub_error)) or 'ConnectionError' in str(type(sub_error)):
-							browser_session.logger.error(
-								f'🚌 {watchdog_and_handler_str} ❌ Browser closed or CDP Connection disconnected by remote. {type(sub_error).__name__}: {sub_error}\n'
-							)
-							raise
-						else:
-							browser_session.logger.error(
-								f'🚌 {watchdog_and_handler_str} ❌ CDP connected but failed to re-create CDP session after error "{type(original_error).__name__}: {original_error}" in {actual_handler.__name__}({event.event_type}#{event.event_id[-4:]}): due to {type(sub_error).__name__}: {sub_error}\n'
-							)
+								# Wait for new attach event to restore the session
+								# This will raise ValueError if target doesn't re-attach
+								await browser_session.get_or_create_cdp_session(target_id=target_id_to_restore, focus=True)
+							else:
+								# Try to get any available session
+								await browser_session.get_or_create_cdp_session(target_id=None, focus=True)
+						except Exception as sub_error:
+							# If the underlying transport is closed, try a root-level reconnect once
+							if 'ConnectionClosedError' in str(type(sub_error)) or 'ConnectionError' in str(type(sub_error)):
+								browser_session.logger.error(
+									f'🚌 {watchdog_and_handler_str} ❌ Browser closed or CDP Connection disconnected by remote. {type(sub_error).__name__}: {sub_error}\n'
+								)
+								raise
+							else:
+								browser_session.logger.error(
+									f'🚌 {watchdog_and_handler_str} ❌ CDP connected but failed to re-create CDP session after error "{type(original_error).__name__}: {original_error}" in {actual_handler.__name__}({event.event_type}#{event.event_id[-4:]}): due to {type(sub_error).__name__}: {sub_error}\n'
+								)
+					else:
+						browser_session.logger.debug(
+							f'🚌 {watchdog_and_handler_str} ℹ️ Skipping CDP repair (not a CDP-backed session)'
+						)
 
 					# Always re-raise the original error with its traceback preserved
 					raise

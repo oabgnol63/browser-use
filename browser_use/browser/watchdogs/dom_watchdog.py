@@ -1,4 +1,9 @@
-"""DOM watchdog for browser DOM tree management using CDP."""
+"""DOM watchdog for browser DOM tree management using CDP.
+
+Supports two extraction modes based on browser type:
+- CDP (Chromium): Uses Chrome DevTools Protocol for direct DOM access
+- Selenium (Firefox/WebKit): Uses JavaScript injection for DOM extraction via Selenium
+"""
 
 import asyncio
 import time
@@ -27,8 +32,8 @@ class DOMWatchdog(BaseWatchdog):
 	"""Handles DOM tree building, serialization, and element access via CDP.
 
 	This watchdog acts as a bridge between the event-driven browser session
-	and the DomService implementation, maintaining cached state and providing
-	helper methods for other watchdogs.
+	and the DomService implementation, maintaining cached state
+	and providing helper methods for other watchdogs.
 	"""
 
 	LISTENS_TO = [TabCreatedEvent, BrowserStateRequestEvent]
@@ -39,7 +44,7 @@ class DOMWatchdog(BaseWatchdog):
 	current_dom_state: SerializedDOMState | None = None
 	enhanced_dom_tree: EnhancedDOMTreeNode | None = None
 
-	# Internal DOM service
+	# Internal DOM service (CDP-based for Chromium)
 	_dom_service: DomService | None = None
 
 	# Network tracking - maps request_id to (url, start_time, method, resource_type)
@@ -554,12 +559,13 @@ class DOMWatchdog(BaseWatchdog):
 					skip_iframe_documents=getattr(self.browser_session.browser_profile, 'skip_iframe_documents', False),
 				)
 
-			# Get serialized DOM tree using the service
+			# Get serialized DOM tree using CDP service
 			self.logger.debug('🔍 DOMWatchdog._build_dom_tree_without_highlights: Calling DomService.get_serialized_dom_tree...')
 			start = time.time()
 			self.current_dom_state, self.enhanced_dom_tree, timing_info = await self._dom_service.get_serialized_dom_tree(
 				previous_cached_state=previous_state,
 			)
+
 			end = time.time()
 			total_time_ms = (end - start) * 1000
 			self.logger.debug(

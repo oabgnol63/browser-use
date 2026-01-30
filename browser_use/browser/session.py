@@ -43,7 +43,8 @@ from browser_use.browser.events import (
 )
 from browser_use.browser.profile import BrowserProfile, CloudBrowserProfile, ProxySettings
 from browser_use.browser.views import BrowserStateSummary, TabInfo
-from browser_use.dom.views import DOMRect, EnhancedDOMTreeNode, TargetInfo
+from browser_use.dom.views import DOMRect, EnhancedDOMTreeNode
+from cdp_use.cdp.target.types import TargetInfo
 from browser_use.observability import observe_debug
 from browser_use.utils import _log_pretty_url, create_task_with_error_handling, is_new_tab_page
 

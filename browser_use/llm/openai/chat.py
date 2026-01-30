@@ -278,29 +278,27 @@ class ChatOpenAI(BaseChatModel):
 						closing_fence = content.rfind('```')
 						content = content[:closing_fence].strip()
 				
-				# Handle text before raw JSON (e.g., "I will start by...\n{...}")
-				# Find the first { that starts a JSON object
-				if not content.startswith('{') and not content.startswith('['):
-					# Try to find JSON object start
-					json_start = content.find('{')
-					if json_start == -1:
-						json_start = content.find('[')
-					if json_start != -1:
-						# Find matching closing bracket
-						bracket_count = 0
-						json_end = -1
-						start_bracket = content[json_start]
-						end_bracket = '}' if start_bracket == '{' else ']'
-						for i, char in enumerate(content[json_start:], json_start):
-							if char == start_bracket:
-								bracket_count += 1
-							elif char == end_bracket:
-								bracket_count -= 1
-								if bracket_count == 0:
-									json_end = i + 1
-									break
-						if json_end != -1:
-							content = content[json_start:json_end]
+				# Handle text before/after raw JSON (e.g., "I will start by...\n{...}\nSome trailing text")
+				# Find the first { or [ that starts a JSON object/array
+				json_start = content.find('{')
+				if json_start == -1:
+					json_start = content.find('[')
+				if json_start != -1:
+					# Find matching closing bracket
+					bracket_count = 0
+					json_end = -1
+					start_bracket = content[json_start]
+					end_bracket = '}' if start_bracket == '{' else ']'
+					for i, char in enumerate(content[json_start:], json_start):
+						if char == start_bracket:
+							bracket_count += 1
+						elif char == end_bracket:
+							bracket_count -= 1
+							if bracket_count == 0:
+								json_end = i + 1
+								break
+					if json_end != -1:
+						content = content[json_start:json_end]
 	
 				parsed = output_format.model_validate_json(content)
 

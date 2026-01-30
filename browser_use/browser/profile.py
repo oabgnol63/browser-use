@@ -278,6 +278,19 @@ class RecordHarMode(str, Enum):
 	MINIMAL = 'minimal'
 
 
+class BrowserType(str, Enum):
+	"""Browser type for selecting the browser engine.
+	
+	- CHROMIUM: Use CDP-based DOM extraction (default, fastest and most feature-complete)
+	- FIREFOX: Use Selenium-based DOM extraction with JavaScript injection
+	- WEBKIT/SAFARI: Use Selenium-based DOM extraction with JavaScript injection
+	"""
+	CHROMIUM = 'chromium'
+	FIREFOX = 'firefox'
+	WEBKIT = 'webkit'  # Safari
+	SAFARI = 'webkit'  # Alias for webkit
+
+
 class BrowserChannel(str, Enum):
 	CHROMIUM = 'chromium'
 	CHROME = 'chrome'
@@ -292,6 +305,7 @@ class BrowserChannel(str, Enum):
 
 # Using constants from central location in browser_use.config
 BROWSERUSE_DEFAULT_CHANNEL = BrowserChannel.CHROMIUM
+BROWSERUSE_DEFAULT_BROWSER_TYPE = BrowserType.CHROMIUM
 
 
 # ===== Type definitions with validators =====
@@ -567,6 +581,12 @@ class BrowserProfile(BrowserConnectArgs, BrowserLaunchPersistentContextArgs, Bro
 	use_cloud: bool = Field(
 		default=False,
 		description='Use browser-use cloud browser service instead of local browser',
+	)
+
+	# Browser type selection (chromium uses CDP, firefox/webkit use Selenium)
+	browser_type: BrowserType = Field(
+		default=BrowserType.CHROMIUM,
+		description='Browser engine to use. Chromium (default) uses CDP for DOM extraction, Firefox/WebKit can use Selenium.',
 	)
 
 	@property

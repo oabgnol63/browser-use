@@ -64,6 +64,8 @@ class DOMTreeSerializer:
 		containment_threshold: float | None = None,
 		paint_order_filtering: bool = True,
 		session_id: str | None = None,
+		force_contiguous_indices: bool = False,
+		node_to_selector_index: dict[int, int] | None = None,
 	):
 		self.root_node = root_node
 		self._interactive_counter = 1
@@ -80,6 +82,12 @@ class DOMTreeSerializer:
 		self.paint_order_filtering = paint_order_filtering
 		# Session ID for session-specific exclude attribute
 		self.session_id = session_id
+		# Force contiguous indices for Selenium (avoids mixing with backend_node_id)
+		self._force_contiguous_indices = force_contiguous_indices
+		# Counter for contiguous indices when needed
+		self._contiguous_index_counter = 0
+		# Node to selector index mapping (passed from selenium/dom_service.py)
+		self._node_to_selector_index = node_to_selector_index or {}
 
 	def _safe_parse_number(self, value_str: str, default: float) -> float:
 		"""Parse string to float, handling negatives and decimals."""
@@ -684,12 +692,25 @@ class DOMTreeSerializer:
 				should_make_interactive = True
 
 			# Add to selector map if element should be interactive
-			if should_make_interactive:
-				# Mark node as interactive
-				node.is_interactive = True
-				# Store backend_node_id in selector map (model outputs backend_node_id)
-				self._selector_map[node.original_node.backend_node_id] = node.original_node
-				self._interactive_counter += 1
+				if should_make_interactive:
+					# Mark node as interactive
+					node.is_interactive = True
+					
+					# Store index in selector map (model outputs this index)
+					# For Selenium with JavaScript extraction, use the highlightIndex from JS
+					if self._force_contiguous_indices and hasattr(node.original_node, 'highlight_index') and node.original_node.highlight_index is not None:
+						# Use the highlightIndex from JavaScript DOM extraction
+						selector_index = node.original_node.highlight_index
+						self._selector_map[selector_index] = node.original_node
+					elif self._force_contiguous_indices:
+						# Fallback: create sequential indices if no highlightIndex
+						selector_index = self._contiguous_index_counter
+						self._contiguous_index_counter += 1
+						self._selector_map[selector_index] = node.original_node
+					else:
+						# For CDP: use backend_node_id (default behavior)
+						self._selector_map[node.original_node.backend_node_id] = node.original_node
+					self._interactive_counter += 1
 
 				# Mark compound components as new for visibility
 				if node.is_compound_component:
@@ -857,17 +878,26 @@ class DOMTreeSerializer:
 
 		return False
 
-	@staticmethod
-	def serialize_tree(node: SimplifiedNode | None, include_attributes: list[str], depth: int = 0) -> str:
+	def serialize_tree(self, node: SimplifiedNode | None, include_attributes: list[str], depth: int = 0) -> str:
 		"""Serialize the optimized tree to string format."""
 		if not node:
 			return ''
+
+		# Helper to get the display index for interactive elements
+		def get_display_index() -> int | None:
+			if not node.is_interactive:
+				return None
+			if self._force_contiguous_indices and self._node_to_selector_index:
+				# Use contiguous index from mapping
+				return self._node_to_selector_index.get(id(node.original_node))
+			# Fall back to backend_node_id for CDP
+			return node.original_node.backend_node_id
 
 		# Skip rendering excluded nodes, but process their children
 		if hasattr(node, 'excluded_by_parent') and node.excluded_by_parent:
 			formatted_text = []
 			for child in node.children:
-				child_text = DOMTreeSerializer.serialize_tree(child, include_attributes, depth)
+				child_text = self.serialize_tree(child, include_attributes, depth)
 				if child_text:
 					formatted_text.append(child_text)
 			return '\n'.join(formatted_text)
@@ -880,7 +910,7 @@ class DOMTreeSerializer:
 			# Skip displaying nodes marked as should_display=False
 			if not node.should_display:
 				for child in node.children:
-					child_text = DOMTreeSerializer.serialize_tree(child, include_attributes, depth)
+					child_text = self.serialize_tree(child, include_attributes, depth)
 					if child_text:
 						formatted_text.append(child_text)
 				return '\n'.join(formatted_text)
@@ -901,9 +931,11 @@ class DOMTreeSerializer:
 				# Add interactive marker if clickable
 				if node.is_interactive:
 					new_prefix = '*' if node.is_new else ''
-					line += f'{new_prefix}[{node.original_node.backend_node_id}]'
+					display_idx = get_display_index()
+					if display_idx is not None:
+						line += f'{new_prefix}[{display_idx}]'
 				line += '<svg'
-				attributes_html_str = DOMTreeSerializer._build_attributes_string(node.original_node, include_attributes, '')
+				attributes_html_str = self._build_attributes_string(node.original_node, include_attributes, '')
 				if attributes_html_str:
 					line += f' {attributes_html_str}'
 				line += ' /> <!-- SVG content collapsed -->'
@@ -924,7 +956,7 @@ class DOMTreeSerializer:
 
 				# Build attributes string with compound component info
 				text_content = ''
-				attributes_html_str = DOMTreeSerializer._build_attributes_string(
+				attributes_html_str = self._build_attributes_string(
 					node.original_node, include_attributes, text_content
 				)
 
@@ -975,14 +1007,15 @@ class DOMTreeSerializer:
 					)
 					shadow_prefix = '|SHADOW(closed)|' if has_closed_shadow else '|SHADOW(open)|'
 
+				display_idx = get_display_index()
 				if should_show_scroll and not node.is_interactive:
 					# Scrollable container but not clickable
 					line = f'{depth_str}{shadow_prefix}|SCROLL|<{node.original_node.tag_name}'
-				elif node.is_interactive:
-					# Clickable (and possibly scrollable) - show backend_node_id
+				elif node.is_interactive and display_idx is not None:
+					# Clickable (and possibly scrollable) - show contiguous index or backend_node_id
 					new_prefix = '*' if node.is_new else ''
 					scroll_prefix = '|SCROLL[' if should_show_scroll else '['
-					line = f'{depth_str}{shadow_prefix}{new_prefix}{scroll_prefix}{node.original_node.backend_node_id}]<{node.original_node.tag_name}'
+					line = f'{depth_str}{shadow_prefix}{new_prefix}{scroll_prefix}{display_idx}]<{node.original_node.tag_name}'
 				elif node.original_node.tag_name.upper() == 'IFRAME':
 					# Iframe element (not interactive)
 					line = f'{depth_str}{shadow_prefix}|IFRAME|<{node.original_node.tag_name}'
@@ -1016,7 +1049,7 @@ class DOMTreeSerializer:
 
 			# Process shadow DOM children
 			for child in node.children:
-				child_text = DOMTreeSerializer.serialize_tree(child, include_attributes, next_depth)
+				child_text = self.serialize_tree(child, include_attributes, next_depth)
 				if child_text:
 					formatted_text.append(child_text)
 
@@ -1039,7 +1072,7 @@ class DOMTreeSerializer:
 		# Process children (for non-shadow elements)
 		if node.original_node.node_type != NodeType.DOCUMENT_FRAGMENT_NODE:
 			for child in node.children:
-				child_text = DOMTreeSerializer.serialize_tree(child, include_attributes, next_depth)
+				child_text = self.serialize_tree(child, include_attributes, next_depth)
 				if child_text:
 					formatted_text.append(child_text)
 
