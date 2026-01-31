@@ -74,11 +74,12 @@ class SeleniumSession:
         region: str = 'us-west',
         username: str | None = None,
         access_key: str | None = None,
+        stealth: bool = True,
         logger: logging.Logger | None = None,
     ) -> 'SeleniumSession':
         """
         Create a new SauceLabs browser session.
-        
+
         Args:
             browser: Browser type ('firefox' or 'safari')
             browser_version: Browser version
@@ -87,14 +88,15 @@ class SeleniumSession:
             region: SauceLabs region
             username: SauceLabs username (or use SAUCE_USERNAME env)
             access_key: SauceLabs access key (or use SAUCE_ACCESS_KEY env)
+            stealth: Apply stealth preferences to avoid CAPTCHA/detection (default: True)
             logger: Optional logger
-            
+
         Returns:
             SeleniumSession connected to new SauceLabs browser
         """
         _logger = logger or logging.getLogger(__name__)
-        _logger.info(f'Creating new SauceLabs {browser} session...')
-        
+        _logger.info(f'Creating new SauceLabs {browser} session (stealth={stealth})...')
+
         # Create driver in thread pool to avoid blocking
         driver = await asyncio.get_event_loop().run_in_executor(
             None,
@@ -106,9 +108,10 @@ class SeleniumSession:
                 region=region,
                 username=username,
                 access_key=access_key,
+                stealth=stealth,
             )
         )
-        
+
         _logger.info(f'SauceLabs session created: {driver.session_id}')
         return cls(driver, logger=_logger)
 
@@ -175,9 +178,7 @@ class SeleniumSession:
         
         def create_driver():
             if browser == 'firefox':
-                options = webdriver.FirefoxOptions()
-                if headless:
-                    options.add_argument('--headless')
+                options = cls._make_firefox_options(headless=headless, stealth=True)
                 return webdriver.Firefox(options=options)
             elif browser == 'chrome':
                 options = webdriver.ChromeOptions()
@@ -235,6 +236,7 @@ class SeleniumSession:
         
         # Get serialized state AND selector_map in one call to avoid index mismatch
         serialized_state, _, selector_map, timing = await self.dom_service.get_serialized_dom_tree(
+            highlight_elements=highlight_elements,
             previous_cached_state=self._cached_dom_state,
         )
         
@@ -292,6 +294,90 @@ class SeleniumSession:
     async def get_page_info(self) -> dict:
         """Get current page information."""
         return await self.action_service.get_page_info()
+
+    # ==================== Browser Configuration ====================
+
+    @staticmethod
+    def _make_firefox_options(headless: bool = False, stealth: bool = True) -> 'webdriver.FirefoxOptions':
+        """
+        Create Firefox options with stealth configuration to avoid detection.
+
+        Args:
+            headless: Whether to run in headless mode
+            stealth: Whether to apply stealth preferences to avoid CAPTCHA/detection
+
+        Returns:
+            Configured FirefoxOptions
+        """
+        from selenium import webdriver
+
+        options = webdriver.FirefoxOptions()
+        if headless:
+            options.add_argument('--headless')
+
+        # Suppress notifications and first-run dialogs
+        options.set_preference('dom.webnotifications.enabled', False)
+        options.set_preference('toolkit.telemetry.reportingpolicy.firstRun', False)
+        options.set_preference('browser.shell.checkDefaultBrowser', False)
+        options.set_preference('browser.startup.homepage_override.mstone', 'ignore')
+
+        if stealth:
+            # Hide WebDriver detection
+            options.set_preference('dom.webdriver.enabled', False)
+            options.set_preference('useAutomationExtension', False)
+
+            # Disable navigator.webdriver flag
+            options.set_preference('marionette.actors.enabled', True)
+
+            # General privacy settings (avoid fingerprinting detection)
+            options.set_preference('privacy.trackingprotection.enabled', False)
+            options.set_preference('network.http.sendRefererHeader', 2)
+            options.set_preference('general.useragent.override', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0')
+
+            # Disable telemetry that might flag automation
+            options.set_preference('toolkit.telemetry.enabled', False)
+            options.set_preference('datareporting.healthreport.uploadEnabled', False)
+            options.set_preference('datareporting.policy.dataSubmissionEnabled', False)
+
+            # Media/WebRTC settings
+            options.set_preference('media.peerconnection.enabled', False)
+            options.set_preference('media.navigator.enabled', False)
+
+            # Geolocation
+            options.set_preference('geo.enabled', False)
+
+        # Disable DRM/Widevine CDM download popup ("Firefox is installing components...")
+        options.set_preference('media.eme.enabled', False)
+        options.set_preference('media.gmp-manager.updateEnabled', False)
+        options.set_preference('media.gmp-widevinecdm.enabled', False)
+        options.set_preference('media.gmp-widevinecdm.visible', False)
+        options.set_preference('media.gmp-gmpopenh264.enabled', False)
+
+        return options
+
+    @staticmethod
+    def _make_firefox_capabilities(stealth: bool = True) -> dict:
+        """
+        Create Firefox capabilities for SauceLabs with stealth settings.
+
+        Args:
+            stealth: Whether to apply stealth preferences
+
+        Returns:
+            Capabilities dict for SauceLabs
+        """
+        caps = {
+            'browserName': 'firefox',
+            'moz:firefoxOptions': {
+                'prefs': {
+                    'dom.webdriver.enabled': False,
+                    'useAutomationExtension': False,
+                    'security.webdriver_user_requires_override': True,
+                    'privacy.resistFingerprinting': stealth,
+                }
+            }
+        }
+        return caps
 
     # ==================== Session Management ====================
 

@@ -54,6 +54,7 @@ def create_saucelabs_session(
     username: str | None = None,
     access_key: str | None = None,
     additional_capabilities: dict | None = None,
+    stealth: bool = True,
 ) -> WebDriver:
     """
     Create a new SauceLabs browser session.
@@ -67,7 +68,8 @@ def create_saucelabs_session(
         username: SauceLabs username (defaults to SAUCE_USERNAME env var)
         access_key: SauceLabs access key (defaults to SAUCE_ACCESS_KEY env var)
         additional_capabilities: Additional W3C capabilities
-        
+        stealth: Apply stealth preferences to avoid CAPTCHA/detection (default: True)
+
     Returns:
         Selenium WebDriver connected to SauceLabs
     """
@@ -91,6 +93,13 @@ def create_saucelabs_session(
         options.browser_version = browser_version
         options.platform_name = platform
         options.set_capability('sauce:options', sauce_options)
+
+        if stealth:
+            # Apply stealth preferences for Firefox to avoid detection
+            options.set_preference('dom.webdriver.enabled', False)
+            options.set_preference('useAutomationExtension', False)
+            options.set_preference('security.webdriver_user_requires_override', True)
+            options.set_preference('privacy.resistFingerprinting', True)
     elif browser == 'safari':
         options = webdriver.SafariOptions()
         options.browser_version = browser_version

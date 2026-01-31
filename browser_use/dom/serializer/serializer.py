@@ -905,14 +905,18 @@ class DOMTreeSerializer:
 		if not node:
 			return ''
 
+		# SELENIUM-ONLY: Check if we're in viewport-filtered mode
+		is_selenium_mode = self._force_contiguous_indices and self._node_to_selector_index
+
 		# Helper to get the display index for interactive elements
 		def get_display_index() -> int | None:
 			if not node.is_interactive:
 				return None
-			if self._force_contiguous_indices and self._node_to_selector_index:
-				# Use contiguous index from mapping
-				return self._node_to_selector_index.get(id(node.original_node))
-			# Fall back to backend_node_id for CDP
+			if is_selenium_mode:
+				# Selenium: use index from selector_map (viewport elements only)
+				node_id = id(node.original_node)
+				return self._node_to_selector_index.get(node_id)
+			# CDP: fall back to backend_node_id
 			return node.original_node.backend_node_id
 
 		# Skip rendering excluded nodes, but process their children
@@ -1034,15 +1038,18 @@ class DOMTreeSerializer:
 					# Scrollable container but not clickable
 					line = f'{depth_str}{shadow_prefix}|SCROLL|<{node.original_node.tag_name}'
 				elif node.is_interactive and display_idx is not None:
-					# Clickable (and possibly scrollable) - show contiguous index or backend_node_id
+					# Clickable (and possibly scrollable) - show contiguous index
 					new_prefix = '*' if node.is_new else ''
 					scroll_prefix = '|SCROLL[' if should_show_scroll else '['
 					line = f'{depth_str}{shadow_prefix}{new_prefix}{scroll_prefix}{display_idx}]<{node.original_node.tag_name}'
-				elif node.is_interactive:
-					# Clickable (and possibly scrollable) - show backend_node_id
-					new_prefix = '*' if node.is_new else ''
-					scroll_prefix = '|SCROLL[' if should_show_scroll else '['
-					line = f'{depth_str}{shadow_prefix}{new_prefix}{scroll_prefix}{node.original_node.backend_node_id}]<{node.original_node.tag_name}'
+				elif node.is_interactive and is_selenium_mode:
+					# SELENIUM ONLY: Interactive element not in viewport (no index)
+					# Skip rendering entirely, but process children
+					for child in node.children:
+						child_text = self.serialize_tree(child, include_attributes, depth)
+						if child_text:
+							formatted_text.append(child_text)
+					return '\n'.join(formatted_text)
 				elif node.original_node.tag_name.upper() == 'IFRAME':
 					# Iframe element (not interactive)
 					line = f'{depth_str}{shadow_prefix}|IFRAME|<{node.original_node.tag_name}'

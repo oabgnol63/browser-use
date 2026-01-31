@@ -1,6 +1,6 @@
 # Browser-Use AI Agent Copilot Instructions
 
-This file provides essential guidance for AI coding agents working with Browser-Use, an async Python library that enables AI agents to autonomously control web browsers using LLMs and Chrome DevTools Protocol (CDP).
+This file provides essential guidance for AI coding agents working with Browser-Use, an async Python ≥3.11 library that enables AI agents to autonomously control web browsers using LLMs and Chrome DevTools Protocol (CDP).
 
 ## Core Architecture
 
@@ -12,6 +12,7 @@ Browser-Use follows an **event-driven architecture** with clear service boundari
 - **BrowserSession** (`browser_use/browser/session.py`): Manages browser lifecycle, CDP connections, and coordinates watchdog services via `bubus` event bus
 - **DomService** (`browser_use/dom/service.py`): Extracts and processes DOM content, handles element highlighting, and generates accessibility trees
 - **Tools** (`browser_use/tools/service.py`): Action registry that maps LLM decisions to browser operations (click, type, scroll, etc.)
+- **SeleniumBrowserSession** (`browser_use/selenium/`): Event-driven adapter for Firefox/Safari via Selenium WebDriver, maintains same watchdog architecture as CDP
 
 ### Event-Driven Browser Management
 
@@ -68,6 +69,11 @@ class DOMWatchdog(BaseWatchdog):
 - **AboutBlankWatchdog**: Empty page redirects and navigation errors
 - **ScreenshotWatchdog**: Page screenshots with viewport management
 - **PermissionsWatchdog**: Browser permission requests (camera, location, etc.)
+- **DefaultActionWatchdog**: CDP-based browser actions (click, type, scroll)
+- **RecordingWatchdog**: Video recording and HAR capture
+- **CrashWatchdog**: Browser crash detection and recovery
+- **StorageStateWatchdog**: Cookie and localStorage management
+- **LocalBrowserWatchdog**: Local browser process management and cleanup
 
 #### Event Timeout Hierarchies
 ```python
@@ -246,8 +252,34 @@ Key environment variables (see `browser_use/config.py`):
 ```bash
 BROWSER_USE_LOGGING_LEVEL=debug    # Logging control
 ANONYMIZED_TELEMETRY=false         # Telemetry opt-out
-BROWSER_USE_CLOUD_SYNC=true        # Cloud synchronization
 SKIP_LLM_API_KEY_VERIFICATION=true # For testing
+```
+
+## Execution Modes
+
+### 1. Standard Mode (Actions)
+Agent selects from predefined tools/actions (click, type, scroll, extract, etc.) via LLM tool calling.
+
+### 2. Code-Use Mode
+**Notebook-like execution**: LLM writes Python code that executes in a persistent namespace with browser control functions:
+- Location: `browser_use/code_use/`
+- Enable via: `Agent(code_use=True, ...)`
+- Available functions: `navigate()`, `click()`, `input()`, `scroll()`, `evaluate()`, `done()`
+- Utilities: Includes pandas, numpy, matplotlib, requests, BeautifulSoup, tabulate
+- Use case: Complex data extraction with loops, variables, and data processing
+
+Example code-use pattern:
+```python
+# LLM writes this code
+all_products = []
+for page in range(1, 6):
+    await navigate(url=f'https://example.com/products?page={page}')
+    products = await evaluate('...')  # Returns raw values
+    all_products.extend(products)
+
+import json
+with open('products.json', 'w') as f:
+    json.dump(all_products, f)
 ```
 
 ## LLM Integration Patterns
@@ -260,9 +292,13 @@ Located in `browser_use/llm/` with standardized interface via `BaseChatModel`:
 
 ### System Prompts
 Agent behavior controlled by markdown files in `browser_use/agent/`:
-- `system_prompt.md`: Standard reasoning mode
-- `system_prompt_no_thinking.md`: Direct action mode  
-- `system_prompt_flash.md`: Optimized for fast models
+- `system_prompt.md`: Standard reasoning mode with thinking process
+- `system_prompt_no_thinking.md`: Direct action mode without explicit reasoning
+- `system_prompt_flash.md`: Optimized for fast models (skips evaluation, next goal planning)
+
+Agent configuration:
+- `use_thinking=True`: Agent uses internal "thinking" field for reasoning
+- `flash_mode=True`: Fast mode that overrides use_thinking, skips evaluation and next goal
 
 ## Integration Points
 
@@ -271,11 +307,13 @@ Supports both modes via `browser_use/mcp/client.py`:
 1. **As MCP Server**: Exposes browser tools to Claude Desktop
 2. **With MCP Clients**: Agents connect to external MCP servers (filesystem, GitHub, etc.)
 
-### Cloud Browser Integration
-`browser_use/browser/cloud.py` handles remote browser instances:
-- Authentication and session management
-- Fallback to local browser on cloud failures
-- CDPurl resolution for remote connections
+### Selenium Integration
+`browser_use/selenium/` provides **event-driven** Firefox/Safari support:
+- **Same architecture**: Uses bubus event bus and watchdog pattern
+- **Drop-in replacement**: Works with standard `Agent` class unchanged
+- **Same events**: NavigateToUrlEvent, ClickElementEvent, BrowserStateRequestEvent
+- **Different limitations**: No real-time network events, limited iframe isolation, WebDriver latency
+- SauceLabs support via `SeleniumSession.connect_to_saucelabs()`
 
 ## File Organization Conventions
 
@@ -286,7 +324,7 @@ Supports both modes via `browser_use/mcp/client.py`:
 
 ## Common Development Gotchas
 
-1. **Model Names**: Use exact model names like `gpt-4o` - don't substitute with `gpt-4`
+1. **Model Names**: Use exact model names like `gpt-4o` - don't substitute with `gpt-4`. Recommend `ChatBrowserUse` as default model (optimized for browser automation).
 2. **Async Context**: All main operations are async - use proper async context managers
 3. **DOM Processing**: Iframe handling has configurable limits via `BrowserProfile.max_iframes` and `BrowserProfile.max_iframe_depth`
 4. **Extension Management**: Extensions are cached in `~/.config/browseruse/extensions` - don't recreate unnecessarily
@@ -313,5 +351,7 @@ Supports both modes via `browser_use/mcp/client.py`:
     - Event history limited to 50 events by default (`max_history_size`)
     - Completed events auto-cleaned to prevent memory leaks
     - WeakSet references prevent watchdog memory leaks
+11. **Testing with Real URLs**: Never use `google.com` or `example.com` in tests - Google blocks automated access. Use `pytest-httpserver` for mock web content or DuckDuckGo for search tests.
+12. **Random Example Files**: Never create new example files to test features - keep test code inline in terminal or in proper test files.
 
 This architecture enables robust browser automation while maintaining clear separation of concerns and testability.

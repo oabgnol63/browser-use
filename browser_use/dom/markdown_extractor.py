@@ -106,22 +106,35 @@ async def extract_clean_markdown(
 
 
 async def _get_enhanced_dom_tree_from_browser_session(browser_session: 'BrowserSession'):
-	"""Get enhanced DOM tree from browser session via DOMWatchdog."""
-	# Get the enhanced DOM tree from DOMWatchdog
-	# This captures the current state of the page including dynamic content, shadow roots, etc.
-	dom_watchdog: DOMWatchdog | None = browser_session._dom_watchdog
-	assert dom_watchdog is not None, 'DOMWatchdog not available'
+	"""Get enhanced DOM tree from browser session.
 
-	# Use cached enhanced DOM tree if available, otherwise build it
-	if dom_watchdog.enhanced_dom_tree is not None:
-		return dom_watchdog.enhanced_dom_tree
+	Attempts to use DOMWatchdog if available (CDP sessions), or falls back
+	to the public state summary API (Selenium or other sessions).
+	"""
+	# Try to use the internal watchdog if available (CDP-based sessions)
+	# This avoids an expensive state request if we already have a cached tree
+	dom_watchdog: DOMWatchdog | None = getattr(browser_session, '_dom_watchdog', None)
 
-	# Build the enhanced DOM tree if not cached
-	await dom_watchdog._build_dom_tree_without_highlights()
-	enhanced_dom_tree = dom_watchdog.enhanced_dom_tree
-	assert enhanced_dom_tree is not None, 'Enhanced DOM tree not available'
+	if dom_watchdog:
+		# Use cached enhanced DOM tree if available, otherwise build it
+		if dom_watchdog.enhanced_dom_tree is not None:
+			return dom_watchdog.enhanced_dom_tree
 
-	return enhanced_dom_tree
+		# Build the enhanced DOM tree if not cached
+		await dom_watchdog._build_dom_tree_without_highlights()
+		enhanced_dom_tree = dom_watchdog.enhanced_dom_tree
+		assert enhanced_dom_tree is not None, 'Enhanced DOM tree not available via DOMWatchdog'
+		return enhanced_dom_tree
+
+	# FALLBACK: Use the public state API (Selenium or other future sessions)
+	# This is a unified entry point that doesn't depend on internal watchdogs
+	state = await browser_session.get_browser_state_summary(include_screenshot=False)
+
+	if state.dom_state and state.dom_state._root:
+		# SerializedDOMState._root stores a SimplifiedNode which wraps the original EnhancedDOMTreeNode
+		return state.dom_state._root.original_node
+
+	raise AssertionError('Could not extract clean markdown: DOM tree not available in browser session')
 
 
 # Legacy aliases removed - all code now uses the unified extract_clean_markdown function

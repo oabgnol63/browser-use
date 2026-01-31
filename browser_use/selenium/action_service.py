@@ -348,16 +348,36 @@ class SeleniumActionService:
         predicates = []
         
         if 'class' in attrs and attrs['class']:
-            # Use contains for class matching
-            predicates.append(f'contains(@class, "{attrs["class"].split()[0]}")')
+            # Use starts-with or specific class if possible
+            classes = attrs['class'].split()
+            if classes:
+                predicates.append(f'contains(@class, "{classes[0]}")')
         
         if 'name' in attrs:
             predicates.append(f'@name="{attrs["name"]}"')
         
         if 'type' in attrs:
             predicates.append(f'@type="{attrs["type"]}"')
+            
+        if 'role' in attrs:
+            predicates.append(f'@role="{attrs["role"]}"')
+            
+        if 'data-testid' in attrs:
+            predicates.append(f'@data-testid="{attrs["data-testid"]}"')
         
         if predicates:
             return f'//{tag}[{" and ".join(predicates)}]'
         
+        # Super generic fallback - hierarchical but might be brittle
+        if element_node.parent_node:
+            idx = 1
+            if element_node.parent_node.children_nodes:
+                siblings = [c for c in element_node.parent_node.children_nodes if c.node_name == element_node.node_name]
+                if len(siblings) > 1:
+                    try:
+                        idx = siblings.index(element_node) + 1
+                    except ValueError:
+                        pass
+            return f'{self._generate_xpath(element_node.parent_node)}/{tag}[{idx}]'
+
         return f'//{tag}'

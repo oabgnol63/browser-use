@@ -57,6 +57,37 @@ from browser_use.utils import create_task_with_error_handling, sanitize_surrogat
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize_error_message(error: Exception, max_length: int = 500) -> str:
+	"""
+	Sanitize error messages, especially from Selenium which includes embedded stacktraces.
+	
+	Selenium exceptions contain verbose stacktraces in the message itself, like:
+	"Message: ... \nStacktrace:\n... hundreds of lines..."
+	
+	This function extracts just the meaningful part of the error.
+	"""
+	error_str = str(error)
+	
+	# Check for Selenium-style embedded stacktrace (common in WebDriver exceptions)
+	stacktrace_markers = ['\nStacktrace:', '\nStacktrace\n', 'Stacktrace:']
+	for marker in stacktrace_markers:
+		if marker in error_str:
+			# Take only the part before the stacktrace
+			error_str = error_str.split(marker)[0].strip()
+			break
+	
+	# Also handle generic Python-style tracebacks that might be in the message
+	if '\nTraceback (most recent call last):' in error_str:
+		error_str = error_str.split('\nTraceback (most recent call last):')[0].strip()
+	
+	# Truncate if still too long
+	if len(error_str) > max_length:
+		error_str = error_str[:max_length] + '... [truncated]'
+	
+	return error_str
+
+
 # Import EnhancedDOMTreeNode and rebuild event models that have forward references to it
 # This must be done after all imports are complete
 ClickElementEvent.model_rebuild()
@@ -161,7 +192,7 @@ class Tools(Generic[Context]):
 				return ActionResult(extracted_content=memory, long_term_memory=memory)
 			except Exception as e:
 				logger.error(f'Failed to search {params.engine}: {e}')
-				return ActionResult(error=f'Failed to search {params.engine} for "{params.query}": {str(e)}')
+				return ActionResult(error=f'Failed to search {params.engine} for "{params.query}": {_sanitize_error_message(e)}')
 
 		@self.registry.action(
 			'',
@@ -208,7 +239,7 @@ class Tools(Generic[Context]):
 					return ActionResult(error=site_unavailable_msg)
 				else:
 					# Return error in ActionResult instead of re-raising
-					return ActionResult(error=f'Navigation failed: {str(e)}')
+					return ActionResult(error=f'Navigation failed: {_sanitize_error_message(e)}')
 
 		@self.registry.action('Go back', param_model=NoParamsAction)
 		async def go_back(_: NoParamsAction, browser_session: BrowserSession):
@@ -221,7 +252,7 @@ class Tools(Generic[Context]):
 				return ActionResult(extracted_content=memory)
 			except Exception as e:
 				logger.error(f'Failed to dispatch GoBackEvent: {type(e).__name__}: {e}')
-				error_msg = f'Failed to go back: {str(e)}'
+				error_msg = f'Failed to go back: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 		@self.registry.action('Go forward', param_model=NoParamsAction)
@@ -235,7 +266,7 @@ class Tools(Generic[Context]):
 				return ActionResult(extracted_content=memory)
 			except Exception as e:
 				logger.error(f'Failed to dispatch GoForwardEvent: {type(e).__name__}: {e}')
-				clean_msg = extract_llm_error_message(e)
+				clean_msg = _sanitize_error_message(e)
 				error_msg = f'Failed to go forward: {clean_msg}'
 				return ActionResult(error=error_msg)
 
@@ -309,7 +340,7 @@ class Tools(Generic[Context]):
 			except BrowserError as e:
 				return handle_browser_error(e)
 			except Exception as e:
-				error_msg = f'Failed to click at coordinates ({params.coordinate_x}, {params.coordinate_y}).'
+				error_msg = f'Failed to click at coordinates ({params.coordinate_x}, {params.coordinate_y}): {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 		async def _click_by_index(
@@ -368,7 +399,7 @@ class Tools(Generic[Context]):
 			except BrowserError as e:
 				return handle_browser_error(e)
 			except Exception as e:
-				error_msg = f'Failed to click element {params.index}: {str(e)}'
+				error_msg = f'Failed to click element {params.index}: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 		# Store click handlers for re-registration
@@ -444,7 +475,7 @@ class Tools(Generic[Context]):
 			except Exception as e:
 				# Log the full error for debugging
 				logger.error(f'Failed to dispatch TypeTextEvent: {type(e).__name__}: {e}')
-				error_msg = f'Failed to type text into element {params.index}: {e}'
+				error_msg = f'Failed to type text into element {params.index}: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 		@self.registry.action(
@@ -922,7 +953,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				return ActionResult(extracted_content=memory, long_term_memory=memory)
 			except Exception as e:
 				logger.error(f'Failed to dispatch SendKeysEvent: {type(e).__name__}: {e}')
-				error_msg = f'Failed to send keys: {str(e)}'
+				error_msg = f'Failed to send keys: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 		@self.registry.action('Scroll to text.')
@@ -1484,7 +1515,9 @@ Validated Code (after quote fixing):
 					except Exception as e:
 						# Log the original exception with traceback for observability
 						logger.error(f"Action '{action_name}' failed with error: {str(e)}")
-						result = ActionResult(error=str(e))
+						# Sanitize error message to remove verbose stacktraces (especially from Selenium)
+						sanitized_error = _sanitize_error_message(e)
+						result = ActionResult(error=sanitized_error)
 
 					if Laminar is not None:
 						Laminar.set_span_output(result)

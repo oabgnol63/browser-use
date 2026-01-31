@@ -227,11 +227,14 @@ class SeleniumBrowserSession(BrowserSession):
                 self.target_id = browser_session.agent_focus_target_id
                 
                 # Create a mock cdp_client that has common methods tools expect
-                self.cdp_client = MockCDPClient()
+                self.cdp_client = MockCDPClient(browser_session)
         
         # Separate domain classes to avoid method name conflicts
         class MockDOMDomain:
             """Mock for CDP DOM domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def getContentQuads(self, params=None, session_id=None):
                 return {}
             async def getBoxModel(self, params=None, session_id=None):
@@ -255,15 +258,59 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockRuntimeDomain:
             """Mock for CDP Runtime domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def evaluate(self, params=None, session_id=None):
-                return {}
+                expression = params.get('expression') if params else None
+                if not expression:
+                    return {}
+                try:
+                    # Run in thread pool as it's a blocking Selenium call
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.browser_session._selenium_session.driver.execute_script(f"return {expression}")
+                    )
+                    return {'result': {'value': result}}
+                except Exception:
+                    return {'result': {'value': None}}
+
             async def callFunctionOn(self, params=None, session_id=None):
                 return {}
             async def runIfWaitingForDebugger(self, params=None, session_id=None):
                 return {}
+            async def releaseObject(self, params=None, session_id=None):
+                return {}
         
         class MockPageDomain:
             """Mock for CDP Page domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
+            async def getLayoutMetrics(self, params=None, session_id=None):
+                try:
+                    # Fetch real viewport height from selenium if possible
+                    info = await self.browser_session._selenium_session.get_page_info()
+                    viewport = info.get('viewport', {})
+                    width = viewport.get('width', 1280)
+                    height = viewport.get('height', 720)
+                except Exception:
+                    width, height = 1280, 720
+
+                return {
+                    'cssVisualViewport': {
+                        'clientWidth': width,
+                        'clientHeight': height,
+                        'pageX': 0,
+                        'pageY': 0,
+                    },
+                    'cssLayoutViewport': {
+                        'clientWidth': width,
+                        'clientHeight': height,
+                        'pageX': 0,
+                        'pageY': 0,
+                    }
+                }
+
             async def navigate(self, params=None, session_id=None):
                 return {}
             async def getFrameTree(self, params=None, session_id=None):
@@ -277,6 +324,9 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockEmulationDomain:
             """Mock for CDP Emulation domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def setDeviceMetricsOverride(self, params=None, session_id=None):
                 return {}
             async def clearGeolocationOverride(self, params=None, session_id=None):
@@ -286,22 +336,58 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockStorageDomain:
             """Mock for CDP Storage domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def getCookies(self, params=None, session_id=None):
-                return {'cookies': []}
+                try:
+                    cookies = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.browser_session._selenium_session.driver.get_cookies()
+                    )
+                    return {'cookies': cookies}
+                except Exception:
+                    return {'cookies': []}
+
             async def setCookies(self, params=None, session_id=None):
                 return {}
+
             async def clearCookies(self, params=None, session_id=None):
-                return {}
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, self.browser_session._selenium_session.driver.delete_all_cookies
+                    )
+                    return {}
+                except Exception:
+                    return {}
         
         class MockNetworkDomain:
             """Mock for CDP Network domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def clearBrowserCookies(self, params=None, session_id=None):
-                return {}
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, self.browser_session._selenium_session.driver.delete_all_cookies
+                    )
+                    return {}
+                except Exception:
+                    return {}
+
             async def network_getCookies(self, params=None, session_id=None):
-                return {'cookies': []}
+                try:
+                    cookies = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.browser_session._selenium_session.driver.get_cookies()
+                    )
+                    return {'cookies': cookies}
+                except Exception:
+                    return {'cookies': []}
         
         class MockTargetDomain:
             """Mock for CDP Target domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def createTarget(self, params=None, session_id=None):
                 return {'targetId': 'mock-target-id'}
             async def closeTarget(self, params=None, session_id=None):
@@ -313,6 +399,9 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockFetchDomain:
             """Mock for CDP Fetch domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def fetch_enable(self, params=None, session_id=None):
                 return {}
             async def continueWithAuth(self, params=None, session_id=None):
@@ -322,6 +411,9 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockDOMStorageDomain:
             """Mock for CDP DOMStorage domain."""
+            def __init__(self, browser_session):
+                self.browser_session = browser_session
+
             async def getDOMStorageItems(self, params=None, session_id=None):
                 return {'entries': []}
             async def domstorage_enable(self, params=None, session_id=None):
@@ -331,8 +423,8 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockCDPClient:
             """Mock CDP client that supports .send.DOMAIN.method() pattern."""
-            def __init__(self):
-                self.send = MockCDPSendProxy(self)
+            def __init__(self, browser_session):
+                self.send = MockCDPSendProxy(browser_session)
             
             def register(self, event, callback):
                 """Stub for event registration - not used with Selenium."""
@@ -340,44 +432,44 @@ class SeleniumBrowserSession(BrowserSession):
         
         class MockCDPSendProxy:
             """Proxy that returns domain objects for .DOM.method() calls."""
-            def __init__(self, cdp_client):
-                self._cdp_client = cdp_client
+            def __init__(self, browser_session):
+                self._browser_session = browser_session
             
             @property
             def DOM(self):
-                return MockDOMDomain()
+                return MockDOMDomain(self._browser_session)
             
             @property
             def Runtime(self):
-                return MockRuntimeDomain()
+                return MockRuntimeDomain(self._browser_session)
             
             @property
             def Page(self):
-                return MockPageDomain()
+                return MockPageDomain(self._browser_session)
             
             @property
             def Emulation(self):
-                return MockEmulationDomain()
+                return MockEmulationDomain(self._browser_session)
             
             @property
             def Storage(self):
-                return MockStorageDomain()
+                return MockStorageDomain(self._browser_session)
             
             @property
             def Network(self):
-                return MockNetworkDomain()
+                return MockNetworkDomain(self._browser_session)
             
             @property
             def Target(self):
-                return MockTargetDomain()
+                return MockTargetDomain(self._browser_session)
             
             @property
             def Fetch(self):
-                return MockFetchDomain()
+                return MockFetchDomain(self._browser_session)
             
             @property
             def DOMStorage(self):
-                return MockDOMStorageDomain()
+                return MockDOMStorageDomain(self._browser_session)
             
             @property
             def Overlay(self):

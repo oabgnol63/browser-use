@@ -64,21 +64,72 @@ class SeleniumDomService:
     async def __aexit__(self, exc_type, exc_value, traceback):
         pass
 
+    async def inject_stealth_js(self) -> None:
+        """
+        Inject JavaScript to hide automation flags at runtime.
+
+        This complements browser preferences by patching navigator properties
+        that may still be detectable after browser launch.
+        """
+        self.logger.debug('Injecting stealth JavaScript...')
+        try:
+            self.driver.execute_script('''
+                // Hide navigator.webdriver flag
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined,
+                    configurable: true,
+                    enumerable: true
+                });
+
+                // Remove from prototype chain as well
+                try {
+                    delete navigator.__proto__.webdriver;
+                } catch (e) {
+                    // May fail in some browsers, that's okay
+                }
+
+                // Add fake plugins to match real browser fingerprint
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                    configurable: true
+                });
+
+                // Spoof MIME types
+                Object.defineProperty(navigator, 'mimeTypes', {
+                    get: () => ({
+                        length: 3,
+                        0: { type: 'application/pdf', suffixes: 'pdf', description: 'PDF Viewer' },
+                        1: { type: 'application/x-shockwave-flash', suffixes: 'swf', description: 'Shockwave Flash' },
+                        2: { type: 'text/html', suffixes: 'html', description: 'HTML Document' }
+                    }),
+                    configurable: true
+                });
+            ''')
+            self.logger.debug('Stealth JavaScript injected successfully')
+        except Exception as e:
+            self.logger.warning(f'Failed to inject stealth JS: {e}')
+
     @time_execution_async('--selenium_get_dom_tree')
     async def get_dom_tree(
         self,
         highlight_elements: bool = True,
         focus_element: int = -1,
-        viewport_expansion: int = 0,
+        viewport_expansion: int = 0,  # Keep at 0 - agent will scroll to find off-screen elements
+        cross_origin_iframes: bool = True,
+        max_iframe_depth: int = 5,
+        max_iframes: int = 100,
     ) -> tuple[EnhancedDOMTreeNode, dict[int, EnhancedDOMTreeNode], dict[str, float]]:
         """
         Get the DOM tree using Selenium JavaScript evaluation.
-        
+
         Args:
             highlight_elements: Whether to highlight interactive elements
             focus_element: Index of element to focus highlight on (-1 for none)
-            viewport_expansion: Pixels to expand viewport for element detection
-            
+            viewport_expansion: Pixels to expand viewport for element detection (default 500px)
+            cross_origin_iframes: Include cross-origin iframes (marked as such)
+            max_iframe_depth: Maximum depth for iframe recursion
+            max_iframes: Maximum number of iframes to process
+
         Returns:
             Tuple of (root_node, selector_map, timing_info)
         """
@@ -100,6 +151,9 @@ class SeleniumDomService:
             'focusHighlightIndex': focus_element,
             'viewportExpansion': viewport_expansion,
             'debugMode': debug_mode,
+            'maxIframeDepth': max_iframe_depth,
+            'maxIframes': max_iframes,
+            'includeCrossOriginIframes': cross_origin_iframes,
         }
 
         try:
@@ -113,7 +167,10 @@ class SeleniumDomService:
             # Note: args dict is passed as the second argument, accessible as arguments[0]
             self.logger.debug(f'Executing JS with args: {args}')
             self.logger.debug(f'JS code length: {len(self.js_code)} chars')
-            
+
+            # Inject stealth JS before DOM extraction
+            await self.inject_stealth_js()
+
             # Execute the main DOM extraction script
             # The IIFE pattern needs 'return' prefix for Selenium execute_script to capture the result
             try:
@@ -148,6 +205,7 @@ class SeleniumDomService:
 
     async def get_serialized_dom_tree(
         self,
+        highlight_elements: bool = True,
         previous_cached_state: SerializedDOMState | None = None,
         session_id: str | None = None,
     ) -> tuple[SerializedDOMState, EnhancedDOMTreeNode, dict[int, EnhancedDOMTreeNode], dict[str, float]]:
@@ -160,8 +218,10 @@ class SeleniumDomService:
         timing_info: dict[str, float] = {}
         start_total = time.time()
 
-        # Build DOM tree
-        enhanced_dom_tree, selector_map, dom_tree_timing = await self.get_dom_tree()
+        # Build DOM tree (js_selector_map comes from JavaScript's highlightIndex)
+        enhanced_dom_tree, js_selector_map, dom_tree_timing = await self.get_dom_tree(
+            highlight_elements=highlight_elements
+        )
         timing_info.update(dom_tree_timing)
 
         # Serialize DOM tree for LLM
@@ -171,15 +231,45 @@ class SeleniumDomService:
             previous_cached_state,
             paint_order_filtering=self.paint_order_filtering,
             session_id=session_id,
-            force_contiguous_indices=True,  # Use contiguous indices for Selenium to avoid mixing with backend_node_id
+            force_contiguous_indices=False,  # Don't use serializer indexing - JS already filtered correctly
         ).serialize_accessible_elements()
 
-        # Build node-to-selector-index mapping from selector_map (maps contiguous index → node)
-        # This allows views.py to show contiguous indices in the serialized output
-        serialized_dom_state._node_to_selector_index = {id(node): idx for idx, node in serialized_dom_state.selector_map.items()}
+        # IMPORTANT: For Selenium, use JS selector_map directly!
+        # The JavaScript already did correct filtering and assigned indices to innermost elements
+        # The serializer's indexing adds back all parent elements, causing overlaps
+        final_selector_map = js_selector_map
+        
+        # Debug: Compare JS selector map vs serializer's selector map
+        if self.logger.getEffectiveLevel() == logging.DEBUG:
+            self.logger.debug(f'==================== SELECTOR MAP COMPARISON ====================')
+            self.logger.debug(f'JS selector_map: {len(js_selector_map)} elements (using this)')
+            self.logger.debug(f'Serializer selector_map: {len(serialized_dom_state.selector_map)} elements (ignoring)')
+            
+            if len(js_selector_map) != len(serialized_dom_state.selector_map):
+                self.logger.debug(f'⚠️  Serializer tried to add {len(serialized_dom_state.selector_map) - len(js_selector_map)} elements - using JS map instead')
+            
+            self.logger.debug(f'Using JS selector_map elements:')
+            for idx in sorted(js_selector_map.keys()):  # Show first 20
+                node = js_selector_map[idx]
+                tag = node.tag_name if hasattr(node, 'tag_name') else node.node_name
+                classes = node.attributes.get('class', '')[:30] if hasattr(node, 'attributes') else ''
+                text = ''
+                if hasattr(node, 'ax_node') and node.ax_node and node.ax_node.name:
+                    text = node.ax_node.name[:50]
+                elif hasattr(node, 'node_value') and node.node_value:
+                    text = node.node_value[:50]
+                self.logger.debug(f'  Index {idx}: {tag}.{classes} "{text}"')
 
-        # Draw highlights with CORRECT indices (matching what the agent will use)
-        await self.draw_highlights(serialized_dom_state.selector_map, focus_element=-1)
+        # Update the serialized state to use our JS selector map
+        serialized_dom_state.selector_map = final_selector_map
+        
+        # Build node-to-selector-index mapping from the JS selector_map
+        # This allows views.py to show correct indices in the serialized output
+        serialized_dom_state._node_to_selector_index = {id(node): idx for idx, node in final_selector_map.items()}
+
+        # Draw highlights with the same indices that the agent will use
+        if highlight_elements:
+            await self.draw_highlights(final_selector_map, focus_element=-1)
 
         # Add serializer sub-timings
         for key, value in serializer_timing.items():
@@ -188,7 +278,8 @@ class SeleniumDomService:
         timing_info['serialization_total_ms'] = (time.time() - start_serialize) * 1000
         timing_info['get_serialized_dom_tree_total_ms'] = (time.time() - start_total) * 1000
 
-        return serialized_dom_state, enhanced_dom_tree, selector_map, timing_info
+        # Return the serializer's selector_map (not js_selector_map) for consistency
+        return serialized_dom_state, enhanced_dom_tree, final_selector_map, timing_info
 
     async def draw_highlights(
         self,
@@ -199,6 +290,7 @@ class SeleniumDomService:
         Draw highlight overlays on elements using the actual selector_map indices.
         
         This ensures visual indices match what the agent sees.
+        Uses improved positioning logic similar to python_highlights.py.
         
         Args:
             selector_map: Map of selector indices to DOM nodes
@@ -207,12 +299,27 @@ class SeleniumDomService:
         if not selector_map:
             return
 
+        # Color scheme matching python_highlights.py
+        element_colors = {
+            'button': '#FF6B6B',
+            'input': '#4ECDC4',
+            'select': '#45B7D1',
+            'a': '#96CEB4',
+            'textarea': '#FF8C42',
+            'default': '#DDA0DD',
+        }
+
         # Build highlight data with correct indices
         highlights = []
         for index, node in selector_map.items():
             if node and node.snapshot_node and node.snapshot_node.bounds:
                 bounds = node.snapshot_node.bounds
                 is_focused = (focus_element == index)
+                tag_name = node.tag_name.lower() if hasattr(node, 'tag_name') else 'div'
+                
+                # Get color based on element type
+                color = element_colors.get(tag_name, element_colors['default'])
+                
                 highlights.append({
                     'index': index,
                     'x': bounds.x,
@@ -220,12 +327,14 @@ class SeleniumDomService:
                     'width': bounds.width,
                     'height': bounds.height,
                     'isFocused': is_focused,
+                    'color': color,
+                    'tagName': tag_name,
                 })
 
         if not highlights:
             return
 
-        # Execute JavaScript to draw highlights with correct indices
+        # Execute JavaScript to draw highlights with improved positioning
         try:
             self.driver.execute_script('''
                 const containerId = 'browser-use-selenium-highlight-container';
@@ -240,13 +349,42 @@ class SeleniumDomService:
                 document.body.appendChild(container);
                 
                 const highlights = arguments[0];
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
                 
                 highlights.forEach(function(h) {
                     const el = document.createElement('div');
-                    el.style.cssText = 'position:fixed;left:' + h.x + 'px;top:' + h.y + 'px;width:' + h.width + 'px;height:' + h.height + 'px;background-color:' + (h.isFocused ? 'rgba(255, 127, 39, 0.5)' : 'rgba(255, 127, 39, 0.3)') + ';border:2px solid ' + (h.isFocused ? 'rgb(255, 127, 39)' : 'rgba(255, 127, 39, 0.8)') + ';box-sizing:border-box;pointer-events:none;';
                     
-                    const label = document.createElement('span');
-                    label.style.cssText = 'position:absolute;top:-18px;left:0;background-color:rgb(255, 127, 39);color:white;padding:2px 6px;font-size:11px;font-family:monospace;border-radius:3px;white-space:nowrap;';
+                    // Use dashed border for better visibility
+                    el.style.cssText = 'position:fixed;left:' + h.x + 'px;top:' + h.y + 'px;width:' + h.width + 'px;height:' + h.height + 'px;' +
+                        'border:2px dashed ' + h.color + ';' +
+                        'box-sizing:border-box;pointer-events:none;';
+                    
+// Create index label with improved positioning - smaller and less intrusive
+                const label = document.createElement('span');
+                const labelPadding = 2;
+                const fontSize = 8;  // Fixed smaller font size
+                
+                // Base style for label - smaller and positioned at top-left corner
+                let labelStyle = 'position:absolute;background-color:' + h.color + ';color:white;' +
+                    'padding:' + labelPadding + 'px ' + (labelPadding + 2) + 'px;' +
+                    'font-size:' + fontSize + 'px;font-family:monospace;font-weight:bold;' +
+                    'border-radius:2px;white-space:nowrap;border:1px solid rgba(255,255,255,0.8);' +
+                    'line-height:1;min-width:14px;text-align:center;';
+                
+                // Positioning logic - always place at top-left corner outside element
+                const labelHeight = fontSize + labelPadding * 2 + 2;
+                const labelWidth = (String(h.index).length * fontSize * 0.6) + labelPadding * 2 + 4;
+                
+                if (h.y > labelHeight + 2) {
+                    // Place above element
+                    labelStyle += 'top:-' + (labelHeight + 2) + 'px;left:-1px;';
+                } else {
+                    // Not enough space above, place inside
+                        labelStyle += 'top:2px;left:2px;';
+                    }
+                    
+                    label.style.cssText = labelStyle;
                     label.textContent = String(h.index);
                     el.appendChild(label);
                     
@@ -255,6 +393,18 @@ class SeleniumDomService:
             ''', highlights)
         except Exception as e:
             self.logger.warning(f'Failed to draw highlights: {e}')
+
+    async def clear_highlights(self) -> None:
+        """Clear all highlight overlays from the page."""
+        try:
+            self.driver.execute_script('''
+                const container = document.getElementById('browser-use-selenium-highlight-container');
+                if (container) {
+                    container.remove();
+                }
+            ''')
+        except Exception as e:
+            self.logger.warning(f'Failed to clear highlights: {e}')
 
     def _is_new_tab_page(self, url: str) -> bool:
         """Check if URL is a new/blank tab page."""
@@ -327,8 +477,10 @@ class SeleniumDomService:
 
                 # Add to selector map if it has a highlight index
                 highlight_index = node_data.get('highlightIndex')
-                if highlight_index is not None:
+                if highlight_index is not None and highlight_index >= 0:
                     selector_map[highlight_index] = node
+
+        self.logger.debug(f'Built selector_map from JS with {len(selector_map)} elements')
 
         # Second pass: build parent-child relationships
         for node_id, node_data in js_node_map.items():
@@ -411,13 +563,18 @@ class SeleniumDomService:
         # Create snapshot node with computed properties
         snapshot_node = self._create_snapshot_node_from_js(node_data)
 
+        # Ensure JS-generated xpath is preserved in attributes
+        attributes = node_data.get('attributes', {})
+        if 'xpath' in node_data:
+            attributes['xpath'] = node_data['xpath']
+
         return EnhancedDOMTreeNode(
             node_id=int(node_id) if node_id.isdigit() else hash(node_id) % (10**9),
             backend_node_id=int(node_id) if node_id.isdigit() else hash(node_id) % (10**9),
             node_type=NodeType.ELEMENT_NODE,
             node_name=tag_name,
             node_value='',
-            attributes=node_data.get('attributes', {}),
+            attributes=attributes,
             is_scrollable=node_data.get('isScrollable', False),
             is_visible=node_data.get('isVisible', False),
             absolute_position=bounds,
