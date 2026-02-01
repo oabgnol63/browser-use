@@ -22,14 +22,14 @@ from browser_use import Agent
 from browser_use.llm import ChatGoogle
 
 profile = BrowserProfile(
-        cross_origin_iframes=True,
-        minimum_wait_page_load_time=7,
-        window_size=ViewportSize(width=1440, height=900),
-        proxy=ProxySettings(
-            server=PROXY_URL,
-            username=PROXY_USERNAME,
-            password=PROXY_PASSWORD
-        ),
+        # cross_origin_iframes=True,
+        # minimum_wait_page_load_time=7,
+        # window_size=ViewportSize(width=1440, height=900),
+        # proxy=ProxySettings(
+        #     server=PROXY_URL,
+        #     username=PROXY_USERNAME,
+        #     password=PROXY_PASSWORD
+        # ),
     )
 
 async def main():
@@ -37,29 +37,30 @@ async def main():
         llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash", temperature=0)
         page_extract_llm = ChatGoogle(api_key=GEMINI_API_KEY, model="gemini-2.5-flash-lite", temperature=0)
         llm_task = """
-        Go to https://safe.surfcrew.com/https://www.cnn.com
-        Perform the following actions in sequence:
-        1. Locate "More Top Stories" header. If scrolling is needed, only scroll 0.9 page each time. Click on the first article below this
-        2. Click the browser's back button. Then forward again
-        Click the back button again. Confirm if we're back to the homepage
-        3. Locate search box and search for "football"
-        Articles with "football" must be shown. Note that after clicking search button, the page elements may change position, so re-evaluate the page before typing text or clicking search button
-        4. Return to the homepage. Scroll down to the end of the page and up again to see if scrolling smooth
+Go to cnn.com.
+Locate Weekend Read header on homepage. If scroll is needed, scroll one page each.
+Click on the first article link under this header.
+Scroll down 2 pages on the article page.
+Navigate back to homepage.
+Navigate forward to the article page.
         """
         
         agent = Agent(
             task=llm_task,
             llm=llm,
             page_extract_llm=page_extract_llm,
-            flash_mode=True,
-            use_thinking=False,
+            # flash_mode=True,
+            use_thinking=True,
             browser_profile=profile,
             calculate_cost=True,
-            use_vision=True,
-            vision_detail_level='low',
+            # use_vision=True,
+            # vision_detail_level='low',
             llm_timeout=60,
         )
-        await agent.run()
+        result = await agent.run()
+        
+        print("\nAGENT RESULT:")
+        print(result)
 
 if __name__ == "__main__":
     import asyncio

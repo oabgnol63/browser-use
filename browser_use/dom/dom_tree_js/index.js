@@ -89,11 +89,6 @@
 		'[data-testid*="btn"]',
 		'[class*="button"]',
 		'[class*="btn"]',
-		// Google Sign-In specific selectors
-		'[id*="credential_picker"]',
-		'[id*="gsi_"]',
-		'[class*="gsi_"]',
-		'[data-provider="google"]',
 		// Generic popup/modal selectors
 		'[class*="popup"]',
 		'[class*="modal"]',
@@ -161,7 +156,19 @@
 		// Check if element matches interactive selectors
 		for (const selector of INTERACTIVE_SELECTORS) {
 			try {
-				if (element.matches(selector)) return true;
+				if (element.matches(selector)) {
+					// Filter out empty anchor tags
+					if (element.tagName === 'A') {
+						const text = (element.textContent || '').trim();
+						const ariaLabel = element.getAttribute('aria-label')?.trim();
+						const title = element.getAttribute('title')?.trim();
+						const hasImage = element.querySelector('img, svg, [role="img"]');
+						if (!text && !ariaLabel && !title && !hasImage) {
+							return false;  // Skip empty anchors
+						}
+					}
+					return true;
+				}
 			} catch (e) {
 				// Invalid selector, skip
 			}
@@ -490,8 +497,13 @@
 
 		// Handle text nodes
 		if (node.nodeType === Node.TEXT_NODE) {
-			const text = node.textContent.trim();
+			let text = node.textContent.trim();
 			if (!text) return null;
+
+			// Cap text node content to 100 chars to match CDP behavior
+			if (text.length > 100) {
+				text = text.substring(0, 100);
+			}
 
 			const isVisible = node.parentElement ? isElementVisible(node.parentElement) : false;
 			if (isVisible) perfMetrics.nodeMetrics.visibleNodes++;
@@ -568,6 +580,29 @@
 		directText = directText.trim();
 
 		// Build node data
+		// Cap text length to 100 chars to match CDP accessibility tree behavior and reduce token usage
+		let nodeText = isInteractive ? (node.innerText || node.textContent || '').trim() : (directText || getNodeText(node));
+		if (nodeText && nodeText.length > 100) {
+			nodeText = nodeText.substring(0, 100);
+		}
+
+		// Check if element is actually scrollable (has overflow content AND CSS allows scrolling)
+		let isActuallyScrollable = false;
+		const hasOverflowContent = node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1;
+		if (hasOverflowContent) {
+			const style = window.getComputedStyle(node);
+			const overflow = style.overflow.toLowerCase();
+			const overflowX = style.overflowX.toLowerCase();
+			const overflowY = style.overflowY.toLowerCase();
+			// Only mark as scrollable if CSS explicitly allows scrolling
+			const allowsScroll = ['auto', 'scroll', 'overlay'].some(v =>
+				overflow === v || overflowX === v || overflowY === v
+			);
+			// For body/html, also consider them scrollable if they have overflow content
+			const isRootElement = node.tagName.toLowerCase() === 'body' || node.tagName.toLowerCase() === 'html';
+			isActuallyScrollable = allowsScroll || isRootElement;
+		}
+
 		const nodeData = {
 			tagName: node.tagName.toLowerCase(),
 			attributes: getElementAttributes(node),
@@ -580,12 +615,12 @@
 			shadowRoot: !!node.shadowRoot,
 			viewport: viewport,
 			children: childIds,
-			text: (isInteractive ? (node.innerText || node.textContent || '').trim() : (directText || getNodeText(node))),
+			text: nodeText,
 			ariaLabel: node.getAttribute('aria-label'),
 			ariaDescription: node.getAttribute('aria-describedby'),
 			title: node.getAttribute('title'),
 			role: node.getAttribute('role'),
-			isScrollable: node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth
+			isScrollable: isActuallyScrollable
 		};
 
 		nodeMap[nodeId] = nodeData;
@@ -637,60 +672,6 @@
 		}
 	}
 
-	/**
-	 * Detect if an iframe is a known popup/dialog type (e.g., Google One Tap)
-	 */
-	function detectIframePopupType(iframe) {
-		const src = iframe.src || '';
-		const style = window.getComputedStyle(iframe);
-		const rect = iframe.getBoundingClientRect();
-
-		// Google One Tap / Google Sign-In popup detection
-		if (src.includes('accounts.google.com') ||
-			src.includes('gsi_client') ||
-			src.includes('one-tap') ||
-			src.includes('google.com/gsi')) {
-			return {
-				popupType: 'google-one-tap',
-				description: 'Google Sign-In popup - click to authenticate with Google',
-				suggestedAction: 'Click the "Continue" or "Sign in" button inside this popup to authenticate'
-			};
-		}
-
-		// Facebook Login popup
-		if (src.includes('facebook.com/plugins') || src.includes('connect.facebook.net')) {
-			return {
-				popupType: 'facebook-login',
-				description: 'Facebook Login popup',
-				suggestedAction: 'Click to authenticate with Facebook'
-			};
-		}
-
-		// Generic OAuth/Sign-in popup detection based on position and style
-		const isFixedOrAbsolute = style.position === 'fixed' || style.position === 'absolute';
-		const hasHighZIndex = parseInt(style.zIndex, 10) > 1000;
-		const isSmallPopup = rect.width < 500 && rect.height < 400;
-		const isTopRight = rect.right > window.innerWidth - 100 && rect.top < 200;
-
-		if (isFixedOrAbsolute && hasHighZIndex && isSmallPopup) {
-			return {
-				popupType: 'overlay-popup',
-				description: 'Overlay popup/dialog',
-				suggestedAction: 'This appears to be a popup dialog - may contain buttons to interact with'
-			};
-		}
-
-		// Cookie consent / GDPR popups
-		if (src.includes('consent') || src.includes('cookie') || src.includes('gdpr')) {
-			return {
-				popupType: 'consent-popup',
-				description: 'Cookie consent or privacy popup',
-				suggestedAction: 'Click Accept/Reject to handle cookie preferences'
-			};
-		}
-
-		return null;
-	}
 
 	/**
 	 * Create an iframe node for the node map
@@ -698,13 +679,9 @@
 	function createIframeNode(iframe, type) {
 		const rect = iframe.getBoundingClientRect();
 		const nodeId = nodeIdCounter++;
-		const popupInfo = detectIframePopupType(iframe);
 
 		if (debugMode) {
 			console.log(`[Browser-Use DOM] Creating iframe node ${nodeId} (${type}): ${iframe.src.substring(0, 50)}...`);
-			if (popupInfo) {
-				console.log(`[Browser-Use DOM] Detected popup type: ${popupInfo.popupType} - ${popupInfo.description}`);
-			}
 		}
 
 		const iframeNode = {
@@ -722,7 +699,7 @@
 			isInteractive: true,
 			isTopElement: true,
 			isInViewport: isInViewport(iframe),
-			highlightIndex: -1,  // Will be assigned if it's a detectable popup
+			highlightIndex: -1,
 			viewport: {
 				x: rect.left + window.scrollX,
 				y: rect.top + window.scrollY,
@@ -734,26 +711,6 @@
 			iframeContent: type === 'same-origin' ? 'extractable' : 'cross-origin-blocked',
 			iframeDepth: 0
 		};
-
-		// Add popup detection info for cross-origin iframes
-		if (popupInfo && type === 'cross-origin') {
-			iframeNode.popupType = popupInfo.popupType;
-			iframeNode.popupDescription = popupInfo.description;
-			iframeNode.suggestedAction = popupInfo.suggestedAction;
-			iframeNode.text = popupInfo.description;
-
-			// Make cross-origin popups interactive so they get highlight indices
-			// This allows the agent to know about the popup and potentially interact
-			if (rect.width > 0 && rect.height > 0 && isInViewport(iframe)) {
-				interactiveElements.push({
-					nodeId: nodeId,
-					element: iframe,
-					rect: rect,
-					isTop: true,
-					isPopup: true
-				});
-			}
-		}
 
 		return iframeNode;
 	}
@@ -878,8 +835,6 @@
 						combined.includes('consent') ||
 						combined.includes('cookie') ||
 						combined.includes('banner') ||
-						combined.includes('gsi') ||  // Google Sign-In
-						combined.includes('credential') ||
 						element.getAttribute('role') === 'dialog' ||
 						element.getAttribute('role') === 'alertdialog' ||
 						element.getAttribute('aria-modal') === 'true';

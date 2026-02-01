@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 os.environ["BROWSER_USE_LOGGING_LEVEL"] = "debug"
 os.environ["BROWSER_USE_CLOUD_SYNC"] = "false"
 os.environ["TIMEOUT_NavigateToUrlEvent"] = "60"
+os.environ["TIMEOUT_GoBackEvent"] = "30"
+os.environ["TIMEOUT_GoForwardEvent"] = "30"
 load_dotenv()
 
 from browser_use.selenium import SeleniumSession
@@ -47,8 +49,10 @@ async def main():
         )
         task = """
 Go to cnn.com.
+Close popup if any.
 Locate More Top Stories header on homepage. If scroll is needed, scroll one page each.
 Click on the first article link under this header.
+Scroll down 2 pages on the article page.
 Navigate back to homepage.
 Navigate forward to the article page.
 """
@@ -56,7 +60,7 @@ Navigate forward to the article page.
             task=task,
             llm=llm,
             browser_session=browser_session,
-            # flash_mode=True
+            flash_mode=True
         )
         
         # 5. Run the agent!

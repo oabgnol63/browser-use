@@ -1057,6 +1057,21 @@ class DOMTreeSerializer:
 					# Frame element (not interactive)
 					line = f'{depth_str}{shadow_prefix}|FRAME|<{node.original_node.tag_name}'
 				else:
+					# Non-interactive, non-scrollable element
+					# Skip rendering empty wrapper elements (like <div />, <span />) that have no meaningful attributes
+					# This reduces token count for Selenium path which extracts full DOM tree
+					# Only apply this optimization for Selenium mode (CDP has more efficient DOM extraction)
+					if is_selenium_mode:
+						tag_lower = node.original_node.tag_name.lower()
+						# Only skip common wrapper elements without meaningful content
+						skip_wrapper_tags = {'div', 'span', 'section', 'article', 'aside', 'main', 'header', 'footer', 'figure', 'figcaption', 'li', 'ul', 'ol', 'p'}
+						if tag_lower in skip_wrapper_tags and not attributes_html_str:
+							# Skip rendering empty wrapper - just process children
+							for child in node.children:
+								child_text = self.serialize_tree(child, include_attributes, depth)
+								if child_text:
+									formatted_text.append(child_text)
+							return '\n'.join(formatted_text)
 					line = f'{depth_str}{shadow_prefix}<{node.original_node.tag_name}'
 
 				if attributes_html_str:

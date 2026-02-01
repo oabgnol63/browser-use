@@ -12,6 +12,10 @@ from typing import Literal
 from selenium import webdriver
 from selenium.webdriver.remote.webdriver import WebDriver
 
+from browser_use.selenium.firefox_profile import (
+    FIREFOX_DEFAULT_PREFS,
+    FIREFOX_STEALTH_PREFS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +99,22 @@ def create_saucelabs_session(
         options.set_capability('sauce:options', sauce_options)
 
         if stealth:
-            # Apply stealth preferences for Firefox to avoid detection
-            options.set_preference('dom.webdriver.enabled', False)
-            options.set_preference('useAutomationExtension', False)
-            options.set_preference('security.webdriver_user_requires_override', True)
-            options.set_preference('privacy.resistFingerprinting', True)
+            # Apply comprehensive stealth and automation preferences for Firefox
+            # Uses centralized preferences from browser_use.browser.profile
+            for pref_name, pref_value in FIREFOX_STEALTH_PREFS.items():
+                options.set_preference(pref_name, pref_value)
+            
+            # Apply subset of default prefs that help with automation stability
+            automation_prefs = {
+                'dom.webdriver.enabled': False,  # Critical for stealth
+                'browser.tabs.warnOnClose': False,
+                'browser.tabs.warnOnCloseOtherTabs': False,
+                'browser.warnOnQuit': False,
+                'dom.disable_beforeunload': True,
+                'browser.download.manager.showWhenStarting': False,
+            }
+            for pref_name, pref_value in automation_prefs.items():
+                options.set_preference(pref_name, pref_value)
     elif browser == 'safari':
         options = webdriver.SafariOptions()
         options.browser_version = browser_version

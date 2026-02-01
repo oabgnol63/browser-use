@@ -85,13 +85,18 @@ class SeleniumBrowserSession(BrowserSession):
         await self._selenium_session.navigate(event.url)
 
     async def on_ClickElementEvent(self, event: ClickElementEvent) -> dict:
-        return await self._selenium_session.click_element(event.node)
+        # Check if element is in an iframe and use auto-handling
+        return await self._selenium_session.action_service.click_element_auto(
+            event.node, 
+            self._cached_selector_map
+        )
 
     async def on_ClickCoordinateEvent(self, event: ClickCoordinateEvent) -> dict:
         return await self._selenium_session.click_coordinates(event.coordinate_x, event.coordinate_y)
 
     async def on_TypeTextEvent(self, event: TypeTextEvent) -> dict:
-        return await self._selenium_session.action_service.type_text(
+        # Check if element is in an iframe and use auto-handling
+        return await self._selenium_session.action_service.type_text_auto(
             element_node=event.node, 
             text=event.text, 
             clear_first=event.clear
@@ -135,10 +140,12 @@ class SeleniumBrowserSession(BrowserSession):
         self,
         highlight_elements: bool = True,
         use_cache: bool = False,
+        include_iframes: bool = True,
     ) -> tuple[SerializedDOMState, dict[int, EnhancedDOMTreeNode]]:
         state, selector_map = await self._selenium_session.get_dom_state(
             highlight_elements=highlight_elements,
-            use_cache=use_cache
+            use_cache=use_cache,
+            include_iframes=include_iframes,
         )
         self._cached_selector_map = selector_map
         return state, selector_map
@@ -169,7 +176,72 @@ class SeleniumBrowserSession(BrowserSession):
 
     async def get_state(self, include_dom: bool = True, include_screenshot: bool = True) -> BrowserStateSummary:
         """Get summarized browser state."""
-        page_info = await self._selenium_session.get_page_info()
+        from browser_use.browser.views import PageInfo
+        
+        page_info_dict = await self._selenium_session.get_page_info()
+        
+        # Get detailed scroll/viewport information from Selenium
+        try:
+            scroll_info = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._selenium_session.driver.execute_script('''
+                    return {
+                        scrollX: window.scrollX || window.pageXOffset || 0,
+                        scrollY: window.scrollY || window.pageYOffset || 0,
+                        viewportWidth: window.innerWidth,
+                        viewportHeight: window.innerHeight,
+                        pageWidth: Math.max(
+                            document.body.scrollWidth || 0,
+                            document.documentElement.scrollWidth || 0
+                        ),
+                        pageHeight: Math.max(
+                            document.body.scrollHeight || 0,
+                            document.documentElement.scrollHeight || 0
+                        )
+                    };
+                ''')
+            )
+            
+            # Calculate pixels above/below viewport
+            # Convert to int since JavaScript can return float values for scroll positions
+            scroll_x = int(scroll_info['scrollX'])
+            scroll_y = int(scroll_info['scrollY'])
+            viewport_width = int(scroll_info['viewportWidth'])
+            viewport_height = int(scroll_info['viewportHeight'])
+            page_width = int(scroll_info['pageWidth'])
+            page_height = int(scroll_info['pageHeight'])
+            
+            pixels_above = scroll_y
+            pixels_below = max(0, page_height - viewport_height - scroll_y)
+            
+            page_info = PageInfo(
+                viewport_width=viewport_width,
+                viewport_height=viewport_height,
+                page_width=page_width,
+                page_height=page_height,
+                scroll_x=scroll_x,
+                scroll_y=scroll_y,
+                pixels_above=pixels_above,
+                pixels_below=pixels_below,
+                pixels_left=scroll_x,
+                pixels_right=max(0, page_width - viewport_width - scroll_x),
+            )
+        except Exception as e:
+            self.logger.debug(f'Failed to get scroll info: {e}')
+            # Fallback to default viewport dimensions
+            viewport = page_info_dict.get('viewport') or {}
+            page_info = PageInfo(
+                viewport_width=viewport.get('width', 1280) if viewport else 1280,
+                viewport_height=viewport.get('height', 720) if viewport else 720,
+                page_width=viewport.get('width', 1280) if viewport else 1280,
+                page_height=viewport.get('height', 720) if viewport else 720,
+                scroll_x=0,
+                scroll_y=0,
+                pixels_above=0,
+                pixels_below=0,
+                pixels_left=0,
+                pixels_right=0,
+            )
         
         # We need a dummy DOM state if not included
         if include_dom:
@@ -185,17 +257,18 @@ class SeleniumBrowserSession(BrowserSession):
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
 
         tab_info = TabInfo(
-            url=page_info['url'],
-            title=page_info['title'],
+            url=page_info_dict['url'],
+            title=page_info_dict['title'],
             target_id=cast(str, self.agent_focus_target_id)
         )
 
         return BrowserStateSummary(
             dom_state=dom_state,
-            url=page_info['url'],
-            title=page_info['title'],
+            url=page_info_dict['url'],
+            title=page_info_dict['title'],
             tabs=[tab_info],
             screenshot=screenshot_b64,
+            page_info=page_info,
         )
 
     # ==================== CDP Client Compatibility ====================

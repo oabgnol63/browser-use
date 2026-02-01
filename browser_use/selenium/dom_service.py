@@ -3,8 +3,14 @@ Selenium-based DOM service for Firefox and Safari browsers.
 
 This service uses Selenium's execute_script() with JavaScript injection to extract
 DOM elements, reusing the same index.js script as PlaywrightDomService.
+
+Enhanced iframe support:
+- Full cross-origin iframe DOM extraction via frame context switching
+- Selenium WebDriver bypasses Same-Origin Policy at the automation level
+- Nested iframe traversal with automatic context management
 """
 
+import asyncio
 import logging
 import time
 from importlib import resources
@@ -24,6 +30,8 @@ from browser_use.utils import time_execution_async
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
 
+from browser_use.selenium.iframe_handler import SeleniumIframeHandler, IframeInfo
+
 
 class SeleniumDomService:
     """
@@ -34,6 +42,11 @@ class SeleniumDomService:
     of the browser-use codebase.
     
     Uses the same index.js script as PlaywrightDomService for consistent DOM extraction.
+    
+    Enhanced iframe support:
+    - Full DOM extraction from ALL iframes (including cross-origin)
+    - Selenium WebDriver bypasses browser Same-Origin Policy
+    - Automatic frame context switching and restoration
     """
 
     logger: logging.Logger
@@ -47,6 +60,9 @@ class SeleniumDomService:
         self.driver = driver
         self.logger = logger or logging.getLogger(__name__)
         self.paint_order_filtering = paint_order_filtering
+        
+        # Initialize iframe handler for frame context management
+        self.iframe_handler = SeleniumIframeHandler(driver, logger=self.logger)
 
         # Load the JavaScript code for DOM extraction (same as PlaywrightDomService)
         raw_js_code = resources.files('browser_use.dom').joinpath('dom_tree_js', 'index.js').read_text(encoding='utf-8').strip()
@@ -394,6 +410,73 @@ class SeleniumDomService:
         except Exception as e:
             self.logger.warning(f'Failed to draw highlights: {e}')
 
+    async def draw_highlights_in_iframe(
+        self,
+        iframe_selector: str,
+        selector_map: dict[int, EnhancedDOMTreeNode],
+        focus_element: int = -1,
+    ) -> None:
+        """
+        Draw highlight overlays on elements inside an iframe.
+        
+        This method switches to the iframe context, draws highlights,
+        then restores the original context.
+        
+        Args:
+            iframe_selector: CSS selector for the iframe
+            selector_map: Map of selector indices to DOM nodes within the iframe
+            focus_element: Index of element to focus highlight on (-1 for none)
+        """
+        if not selector_map:
+            return
+        
+        # Save current context
+        saved_context = self.iframe_handler.get_current_context()
+        
+        try:
+            # Switch to default content first, then to the iframe
+            await self.iframe_handler.switch_to_default()
+            if not await self.iframe_handler.switch_to_frame(iframe_selector):
+                self.logger.warning(f'Could not switch to iframe for highlights: {iframe_selector}')
+                return
+            
+            # Draw highlights within the iframe context
+            await self.draw_highlights(selector_map, focus_element)
+            
+        except Exception as e:
+            self.logger.warning(f'Failed to draw highlights in iframe {iframe_selector}: {e}')
+        finally:
+            await self.iframe_handler.restore_context(saved_context)
+
+    async def clear_highlights_in_iframe(self, iframe_selector: str) -> None:
+        """Clear all highlight overlays from a specific iframe."""
+        saved_context = self.iframe_handler.get_current_context()
+        
+        try:
+            await self.iframe_handler.switch_to_default()
+            if not await self.iframe_handler.switch_to_frame(iframe_selector):
+                return
+            
+            await self.clear_highlights()
+            
+        except Exception as e:
+            self.logger.warning(f'Failed to clear highlights in iframe {iframe_selector}: {e}')
+        finally:
+            await self.iframe_handler.restore_context(saved_context)
+
+    async def clear_all_highlights(self) -> None:
+        """Clear highlight overlays from main page and all iframes."""
+        # Clear main page
+        await self.clear_highlights()
+        
+        # Get all iframes and clear highlights in each
+        try:
+            iframes = await self.iframe_handler.get_all_iframes(include_nested=True, max_depth=3)
+            for iframe in iframes:
+                await self.clear_highlights_in_iframe(iframe.selector)
+        except Exception as e:
+            self.logger.debug(f'Error clearing iframe highlights: {e}')
+
     async def clear_highlights(self) -> None:
         """Clear all highlight overlays from the page."""
         try:
@@ -524,12 +607,16 @@ class SeleniumDomService:
 
         # Handle text nodes
         if node_data.get('type') == 'TEXT_NODE':
+            # Cap text node content to 100 chars to match CDP behavior
+            text_content = node_data.get('text', '')
+            if len(text_content) > 100:
+                text_content = text_content[:100]
             return EnhancedDOMTreeNode(
                 node_id=int(node_id) if node_id.isdigit() else hash(node_id) % (10**9),
                 backend_node_id=int(node_id) if node_id.isdigit() else hash(node_id) % (10**9),
                 node_type=NodeType.TEXT_NODE,
                 node_name='#text',
-                node_value=node_data.get('text', ''),
+                node_value=text_content,
                 attributes={},
                 is_scrollable=False,
                 is_visible=node_data.get('isVisible', False),
@@ -567,7 +654,7 @@ class SeleniumDomService:
         attributes = node_data.get('attributes', {})
         if 'xpath' in node_data:
             attributes['xpath'] = node_data['xpath']
-
+        
         return EnhancedDOMTreeNode(
             node_id=int(node_id) if node_id.isdigit() else hash(node_id) % (10**9),
             backend_node_id=int(node_id) if node_id.isdigit() else hash(node_id) % (10**9),
@@ -630,3 +717,259 @@ class SeleniumDomService:
             properties=None,
             child_ids=None,
         )
+
+    # ==================== Iframe-Specific DOM Methods ====================
+
+    async def get_iframe_dom_tree(
+        self,
+        iframe_selector: str,
+        highlight_elements: bool = True,
+    ) -> tuple[EnhancedDOMTreeNode | None, dict[int, EnhancedDOMTreeNode]]:
+        """
+        Get the DOM tree for a specific same-origin iframe.
+        
+        This method switches to the iframe context, extracts the DOM,
+        and then restores the original context.
+        
+        Args:
+            iframe_selector: CSS selector or XPath for the iframe
+            highlight_elements: Whether to highlight interactive elements
+            
+        Returns:
+            Tuple of (root_node, selector_map) or (None, {}) if extraction fails
+        """
+        # Save current context
+        saved_context = self.iframe_handler.get_current_context()
+        
+        try:
+            # Switch to default content first
+            await self.iframe_handler.switch_to_default()
+            
+            # Switch to the target iframe
+            if not await self.iframe_handler.switch_to_frame(iframe_selector):
+                self.logger.warning(f'Could not switch to iframe: {iframe_selector}')
+                return None, {}
+            
+            # Extract DOM within iframe context
+            root_node, selector_map, timing = await self.get_dom_tree(
+                highlight_elements=highlight_elements,
+            )
+            
+            # Tag all nodes with iframe context info
+            for idx, node in selector_map.items():
+                node.attributes['data-iframe-selector'] = iframe_selector
+                node.frame_id = f'iframe:{iframe_selector}'
+            
+            self.logger.debug(
+                f'Extracted {len(selector_map)} elements from iframe {iframe_selector}'
+            )
+            
+            return root_node, selector_map
+            
+        except Exception as e:
+            self.logger.warning(f'Error extracting DOM from iframe {iframe_selector}: {e}')
+            return None, {}
+        finally:
+            # Restore original context
+            await self.iframe_handler.restore_context(saved_context)
+
+    async def _quick_iframe_content_check(
+        self,
+        iframe_selector: str,
+        timeout: float = 2.0,
+    ) -> bool:
+        """
+        Quick probe to check if an iframe has any interactive elements.
+        
+        This is much faster than full DOM extraction - just counts interactive elements.
+        Used to skip ad/tracking iframes that are visible but have no useful content.
+        
+        Args:
+            iframe_selector: CSS selector for the iframe
+            timeout: Maximum time to wait for the check
+            
+        Returns:
+            True if iframe has interactive elements, False otherwise
+        """
+        saved_context = self.iframe_handler.get_current_context()
+        
+        try:
+            # Switch to iframe
+            await self.iframe_handler.switch_to_default()
+            if not await self.iframe_handler.switch_to_frame(iframe_selector, timeout=timeout):
+                return False
+            
+            # Quick count of interactive elements
+            check_script = """
+                return document.querySelectorAll(
+                    'a[href], button, input, select, textarea, [role="button"], [role="link"], [onclick], [tabindex]'
+                ).length;
+            """
+            
+            count = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.driver.execute_script(check_script)
+            )
+            
+            return count > 0
+            
+        except Exception as e:
+            self.logger.debug(f'Quick content check failed for {iframe_selector}: {e}')
+            return False
+        finally:
+            await self.iframe_handler.restore_context(saved_context)
+
+    async def get_merged_dom_with_iframes(
+        self,
+        highlight_elements: bool = True,
+        max_iframes: int = 5,
+    ) -> tuple[EnhancedDOMTreeNode, dict[int, EnhancedDOMTreeNode], dict[str, IframeInfo]]:
+        """
+        Get a merged DOM tree that includes elements from ALL iframes (including cross-origin).
+        
+        This method:
+        1. Extracts the main page DOM
+        2. Identifies all iframes (Selenium can access cross-origin too)
+        3. Extracts DOM from each iframe
+        4. Merges selector maps with offset indices
+        5. Redraws highlights with correct merged indices
+        
+        Args:
+            highlight_elements: Whether to highlight interactive elements
+            max_iframes: Maximum number of iframes to process
+            
+        Returns:
+            Tuple of (main_root_node, merged_selector_map, iframe_info_map)
+        """
+        # Get main page DOM (without highlights first - we'll draw them all at the end)
+        await self.iframe_handler.switch_to_default()
+        main_root, main_selector_map, _ = await self.get_dom_tree(
+            highlight_elements=False  # Draw highlights later with correct indices
+        )
+        
+        merged_selector_map = dict(main_selector_map)
+        iframe_info_map: dict[str, IframeInfo] = {}
+        
+        # Track which elements belong to which iframe for highlight drawing
+        iframe_elements: dict[str, dict[int, EnhancedDOMTreeNode]] = {}
+        
+        # Get iframe info
+        iframes = await self.iframe_handler.get_all_iframes(
+            include_nested=True,
+            max_depth=3,
+        )
+        
+        self.logger.debug(f'Found {len(iframes)} iframes, filtering...')
+        
+        # Smart filtering: visible + reasonable size + has interactive content
+        processable_iframes: list = []
+        for iframe in iframes:
+            display_status = '✓' if iframe.is_displayed else '✗'
+            size_str = f'{iframe.size.get("width", 0)}x{iframe.size.get("height", 0)}' if iframe.size else '?x?'
+            src_preview = iframe.src[:60] if iframe.src else 'no-src'
+            
+            # Skip hidden iframes
+            if not iframe.is_displayed:
+                self.logger.debug(f'  {display_status} SKIP hidden: {iframe.selector}')
+                continue
+            
+            # Skip tiny iframes (tracking pixels)
+            width = iframe.size.get('width', 0) if iframe.size else 0
+            height = iframe.size.get('height', 0) if iframe.size else 0
+            if width < self.iframe_handler.min_iframe_width or height < self.iframe_handler.min_iframe_height:
+                self.logger.debug(f'  {display_status} SKIP tiny ({size_str}): {iframe.selector}')
+                continue
+            
+            self.logger.debug(f'  {display_status} OK ({size_str}): {iframe.selector} | {src_preview}')
+            processable_iframes.append(iframe)
+        
+        self.logger.debug(f'Processing {len(processable_iframes)} of {len(iframes)} iframes')
+        
+        # Process iframes worth interacting with
+        next_index = max(merged_selector_map.keys(), default=-1) + 1
+        
+        for iframe in processable_iframes[:max_iframes]:
+            iframe_info_map[iframe.selector] = iframe
+            
+            self.logger.debug(f'Probing iframe for interactive content: {iframe.selector}')
+            
+            try:
+                # Step 1: Quick probe - check if iframe has ANY interactive elements before full extraction
+                has_content = await self._quick_iframe_content_check(iframe.selector)
+                if not has_content:
+                    self.logger.debug(f'  -> SKIP (no interactive elements in iframe)')
+                    continue
+                
+                self.logger.debug(f'  -> Has interactive content, extracting full DOM...')
+                
+                # Step 2: Full DOM extraction with timeout
+                iframe_timeout = 5.0  # seconds per iframe
+                try:
+                    _, iframe_selector_map = await asyncio.wait_for(
+                        self.get_iframe_dom_tree(
+                            iframe.selector,
+                            highlight_elements=False,  # Draw highlights later with correct indices
+                        ),
+                        timeout=iframe_timeout
+                    )
+                except asyncio.TimeoutError:
+                    self.logger.debug(f'  -> TIMEOUT after {iframe_timeout}s extracting DOM from iframe')
+                    continue
+                
+                if not iframe_selector_map:
+                    self.logger.debug(f'  -> No interactive elements found in iframe')
+                    continue
+                
+                # Track elements for this iframe with their NEW indices
+                iframe_elements[iframe.selector] = {}
+                
+                # Merge with offset indices
+                for old_idx, node in iframe_selector_map.items():
+                    new_idx = next_index + old_idx
+                    merged_selector_map[new_idx] = node
+                    iframe_elements[iframe.selector][new_idx] = node
+                
+                next_index = max(merged_selector_map.keys(), default=next_index) + 1
+                
+                self.logger.debug(f'  -> Merged {len(iframe_selector_map)} elements (indices {min(iframe_elements[iframe.selector].keys())}-{max(iframe_elements[iframe.selector].keys())})')
+                
+            except Exception as e:
+                self.logger.debug(f'  -> ERROR: Could not merge iframe {iframe.selector}: {e}')
+        
+        # Now draw highlights with the CORRECT merged indices
+        if highlight_elements:
+            # Draw main page highlights
+            await self.iframe_handler.switch_to_default()
+            await self.draw_highlights(main_selector_map, focus_element=-1)
+            
+            # Draw iframe highlights with correct merged indices
+            for iframe_selector, elements in iframe_elements.items():
+                if elements:
+                    await self.draw_highlights_in_iframe(iframe_selector, elements, focus_element=-1)
+        
+        self.logger.info(
+            f'Merged DOM: {len(main_selector_map)} main + '
+            f'{len(merged_selector_map) - len(main_selector_map)} iframe elements'
+        )
+        
+        # Debug: Print ALL merged selector map elements
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug('==================== MERGED SELECTOR MAP (with iframes) ====================')
+            for idx in sorted(merged_selector_map.keys()):
+                node = merged_selector_map[idx]
+                tag = node.tag_name if hasattr(node, 'tag_name') else node.node_name
+                classes = node.attributes.get('class', '')[:40] if hasattr(node, 'attributes') else ''
+                iframe_src = node.attributes.get('data-iframe-selector', 'main') if hasattr(node, 'attributes') else 'main'
+                text = ''
+                if hasattr(node, 'ax_node') and node.ax_node and node.ax_node.name:
+                    text = node.ax_node.name[:50]
+                elif hasattr(node, 'node_value') and node.node_value:
+                    text = node.node_value[:50]
+                
+                # Mark iframe elements with a flag
+                iframe_marker = f' [IFRAME: {iframe_src}]' if iframe_src != 'main' else ''
+                self.logger.debug(f'  Index {idx}: {tag}.{classes} "{text}"{iframe_marker}')
+            self.logger.debug('=' * 70)
+        
+        return main_root, merged_selector_map, iframe_info_map
+

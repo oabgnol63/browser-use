@@ -3,12 +3,17 @@ Selenium-based action service for Firefox and Safari browsers.
 
 This service provides browser action handlers using Selenium WebDriver,
 replacing the CDP-based DefaultActionWatchdog for non-Chromium browsers.
+
+Enhanced iframe support:
+- Full element interaction in ANY iframe (including cross-origin)
+- Selenium WebDriver bypasses browser Same-Origin Policy at automation level
+- Automatic frame context switching with element detection
 """
 
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from browser_use.dom.views import EnhancedDOMTreeNode
 
@@ -16,13 +21,16 @@ if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
     from selenium.webdriver.remote.webelement import WebElement
 
+from browser_use.selenium.iframe_handler import SeleniumIframeHandler
+
 
 class SeleniumActionService:
     """
     Action service for Firefox and Safari browsers using Selenium WebDriver.
     
     Provides click, type, scroll, and navigation actions using standard WebDriver
-    APIs instead of CDP.
+    APIs instead of CDP. Supports full interaction with ALL iframes including
+    cross-origin frames.
     """
 
     def __init__(
@@ -32,6 +40,9 @@ class SeleniumActionService:
     ):
         self.driver = driver
         self.logger = logger or logging.getLogger(__name__)
+        
+        # Initialize iframe handler for frame context management
+        self.iframe_handler = SeleniumIframeHandler(driver, logger=self.logger)
 
     async def navigate(self, url: str, wait_until_loaded: bool = True) -> dict:
         """
@@ -381,3 +392,274 @@ class SeleniumActionService:
             return f'{self._generate_xpath(element_node.parent_node)}/{tag}[{idx}]'
 
         return f'//{tag}'
+
+    # ==================== Iframe-Specific Actions ====================
+
+    async def click_element_in_iframe(
+        self,
+        iframe_selector: str,
+        element_node: EnhancedDOMTreeNode,
+    ) -> dict:
+        """
+        Click an element within a specific iframe (including cross-origin).
+        
+        Selenium WebDriver can interact with ALL iframes regardless of origin
+        because it operates at the browser automation level, bypassing the
+        Same-Origin Policy.
+        
+        Args:
+            iframe_selector: CSS selector or XPath for the iframe
+            element_node: The DOM element to click within the iframe
+            
+        Returns:
+            Dict with click result
+        """
+        from selenium.webdriver.common.by import By
+        
+        self.logger.debug(f'Clicking element in iframe: {iframe_selector}')
+        
+        # Get element selector - use xpath if available, otherwise generate it
+        xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
+        
+        try:
+            # Switch to iframe and click - works for ALL iframes including cross-origin
+            success = await self.iframe_handler.click_in_frame(
+                iframe_selector,
+                xpath,
+                by=By.XPATH,
+            )
+            
+            is_cross_origin = element_node.attributes.get('data-iframe-type') == 'cross-origin'
+            
+            return {
+                'success': success,
+                'iframe': iframe_selector,
+                'xpath': xpath,
+                'method': 'frame-switch',
+                'cross_origin': is_cross_origin,
+            }
+            
+        except Exception as e:
+            self.logger.error(f'Failed to click in iframe: {e}')
+            raise
+
+    async def type_text_in_iframe(
+        self,
+        iframe_selector: str,
+        element_node: EnhancedDOMTreeNode | None,
+        text: str,
+        clear_first: bool = True,
+    ) -> dict:
+        """
+        Type text into an element within a specific iframe (including cross-origin).
+        
+        Selenium WebDriver can interact with ALL iframes regardless of origin.
+        
+        Args:
+            iframe_selector: CSS selector or XPath for the iframe
+            element_node: The DOM element to type into (or None for active element)
+            text: The text to type
+            clear_first: Whether to clear the field first
+            
+        Returns:
+            Dict with type result
+        """
+        from selenium.webdriver.common.by import By
+        
+        self.logger.debug(f'Typing in iframe: {iframe_selector}')
+        
+        # Type in iframe (works for both same-origin and cross-origin via Selenium)
+        if element_node:
+            xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
+            
+            success = await self.iframe_handler.type_in_frame(
+                iframe_selector,
+                xpath,
+                text,
+                clear_first=clear_first,
+                by=By.XPATH,
+            )
+        else:
+            # Type to active element in iframe
+            success = await self.iframe_handler.execute_in_frame(
+                iframe_selector,
+                f'''
+                var activeEl = document.activeElement;
+                if (activeEl) {{
+                    if ({str(clear_first).lower()}) {{
+                        activeEl.value = '';
+                    }}
+                    activeEl.value += arguments[0];
+                    return true;
+                }}
+                return false;
+                ''',
+                text,
+            )
+        
+        return {
+            'success': success,
+            'iframe': iframe_selector,
+            'text_length': len(text),
+            'method': 'same-origin-switch',
+        }
+
+    async def scroll_in_iframe(
+        self,
+        iframe_selector: str,
+        direction: str = 'down',
+        amount: int = 300,
+        element_node: EnhancedDOMTreeNode | None = None,
+    ) -> dict:
+        """
+        Scroll within a specific iframe.
+        
+        Args:
+            iframe_selector: CSS selector or XPath for the iframe
+            direction: 'up', 'down', 'left', or 'right'
+            amount: Number of pixels to scroll
+            element_node: Optional specific element to scroll within iframe
+            
+        Returns:
+            Dict with scroll result
+        """
+        self.logger.debug(f'Scrolling in iframe: {iframe_selector}')
+        
+        scroll_x = 0
+        scroll_y = 0
+        
+        if direction == 'down':
+            scroll_y = amount
+        elif direction == 'up':
+            scroll_y = -amount
+        elif direction == 'right':
+            scroll_x = amount
+        elif direction == 'left':
+            scroll_x = -amount
+        
+        if element_node:
+            xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
+            script = f'''
+                var element = document.evaluate('{xpath}', document, null, 
+                    XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                if (element) {{
+                    element.scrollBy({scroll_x}, {scroll_y});
+                    return true;
+                }}
+                return false;
+            '''
+        else:
+            script = f'window.scrollBy({scroll_x}, {scroll_y}); return true;'
+        
+        result = await self.iframe_handler.execute_in_frame(
+            iframe_selector,
+            script,
+        )
+        
+        return {
+            'success': bool(result),
+            'iframe': iframe_selector,
+            'direction': direction,
+            'amount': amount,
+        }
+
+    async def execute_script_in_iframe(
+        self,
+        iframe_selector: str,
+        script: str,
+        *args,
+    ) -> Any:
+        """
+        Execute JavaScript within a specific iframe (same-origin only).
+        
+        Args:
+            iframe_selector: CSS selector or XPath for the iframe
+            script: JavaScript code to execute
+            *args: Arguments to pass to the script
+            
+        Returns:
+            Result of the script execution
+        """
+        return await self.iframe_handler.execute_in_frame(
+            iframe_selector,
+            script,
+            *args,
+        )
+
+    def _is_element_in_iframe(self, element_node: EnhancedDOMTreeNode) -> tuple[bool, str | None]:
+        """
+        Check if an element is from an iframe and return the iframe selector.
+        
+        Args:
+            element_node: The DOM element to check
+            
+        Returns:
+            Tuple of (is_in_iframe, iframe_selector)
+        """
+        iframe_selector = element_node.attributes.get('data-iframe-selector')
+        if iframe_selector:
+            return True, iframe_selector
+        
+        frame_id = getattr(element_node, 'frame_id', None)
+        if frame_id and frame_id.startswith('iframe:'):
+            return True, frame_id[7:]  # Remove 'iframe:' prefix
+        
+        return False, None
+
+    async def click_element_auto(
+        self,
+        element_node: EnhancedDOMTreeNode,
+        selector_map: dict[int, EnhancedDOMTreeNode] | None = None,
+    ) -> dict:
+        """
+        Click an element, automatically handling iframe context.
+        
+        This method checks if the element is within an iframe and
+        automatically switches context if needed.
+        
+        Args:
+            element_node: The DOM element to click
+            selector_map: Optional selector map for index-based lookup
+            
+        Returns:
+            Dict with click result
+        """
+        is_in_iframe, iframe_selector = self._is_element_in_iframe(element_node)
+        
+        if is_in_iframe and iframe_selector:
+            return await self.click_element_in_iframe(iframe_selector, element_node)
+        else:
+            return await self.click_element(element_node, selector_map)
+
+    async def type_text_auto(
+        self,
+        element_node: EnhancedDOMTreeNode | None,
+        text: str,
+        clear_first: bool = True,
+    ) -> dict:
+        """
+        Type text into an element, automatically handling iframe context.
+        
+        Args:
+            element_node: The DOM element to type into (or None for active element)
+            text: The text to type
+            clear_first: Whether to clear the field first
+            
+        Returns:
+            Dict with type result
+        """
+        if element_node is None:
+            return await self.type_text(None, text, clear_first)
+        
+        is_in_iframe, iframe_selector = self._is_element_in_iframe(element_node)
+        
+        if is_in_iframe and iframe_selector:
+            return await self.type_text_in_iframe(
+                iframe_selector,
+                element_node,
+                text,
+                clear_first,
+            )
+        else:
+            return await self.type_text(element_node, text, clear_first)
+

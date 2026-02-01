@@ -98,6 +98,60 @@ session = await SeleniumSession.connect_to_saucelabs(
 )
 ```
 
+### Iframe Interaction
+
+The Selenium backend provides **full cross-origin iframe support** for Firefox and Safari browsers. Unlike JavaScript which is restricted by the browser's Same-Origin Policy, Selenium WebDriver operates at the browser automation level (via WebDriver protocol), allowing it to access and interact with ALL iframe content regardless of origin.
+
+```python
+from browser_use.selenium import SeleniumSession
+
+async def main():
+    session = await SeleniumSession.new_local_session(browser='firefox')
+    await session.navigate('https://example.com')
+    
+    # Get all iframes on the page (including cross-origin)
+    iframes = await session.get_all_iframes()
+    for iframe in iframes:
+        print(f"Iframe: {iframe.selector} (origin: {'cross' if iframe.is_cross_origin else 'same'})")
+    
+    # Click an element inside ANY iframe (including cross-origin)
+    await session.click_in_iframe('iframe#login', 'button#submit')
+    
+    # Type into an input field inside ANY iframe
+    await session.type_in_iframe('iframe#login', 'input#email', 'user@example.com')
+    
+    # Execute JavaScript inside ANY iframe
+    result = await session.execute_in_iframe('iframe#content', 'return document.title')
+    
+    # Get DOM state including ALL iframe content (merged selector map)
+    dom_state, selector_map, iframe_info = await session.get_dom_state_with_iframes()
+```
+
+#### Full Cross-Origin Support
+
+Selenium WebDriver bypasses the browser's Same-Origin Policy because it controls the browser at the OS/automation level:
+
+| Capability | Same-Origin | Cross-Origin |
+|------------|-------------|--------------|
+| DOM extraction | ✅ Full | ✅ Full |
+| Element clicking | ✅ By selector | ✅ By selector |
+| Text input | ✅ Full | ✅ Full |
+| JavaScript execution | ✅ Yes | ✅ Yes |
+| Screenshot | ✅ Yes | ✅ Yes |
+
+#### Handling OAuth Popups
+
+Cross-origin iframes are commonly used for OAuth (Google, Facebook, etc.). With Selenium, you have full access:
+
+```python
+# Get all iframes and interact with OAuth frames
+iframes = await session.get_all_iframes()
+for iframe in iframes:
+    if 'accounts.google.com' in iframe.src:
+        # Full DOM access to Google's OAuth iframe!
+        await session.click_in_iframe(iframe.selector, 'button[data-continue]')
+```
+
 ## Event Flow Comparison
 
 ### CDP (Chromium) Flow:
