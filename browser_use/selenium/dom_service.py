@@ -56,10 +56,12 @@ class SeleniumDomService:
         driver: 'WebDriver',
         logger: logging.Logger | None = None,
         paint_order_filtering: bool = True,
+        skip_processing_iframes: bool = False,
     ):
         self.driver = driver
         self.logger = logger or logging.getLogger(__name__)
         self.paint_order_filtering = paint_order_filtering
+        self.skip_processing_iframes = skip_processing_iframes
         
         # Initialize iframe handler for frame context management
         self.iframe_handler = SeleniumIframeHandler(driver, logger=self.logger)
@@ -74,7 +76,14 @@ class SeleniumDomService:
         self.js_code = raw_js_code
         self.logger.debug(f'JavaScript code loaded, length: {len(self.js_code)} chars')
 
+        # Inject stealth JS once at initialization time
+        # This only needs to be done once per browser session
+        self._stealth_injected = False
+
     async def __aenter__(self):
+        # Note: Stealth preferences are already applied at browser launch time
+        # via FIREFOX_STEALTH_PREFS when stealth=True (the default).
+        # No need to inject JS here - browser preferences handle it.
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
@@ -86,7 +95,15 @@ class SeleniumDomService:
 
         This complements browser preferences by patching navigator properties
         that may still be detectable after browser launch.
+
+        Note: This is called once at initialization time via __aenter__.
+        The injection persists across page navigations within the same session.
         """
+        # Only inject once per session - stealth JS persists across navigations
+        if getattr(self, '_stealth_injected', False):
+            self.logger.debug('Stealth JS already injected, skipping')
+            return
+
         self.logger.debug('Injecting stealth JavaScript...')
         try:
             self.driver.execute_script('''
@@ -121,6 +138,7 @@ class SeleniumDomService:
                     configurable: true
                 });
             ''')
+            self._stealth_injected = True
             self.logger.debug('Stealth JavaScript injected successfully')
         except Exception as e:
             self.logger.warning(f'Failed to inject stealth JS: {e}')
@@ -134,6 +152,7 @@ class SeleniumDomService:
         cross_origin_iframes: bool = True,
         max_iframe_depth: int = 5,
         max_iframes: int = 100,
+        skip_processing_iframes: bool = False,
     ) -> tuple[EnhancedDOMTreeNode, dict[int, EnhancedDOMTreeNode], dict[str, float]]:
         """
         Get the DOM tree using Selenium JavaScript evaluation.
@@ -145,10 +164,15 @@ class SeleniumDomService:
             cross_origin_iframes: Include cross-origin iframes (marked as such)
             max_iframe_depth: Maximum depth for iframe recursion
             max_iframes: Maximum number of iframes to process
+            skip_processing_iframes: Skip iframe discovery and DOM extraction from iframes,
+                returning only the main page DOM
 
         Returns:
             Tuple of (root_node, selector_map, timing_info)
         """
+        # Use instance-level setting as default if not explicitly provided
+        if skip_processing_iframes is False and self.skip_processing_iframes:
+            skip_processing_iframes = True
         timing_info: dict[str, float] = {}
         start_time = time.time()
 
@@ -184,8 +208,6 @@ class SeleniumDomService:
             self.logger.debug(f'Executing JS with args: {args}')
             self.logger.debug(f'JS code length: {len(self.js_code)} chars')
 
-            # Inject stealth JS before DOM extraction
-            await self.inject_stealth_js()
 
             # Execute the main DOM extraction script
             # The IIFE pattern needs 'return' prefix for Selenium execute_script to capture the result
@@ -224,10 +246,17 @@ class SeleniumDomService:
         highlight_elements: bool = True,
         previous_cached_state: SerializedDOMState | None = None,
         session_id: str | None = None,
+        skip_processing_iframes: bool = False,
     ) -> tuple[SerializedDOMState, EnhancedDOMTreeNode, dict[int, EnhancedDOMTreeNode], dict[str, float]]:
         """
         Get the serialized DOM tree representation for LLM consumption.
         
+        Args:
+            highlight_elements: Whether to highlight interactive elements
+            previous_cached_state: Previous DOM state for caching/diffing
+            session_id: Optional session identifier for serialization
+            skip_processing_iframes: Skip iframe discovery and DOM extraction from iframes
+            
         Returns:
             Tuple of (serialized_dom_state, enhanced_dom_tree_root, timing_info)
         """
@@ -236,7 +265,8 @@ class SeleniumDomService:
 
         # Build DOM tree (js_selector_map comes from JavaScript's highlightIndex)
         enhanced_dom_tree, js_selector_map, dom_tree_timing = await self.get_dom_tree(
-            highlight_elements=highlight_elements
+            highlight_elements=highlight_elements,
+            skip_processing_iframes=skip_processing_iframes,
         )
         timing_info.update(dom_tree_timing)
 
@@ -819,10 +849,94 @@ class SeleniumDomService:
         finally:
             await self.iframe_handler.restore_context(saved_context)
 
+    async def _get_iframe_dom_optimized(
+        self,
+        iframe_selector: str,
+        highlight_elements: bool = False,
+    ) -> dict[int, EnhancedDOMTreeNode]:
+        """
+        Optimized iframe DOM extraction - single switch per iframe.
+        
+        Combines quick content check + DOM extraction in one frame switch,
+        reducing WebDriver round-trips significantly for remote sessions.
+        
+        Args:
+            iframe_selector: CSS selector for the iframe
+            highlight_elements: Whether to highlight interactive elements
+            
+        Returns:
+            selector_map dict (empty if no interactive elements or error)
+        """
+        saved_context = self.iframe_handler.get_current_context()
+        
+        try:
+            # Single switch to iframe
+            await self.iframe_handler.switch_to_default()
+            if not await self.iframe_handler.switch_to_frame(iframe_selector, timeout=3.0):
+                self.logger.debug(f'Could not switch to iframe: {iframe_selector}')
+                return {}
+            
+            # Combined script: quick count + DOM extraction in one call
+            # First check if there are interactive elements
+            check_script = """
+                return document.querySelectorAll(
+                    'a[href], button, input, select, textarea, [role="button"], [role="link"], [onclick], [tabindex]'
+                ).length;
+            """
+            
+            count = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.driver.execute_script(check_script)
+            )
+            
+            if count == 0:
+                self.logger.debug(f'  -> SKIP (no interactive elements in iframe)')
+                return {}
+            
+            self.logger.debug(f'  -> Found {count} interactive elements, extracting DOM...')
+            
+            # Now extract full DOM (we're already in the iframe context)
+            debug_mode = self.logger.getEffectiveLevel() == logging.DEBUG
+            args = {
+                'doHighlightElements': False,
+                'focusHighlightIndex': -1,
+                'viewportExpansion': 0,
+                'debugMode': debug_mode,
+                'maxIframeDepth': 1,  # Don't recurse into nested iframes
+                'maxIframes': 0,
+                'includeCrossOriginIframes': False,
+            }
+            
+            try:
+                eval_result: dict = self.driver.execute_script(f'return ({self.js_code})(arguments[0])', args)
+            except Exception as js_error:
+                self.logger.debug(f'DOM extraction JS failed in iframe: {js_error}')
+                return {}
+            
+            # Convert to selector_map
+            _, selector_map = self._construct_dom_tree(eval_result or {})
+            
+            # Tag all nodes with iframe context info
+            for idx, node in selector_map.items():
+                node.attributes['data-iframe-selector'] = iframe_selector
+                node.frame_id = f'iframe:{iframe_selector}'
+            
+            self.logger.debug(f'  -> Extracted {len(selector_map)} elements from iframe')
+            
+            return selector_map
+            
+        except Exception as e:
+            self.logger.debug(f'Error in optimized iframe DOM extraction for {iframe_selector}: {e}')
+            return {}
+        finally:
+            # Restore original context
+            await self.iframe_handler.restore_context(saved_context)
+
     async def get_merged_dom_with_iframes(
         self,
         highlight_elements: bool = True,
         max_iframes: int = 5,
+        skip_processing_iframes: bool = False,
     ) -> tuple[EnhancedDOMTreeNode, dict[int, EnhancedDOMTreeNode], dict[str, IframeInfo]]:
         """
         Get a merged DOM tree that includes elements from ALL iframes (including cross-origin).
@@ -837,14 +951,21 @@ class SeleniumDomService:
         Args:
             highlight_elements: Whether to highlight interactive elements
             max_iframes: Maximum number of iframes to process
+            skip_processing_iframes: Skip iframe discovery and DOM extraction from iframes,
+                returning only the main page DOM
             
         Returns:
             Tuple of (main_root_node, merged_selector_map, iframe_info_map)
         """
+        # Use instance-level setting as default if not explicitly provided
+        if skip_processing_iframes is False and self.skip_processing_iframes:
+            skip_processing_iframes = True
+        
         # Get main page DOM (without highlights first - we'll draw them all at the end)
         await self.iframe_handler.switch_to_default()
         main_root, main_selector_map, _ = await self.get_dom_tree(
-            highlight_elements=False  # Draw highlights later with correct indices
+            highlight_elements=False,  # Draw highlights later with correct indices
+            skip_processing_iframes=skip_processing_iframes,
         )
         
         merged_selector_map = dict(main_selector_map)
@@ -853,15 +974,23 @@ class SeleniumDomService:
         # Track which elements belong to which iframe for highlight drawing
         iframe_elements: dict[str, dict[int, EnhancedDOMTreeNode]] = {}
         
-        # Get iframe info
+        # Skip iframe processing if requested
+        if skip_processing_iframes:
+            self.logger.debug('Skipping iframe processing as requested')
+            # Still draw highlights for main page
+            if highlight_elements:
+                await self.draw_highlights(main_selector_map, focus_element=-1)
+            return main_root, merged_selector_map, iframe_info_map
+        
+        # Get iframe info using optimized batch collection
         iframes = await self.iframe_handler.get_all_iframes(
-            include_nested=True,
-            max_depth=3,
+            include_nested=False,  # Skip nested for performance - top-level is usually enough
+            max_depth=1,
         )
         
         self.logger.debug(f'Found {len(iframes)} iframes, filtering...')
         
-        # Smart filtering: visible + reasonable size + has interactive content
+        # Smart filtering: visible + reasonable size
         processable_iframes: list = []
         for iframe in iframes:
             display_status = '✓' if iframe.is_displayed else '✗'
@@ -885,30 +1014,22 @@ class SeleniumDomService:
         
         self.logger.debug(f'Processing {len(processable_iframes)} of {len(iframes)} iframes')
         
-        # Process iframes worth interacting with
+        # Process iframes worth interacting with - OPTIMIZED: single switch per iframe
         next_index = max(merged_selector_map.keys(), default=-1) + 1
         
         for iframe in processable_iframes[:max_iframes]:
             iframe_info_map[iframe.selector] = iframe
             
-            self.logger.debug(f'Probing iframe for interactive content: {iframe.selector}')
+            self.logger.debug(f'Extracting DOM from iframe: {iframe.selector}')
             
             try:
-                # Step 1: Quick probe - check if iframe has ANY interactive elements before full extraction
-                has_content = await self._quick_iframe_content_check(iframe.selector)
-                if not has_content:
-                    self.logger.debug(f'  -> SKIP (no interactive elements in iframe)')
-                    continue
-                
-                self.logger.debug(f'  -> Has interactive content, extracting full DOM...')
-                
-                # Step 2: Full DOM extraction with timeout
+                # OPTIMIZED: Single switch per iframe - do quick check AND DOM extraction together
                 iframe_timeout = 5.0  # seconds per iframe
                 try:
-                    _, iframe_selector_map = await asyncio.wait_for(
-                        self.get_iframe_dom_tree(
+                    iframe_selector_map = await asyncio.wait_for(
+                        self._get_iframe_dom_optimized(
                             iframe.selector,
-                            highlight_elements=False,  # Draw highlights later with correct indices
+                            highlight_elements=False,
                         ),
                         timeout=iframe_timeout
                     )

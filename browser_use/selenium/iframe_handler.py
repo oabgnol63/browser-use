@@ -281,6 +281,8 @@ class SeleniumIframeHandler:
 		"""
 		Get information about all iframes on the page.
 		
+		Uses optimized batch collection to minimize WebDriver round-trips.
+		
 		Args:
 			include_nested: Whether to include nested iframes
 			max_depth: Maximum nesting depth to traverse
@@ -293,11 +295,18 @@ class SeleniumIframeHandler:
 		
 		try:
 			await self.switch_to_default()
-			iframes = await self._collect_iframes_recursive(
-				parent_selector=None,
-				current_depth=0,
-				max_depth=max_depth if include_nested else 1,
-			)
+			
+			# Use fast batch collection for top-level iframes (single JS call)
+			iframes = await self._collect_iframes_batch()
+			
+			# Only recursively collect nested iframes if requested and there are iframes
+			if include_nested and max_depth > 1 and iframes:
+				nested_iframes = await self._collect_nested_iframes_optimized(
+					top_level_iframes=iframes,
+					max_depth=max_depth,
+				)
+				iframes.extend(nested_iframes)
+			
 			return iframes
 		finally:
 			# Restore context
@@ -353,6 +362,215 @@ class SeleniumIframeHandler:
 			self.logger.warning(f'Error collecting iframes at depth {current_depth}: {e}')
 		
 		return iframes
+
+	async def _collect_iframes_batch(self) -> list[IframeInfo]:
+		"""
+		Batch-collect all top-level iframe metadata in a single JavaScript call.
+		
+		This is MUCH faster than iterating through iframes one by one, especially
+		over remote connections like SauceLabs where each WebDriver call has latency.
+		
+		Returns:
+			List of IframeInfo objects for all top-level iframes
+		"""
+		try:
+			# Single JavaScript call to collect ALL iframe metadata at once
+			batch_script = '''
+				const iframes = document.querySelectorAll('iframe');
+				const results = [];
+				
+				for (let i = 0; i < iframes.length; i++) {
+					const iframe = iframes[i];
+					const rect = iframe.getBoundingClientRect();
+					
+					// Get computed style to check visibility
+					const style = window.getComputedStyle(iframe);
+					const isVisible = style.display !== 'none' && 
+					                  style.visibility !== 'hidden' && 
+					                  rect.width > 0 && 
+					                  rect.height > 0;
+					
+					results.push({
+						index: i,
+						src: iframe.src || '',
+						name: iframe.name || '',
+						id: iframe.id || '',
+						className: iframe.className || '',
+						title: iframe.title || '',
+						x: Math.round(rect.x),
+						y: Math.round(rect.y),
+						width: Math.round(rect.width),
+						height: Math.round(rect.height),
+						isDisplayed: isVisible
+					});
+				}
+				
+				return results;
+			'''
+			
+			iframe_data_list = await asyncio.get_event_loop().run_in_executor(
+				None,
+				lambda: self.driver.execute_script(batch_script)
+			)
+			
+			if not iframe_data_list:
+				return []
+			
+			# Convert to IframeInfo objects
+			iframes: list[IframeInfo] = []
+			current_url = self.driver.current_url
+			
+			for data in iframe_data_list:
+				# Determine if cross-origin
+				iframe_src = data.get('src', '')
+				is_cross_origin = self._check_cross_origin_from_url(current_url, iframe_src)
+				
+				# Build selector
+				attrs = {
+					'id': data.get('id', ''),
+					'name': data.get('name', ''),
+					'title': data.get('title', ''),
+					'class': data.get('className', ''),
+					'src': iframe_src,
+				}
+				selector = self._build_selector_for_element(attrs, data.get('index', 0))
+				
+				info = IframeInfo(
+					selector=selector,
+					index=data.get('index', 0),
+					src=iframe_src,
+					name=data.get('name', ''),
+					id=data.get('id', ''),
+					is_cross_origin=is_cross_origin,
+					location={'x': data.get('x', 0), 'y': data.get('y', 0)},
+					size={'width': data.get('width', 0), 'height': data.get('height', 0)},
+					is_displayed=data.get('isDisplayed', False),
+					depth=0,
+					parent_selector=None,
+				)
+				iframes.append(info)
+			
+			self.logger.debug(f'Batch-collected {len(iframes)} top-level iframes in single JS call')
+			return iframes
+			
+		except Exception as e:
+			self.logger.warning(f'Error in batch iframe collection: {e}')
+			# Fallback to old method
+			return await self._collect_iframes_recursive(
+				parent_selector=None,
+				current_depth=0,
+				max_depth=1,
+			)
+
+	async def _collect_nested_iframes_optimized(
+		self,
+		top_level_iframes: list[IframeInfo],
+		max_depth: int,
+	) -> list[IframeInfo]:
+		"""
+		Collect nested iframes with optimized batch processing per level.
+		
+		Instead of switching in/out of each iframe individually, this method:
+		1. Switches to each processable iframe once
+		2. Batch-collects ALL nested iframes in that frame via JS
+		3. Switches back and continues
+		
+		This reduces WebDriver round-trips significantly.
+		
+		Args:
+			top_level_iframes: List of top-level IframeInfo objects
+			max_depth: Maximum nesting depth to traverse
+			
+		Returns:
+			List of nested IframeInfo objects (does not include top-level)
+		"""
+		all_nested: list[IframeInfo] = []
+		
+		# Filter to only processable iframes (visible, reasonable size)
+		processable = [
+			iframe for iframe in top_level_iframes
+			if iframe.is_displayed
+			and iframe.size.get('width', 0) >= self.min_iframe_width
+			and iframe.size.get('height', 0) >= self.min_iframe_height
+		]
+		
+		if not processable:
+			return all_nested
+		
+		# Process each level
+		current_level = processable
+		current_depth = 1
+		
+		while current_level and current_depth < max_depth:
+			next_level: list[IframeInfo] = []
+			
+			for iframe in current_level:
+				try:
+					# Switch to this iframe
+					await self.switch_to_default()
+					
+					# Navigate to parent iframes first if nested
+					if iframe.parent_selector:
+						# This is a nested iframe, need to switch through parent chain
+						parent_chain = self._get_parent_chain(iframe)
+						for parent_selector in parent_chain:
+							if not await self.switch_to_frame(parent_selector, timeout=2.0):
+								self.logger.debug(f'Could not switch to parent {parent_selector}')
+								continue
+					
+					if not await self.switch_to_frame(iframe.selector, timeout=2.0):
+						self.logger.debug(f'Could not switch to iframe {iframe.selector} for nested collection')
+						continue
+					
+					# Batch-collect nested iframes in this frame
+					nested_in_frame = await self._collect_iframes_batch()
+					
+					# Update depth and parent info for nested iframes
+					for nested in nested_in_frame:
+						nested.depth = current_depth
+						nested.parent_selector = self._build_iframe_selector(iframe)
+						all_nested.append(nested)
+						next_level.append(nested)
+					
+				except Exception as e:
+					self.logger.debug(f'Error collecting nested iframes from {iframe.selector}: {e}')
+					continue
+			
+			current_level = next_level
+			current_depth += 1
+		
+		# Return to default content
+		await self.switch_to_default()
+		
+		self.logger.debug(f'Collected {len(all_nested)} nested iframes up to depth {max_depth}')
+		return all_nested
+
+	def _get_parent_chain(self, iframe: IframeInfo) -> list[str]:
+		"""Get the chain of parent iframe selectors for a nested iframe."""
+		if not iframe.parent_selector:
+			return []
+		
+		# Split the parent selector chain (e.g., "iframe#outer > iframe#inner")
+		# This is a simplified approach - full implementation would track the actual chain
+		parts = iframe.parent_selector.split(' > ')
+		return parts
+
+	def _check_cross_origin_from_url(self, current_url: str, iframe_src: str) -> bool:
+		"""Check if iframe src is cross-origin based on URL comparison."""
+		if not iframe_src or iframe_src.startswith('about:') or iframe_src.startswith('javascript:'):
+			return False
+		
+		try:
+			from urllib.parse import urlparse
+			current_origin = urlparse(current_url)
+			iframe_origin = urlparse(iframe_src)
+			
+			return (
+				current_origin.scheme != iframe_origin.scheme or
+				current_origin.netloc != iframe_origin.netloc
+			)
+		except Exception:
+			return True
 
 	async def _get_iframe_info(
 		self,

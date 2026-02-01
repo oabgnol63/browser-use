@@ -1,5 +1,5 @@
 """
-Verification test for unified Agent with SeleniumBrowserSession.
+Verification test for unified Agent with SeleniumBrowserSession on Sauce Labs.
 """
 
 import asyncio
@@ -12,6 +12,8 @@ os.environ["BROWSER_USE_CLOUD_SYNC"] = "false"
 os.environ["TIMEOUT_NavigateToUrlEvent"] = "60"
 os.environ["TIMEOUT_GoBackEvent"] = "30"
 os.environ["TIMEOUT_GoForwardEvent"] = "30"
+os.environ["TIMEOUT_ScreenshotEvent"] = "120"
+os.environ["TIMEOUT_BrowserStateRequestEvent"] = "180"
 load_dotenv()
 
 from browser_use.selenium import SeleniumSession
@@ -21,11 +23,29 @@ from browser_use import ChatOpenAI
 
 
 async def main():
-    # 1. Start a local Selenium session (Firefox)
-    print("Starting Firefox via Selenium...")
-    selenium_session = await SeleniumSession.new_local_session(
+    # 1. Create a Sauce Labs remote session (Firefox)
+    print("Creating Sauce Labs session (Firefox)...")
+    
+    # Check for credentials
+    username = os.environ.get('SAUCE_USERNAME') or os.environ.get('SAUCELABS_USERNAME')
+    access_key = os.environ.get('SAUCE_ACCESS_KEY') or os.environ.get('SAUCELABS_PRIVATEKEY')
+    
+    if not username or not access_key:
+        raise ValueError(
+            "Sauce Labs credentials not found. Set SAUCE_USERNAME/SAUCE_ACCESS_KEY "
+            "or SAUCELABS_USERNAME/SAUCELABS_PRIVATEKEY environment variables."
+        )
+    
+    # Create a new Sauce Labs session using the SeleniumSession class method
+    selenium_session = await SeleniumSession.new_saucelabs_session(
         browser='firefox',
-        headless=False
+        browser_version='latest',
+        platform='Windows 10',
+        test_name='browser-use-unified-test',
+        region='us-west',
+        username=username,
+        access_key=access_key,
+        stealth=True,
     )
     
     # 2. Wrap it in the event-driven SeleniumBrowserSession
@@ -64,7 +84,7 @@ Navigate forward to the article page.
         )
         
         # 5. Run the agent!
-        print("Running unified agent...")
+        print("Running unified agent on Sauce Labs...")
         
         result = await agent.run()
         
@@ -75,6 +95,7 @@ Navigate forward to the article page.
         # Close the Selenium session
         await selenium_session.close()
         print("Done.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -55,6 +55,7 @@ class SeleniumSession:
         self,
         driver: 'WebDriver',
         logger: logging.Logger | None = None,
+        skip_processing_iframes: bool = False,
     ):
         """
         Initialize a SeleniumSession with an existing WebDriver.
@@ -62,12 +63,19 @@ class SeleniumSession:
         Args:
             driver: Selenium WebDriver instance
             logger: Optional logger
+            skip_processing_iframes: Skip iframe discovery and DOM extraction from iframes,
+                returning only the main page DOM
         """
         self.driver = driver
         self.logger = logger or logging.getLogger(__name__)
+        self.skip_processing_iframes = skip_processing_iframes
         
         # Initialize services
-        self.dom_service = SeleniumDomService(driver, logger=self.logger)
+        self.dom_service = SeleniumDomService(
+            driver,
+            logger=self.logger,
+            skip_processing_iframes=skip_processing_iframes,
+        )
         self.action_service = SeleniumActionService(driver, logger=self.logger)
         
         # Initialize shared iframe handler (used by both services)
@@ -235,6 +243,7 @@ class SeleniumSession:
         highlight_elements: bool = True,
         use_cache: bool = False,
         include_iframes: bool = True,
+        skip_processing_iframes: bool = False,
     ) -> tuple[SerializedDOMState, dict[int, EnhancedDOMTreeNode]]:
         """
         Get the current DOM state, optionally including iframe content.
@@ -243,6 +252,8 @@ class SeleniumSession:
             highlight_elements: Whether to highlight interactive elements
             use_cache: Whether to return cached state if available
             include_iframes: Whether to include elements from iframes (default True)
+            skip_processing_iframes: Skip iframe discovery and DOM extraction from iframes,
+                returning only the main page DOM. Overrides include_iframes when True.
             
         Returns:
             Tuple of (serialized_dom_state, selector_map)
@@ -250,11 +261,15 @@ class SeleniumSession:
         if use_cache and self._cached_dom_state:
             return self._cached_dom_state, self._selector_map
         
-        if include_iframes:
+        # Use instance-level setting as default if not explicitly provided
+        effective_skip_iframes = skip_processing_iframes or self.skip_processing_iframes
+        
+        if include_iframes and not effective_skip_iframes:
             # Use iframe-aware extraction that merges all iframe content
             main_root, merged_selector_map, iframe_info = await self.dom_service.get_merged_dom_with_iframes(
                 highlight_elements=highlight_elements,
                 max_iframes=5,
+                skip_processing_iframes=effective_skip_iframes,
             )
             
             # Update iframe info cache
@@ -279,10 +294,11 @@ class SeleniumSession:
             
             self.logger.debug(f'DOM state with iframes: {len(selector_map)} interactive elements')
         else:
-            # Get main page only
+            # Get main page only (or when skipping iframes is requested)
             serialized_state, _, selector_map, timing = await self.dom_service.get_serialized_dom_tree(
                 highlight_elements=highlight_elements,
                 previous_cached_state=self._cached_dom_state,
+                skip_processing_iframes=effective_skip_iframes,
             )
         
         # Update selector map and cache

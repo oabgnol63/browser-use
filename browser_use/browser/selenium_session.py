@@ -141,11 +141,26 @@ class SeleniumBrowserSession(BrowserSession):
         highlight_elements: bool = True,
         use_cache: bool = False,
         include_iframes: bool = True,
+        skip_processing_iframes: bool = False,
     ) -> tuple[SerializedDOMState, dict[int, EnhancedDOMTreeNode]]:
+        """
+        Get the current DOM state from the Selenium session.
+        
+        Args:
+            highlight_elements: Whether to highlight interactive elements
+            use_cache: Whether to return cached state if available
+            include_iframes: Whether to include elements from iframes (default True)
+            skip_processing_iframes: Skip iframe discovery and DOM extraction from iframes,
+                returning only the main page DOM
+            
+        Returns:
+            Tuple of (serialized_dom_state, selector_map)
+        """
         state, selector_map = await self._selenium_session.get_dom_state(
             highlight_elements=highlight_elements,
             use_cache=use_cache,
             include_iframes=include_iframes,
+            skip_processing_iframes=skip_processing_iframes,
         )
         self._cached_selector_map = selector_map
         return state, selector_map
