@@ -72,7 +72,7 @@ Go to cnn.com.
 Close popup if any.
 Locate More Top Stories header on homepage. If scroll is needed, scroll one page each.
 Click on the first article link under this header.
-Scroll down 2 pages on the article page.
+Summarize the content in less than 200 words.
 Navigate back to homepage.
 Navigate forward to the article page.
 """
@@ -80,7 +80,7 @@ Navigate forward to the article page.
             task=task,
             llm=llm,
             browser_session=browser_session,
-            flash_mode=True
+            # flash_mode=True
         )
         
         # 5. Run the agent!

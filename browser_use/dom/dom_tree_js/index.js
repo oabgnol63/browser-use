@@ -23,8 +23,12 @@
 		debugMode = false,
 		maxIframeDepth = 5,
 		maxIframes = 100,
-		includeCrossOriginIframes = true
+		includeCrossOriginIframes = true,
+		compactMode = false  // When true, only return interactive nodes + ancestors
 	} = args || {};
+
+	// Track parent relationships for compact mode
+	const nodeParentMap = {};  // nodeId -> parentId
 
 	// Performance tracking
 	const perfMetrics = {
@@ -112,17 +116,37 @@
 
 	/**
 	 * Check if an element is visible in the viewport
+	 * Enhanced to detect elements hidden via offsetParent, pointer-events, and visibility:collapse
 	 */
 	function isElementVisible(element) {
 		if (!element || !element.getBoundingClientRect) return false;
 
 		const style = window.getComputedStyle(element);
-		if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+		if (style.display === 'none' ||
+			style.visibility === 'hidden' ||
+			style.visibility === 'collapse' ||
+			style.opacity === '0') {
 			return false;
 		}
 
 		const rect = element.getBoundingClientRect();
 		if (rect.width === 0 && rect.height === 0) {
+			return false;
+		}
+
+		// Check offsetParent - if null, element is not in layout
+		// Exception: body, html, and fixed/sticky positioned elements can have null offsetParent
+		if (element.offsetParent === null &&
+			element !== document.body &&
+			element !== document.documentElement) {
+			const position = style.position;
+			if (position !== 'fixed' && position !== 'sticky') {
+				return false;
+			}
+		}
+
+		// Check pointer-events - elements with pointer-events:none are not truly interactive
+		if (style.pointerEvents === 'none') {
 			return false;
 		}
 
@@ -514,6 +538,7 @@
 				isVisible: isVisible,
 				children: []
 			};
+			nodeParentMap[nodeId] = parentId;
 
 			perfMetrics.nodeMetrics.processedNodes++;
 			return nodeId;
@@ -624,6 +649,7 @@
 		};
 
 		nodeMap[nodeId] = nodeData;
+		nodeParentMap[nodeId] = parentId;
 		perfMetrics.nodeMetrics.processedNodes++;
 
 		return nodeId;
@@ -1120,8 +1146,48 @@
 			});
 		}
 
+		// Build compact nodeMap if compactMode is enabled
+		let finalNodeMap = nodeMap;
+		if (compactMode) {
+			const essentialNodeIds = new Set();
+
+			// Add root node
+			essentialNodeIds.add(rootId);
+
+			// Add all interactive elements and their ancestors
+			for (const item of filteredInteractive) {
+				let currentId = item.nodeId;
+				while (currentId != null) {
+					essentialNodeIds.add(currentId);
+					currentId = nodeParentMap[currentId];
+				}
+			}
+
+			// Add iframe nodes
+			for (const iframe of iframeNodes) {
+				essentialNodeIds.add(iframe.nodeId);
+			}
+
+			// Filter nodeMap to only essential nodes
+			finalNodeMap = {};
+			for (const nodeId of essentialNodeIds) {
+				if (nodeMap[nodeId]) {
+					// Clone the node and filter children to only include essential ones
+					const node = { ...nodeMap[nodeId] };
+					if (node.children && node.children.length > 0) {
+						node.children = node.children.filter(childId => essentialNodeIds.has(childId));
+					}
+					finalNodeMap[nodeId] = node;
+				}
+			}
+
+			if (debugMode) {
+				console.log(`[Browser-Use DOM] Compact mode: reduced ${Object.keys(nodeMap).length} nodes to ${Object.keys(finalNodeMap).length} essential nodes`);
+			}
+		}
+
 		return {
-			map: nodeMap,
+			map: finalNodeMap,
 			rootId: rootId,
 			iframeNodes: iframeNodes,
 			popupContainers: popupContainers.map(p => ({
@@ -1136,7 +1202,8 @@
 					height: p.rect.height
 				}
 			})),
-			perfMetrics: perfMetrics
+			perfMetrics: perfMetrics,
+			compactMode: compactMode
 		};
 
 	} catch (error) {

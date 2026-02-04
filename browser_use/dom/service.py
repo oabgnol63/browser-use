@@ -138,8 +138,13 @@ class DomService:
 		display = computed_styles.get('display', '').lower()
 		visibility = computed_styles.get('visibility', '').lower()
 		opacity = computed_styles.get('opacity', '1')
+		pointer_events = computed_styles.get('pointer-events', '').lower()
 
-		if display == 'none' or visibility == 'hidden':
+		if display == 'none' or visibility == 'hidden' or visibility == 'collapse':
+			return False
+
+		# Elements with pointer-events:none are not truly interactive
+		if pointer_events == 'none':
 			return False
 
 		try:

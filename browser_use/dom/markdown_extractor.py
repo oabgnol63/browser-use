@@ -46,19 +46,38 @@ async def extract_clean_markdown(
 		# Browser session path (tools service)
 		enhanced_dom_tree = await _get_enhanced_dom_tree_from_browser_session(browser_session)
 		current_url = await browser_session.get_current_page_url()
-		method = 'enhanced_dom_tree'
+		
+		# Special handling for Selenium sessions with compact mode
+		# Use page_source directly for full content extraction
+		if enhanced_dom_tree is None:
+			# Get page HTML directly from Selenium driver
+			selenium_session = getattr(browser_session, '_selenium_session', None)
+			if selenium_session and hasattr(selenium_session, 'driver'):
+				raw_html = selenium_session.driver.page_source
+				# Pre-strip style and script tags - page_source includes all CSS/JS
+				# which can overwhelm the markdown extractor with styling variables
+				page_html = re.sub(r'<style[^>]*>.*?</style>', '', raw_html, flags=re.DOTALL | re.IGNORECASE)
+				page_html = re.sub(r'<script[^>]*>.*?</script>', '', page_html, flags=re.DOTALL | re.IGNORECASE)
+				# Also strip <head> section which contains meta/links/title but not body content
+				page_html = re.sub(r'<head[^>]*>.*?</head>', '', page_html, flags=re.DOTALL | re.IGNORECASE)
+				method = 'selenium_page_source'
+			else:
+				raise AssertionError('Selenium session not available for direct extraction')
+		else:
+			# Use the HTML serializer with the enhanced DOM tree (CDP path)
+			html_serializer = HTMLSerializer(extract_links=extract_links)
+			page_html = html_serializer.serialize(enhanced_dom_tree)
+			method = 'enhanced_dom_tree'
 	elif dom_service is not None and target_id is not None:
 		# DOM service path (page actor)
 		# Lazy fetch all_frames inside get_dom_tree if needed (for cross-origin iframes)
 		enhanced_dom_tree, _ = await dom_service.get_dom_tree(target_id=target_id, all_frames=None)
 		current_url = None  # Not available via DOM service
+		html_serializer = HTMLSerializer(extract_links=extract_links)
+		page_html = html_serializer.serialize(enhanced_dom_tree)
 		method = 'dom_service'
 	else:
 		raise ValueError('Must provide either browser_session or both dom_service and target_id')
-
-	# Use the HTML serializer with the enhanced DOM tree
-	html_serializer = HTMLSerializer(extract_links=extract_links)
-	page_html = html_serializer.serialize(enhanced_dom_tree)
 
 	original_html_length = len(page_html)
 
@@ -110,7 +129,16 @@ async def _get_enhanced_dom_tree_from_browser_session(browser_session: 'BrowserS
 
 	Attempts to use DOMWatchdog if available (CDP sessions), or falls back
 	to the public state summary API (Selenium or other sessions).
+	
+	For Selenium sessions with compact_mode enabled, returns None to signal
+	that the caller should use direct HTML extraction instead.
 	"""
+	# Check if this is a Selenium session - if so, return the page source directly
+	# This avoids the compact DOM tree issue where text content is missing
+	if hasattr(browser_session, '_selenium_session') and browser_session._selenium_session is not None:
+		# Return None to signal caller to use direct HTML extraction
+		return None
+	
 	# Try to use the internal watchdog if available (CDP-based sessions)
 	# This avoids an expensive state request if we already have a cached tree
 	dom_watchdog: DOMWatchdog | None = getattr(browser_session, '_dom_watchdog', None)

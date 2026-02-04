@@ -57,11 +57,13 @@ class SeleniumDomService:
         logger: logging.Logger | None = None,
         paint_order_filtering: bool = True,
         skip_processing_iframes: bool = False,
+        compact_mode: bool = True,  # Default True for Selenium to reduce data transfer
     ):
         self.driver = driver
         self.logger = logger or logging.getLogger(__name__)
         self.paint_order_filtering = paint_order_filtering
         self.skip_processing_iframes = skip_processing_iframes
+        self.compact_mode = compact_mode
         
         # Initialize iframe handler for frame context management
         self.iframe_handler = SeleniumIframeHandler(driver, logger=self.logger)
@@ -194,6 +196,7 @@ class SeleniumDomService:
             'maxIframeDepth': max_iframe_depth,
             'maxIframes': max_iframes,
             'includeCrossOriginIframes': cross_origin_iframes,
+            'compactMode': self.compact_mode,  # Reduce data transfer by only returning essential nodes
         }
 
         try:
