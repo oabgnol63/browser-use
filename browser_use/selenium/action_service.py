@@ -343,27 +343,40 @@ class SeleniumActionService:
         self.logger.warning(f'Page load timeout after {timeout}s')
 
     def _generate_xpath(self, element_node: EnhancedDOMTreeNode) -> str:
-        """Generate an XPath for an element from its attributes."""
+        """Generate an XPath for an element from its attributes or DOM structure.
+        
+        Priority order:
+        1. Use ID if available (unique identifier)
+        2. Use existing xpath attribute if available (from JS extraction in non-compact mode)
+        3. Use the node's xpath property (hierarchical path with sibling positions)
+        4. Fall back to attribute-based xpath for edge cases
+        """
         attrs = element_node.attributes
         tag = element_node.node_name.lower()
         
-        # Try ID first
+        # Try ID first - IDs should be unique on a page
         if 'id' in attrs and attrs['id']:
             return f'//*[@id="{attrs["id"]}"]'
         
-        # Try existing xpath attribute
+        # Try existing xpath attribute (from JavaScript DOM extraction in non-compact mode)
         if 'xpath' in attrs:
             return attrs['xpath']
         
-        # Build xpath from attributes
+        # Use the node's hierarchical xpath property - this generates a unique path
+        # like "/html/body/div[1]/section[2]/a[1]" based on DOM structure
+        if element_node.parent_node:
+            hierarchical_xpath = element_node.xpath
+            if hierarchical_xpath:
+                # Prepend '//' to make it an absolute xpath from document root
+                return f'//{hierarchical_xpath}'
+        
+        # Fallback: build xpath from unique attributes (data-testid, name, etc.)
         predicates = []
         
-        if 'class' in attrs and attrs['class']:
-            # Use starts-with or specific class if possible
-            classes = attrs['class'].split()
-            if classes:
-                predicates.append(f'contains(@class, "{classes[0]}")')
-        
+        # Prefer unique identifiers first
+        if 'data-testid' in attrs:
+            return f'//{tag}[@data-testid="{attrs["data-testid"]}"]'
+            
         if 'name' in attrs:
             predicates.append(f'@name="{attrs["name"]}"')
         
@@ -372,25 +385,16 @@ class SeleniumActionService:
             
         if 'role' in attrs:
             predicates.append(f'@role="{attrs["role"]}"')
-            
-        if 'data-testid' in attrs:
-            predicates.append(f'@data-testid="{attrs["data-testid"]}"')
+        
+        # Only use class as last resort since it often matches multiple elements
+        if not predicates and 'class' in attrs and attrs['class']:
+            classes = attrs['class'].split()
+            if classes:
+                predicates.append(f'contains(@class, "{classes[0]}")')
         
         if predicates:
             return f'//{tag}[{" and ".join(predicates)}]'
         
-        # Super generic fallback - hierarchical but might be brittle
-        if element_node.parent_node:
-            idx = 1
-            if element_node.parent_node.children_nodes:
-                siblings = [c for c in element_node.parent_node.children_nodes if c.node_name == element_node.node_name]
-                if len(siblings) > 1:
-                    try:
-                        idx = siblings.index(element_node) + 1
-                    except ValueError:
-                        pass
-            return f'{self._generate_xpath(element_node.parent_node)}/{tag}[{idx}]'
-
         return f'//{tag}'
 
     # ==================== Iframe-Specific Actions ====================

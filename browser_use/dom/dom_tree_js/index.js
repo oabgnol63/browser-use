@@ -628,10 +628,16 @@
 			isActuallyScrollable = allowsScroll || isRootElement;
 		}
 
+		// Always include xpath for interactive elements (needed for reliable Selenium clicks)
+		// In compact mode, only generate xpath for elements that will get a highlightIndex
+		// Note: currentHighlightIndex is -1 at this point (temporary placeholder),
+		// it gets updated after sorting. Use isInteractive check instead.
+		const shouldIncludeXpath = !compactMode || (compactMode && isInteractive && isVisible);
+		
 		const nodeData = {
 			tagName: node.tagName.toLowerCase(),
 			attributes: getElementAttributes(node),
-			xpath: getXPath(node),
+			xpath: shouldIncludeXpath ? getXPath(node) : undefined,
 			isVisible: isVisible,
 			isInteractive: isInteractive,
 			isTopElement: isTop,

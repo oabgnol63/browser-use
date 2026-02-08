@@ -134,7 +134,7 @@ class SeleniumSession:
             )
         )
 
-        _logger.info(f'SauceLabs session created: {driver.session_id}')
+        # _logger.info(f'SauceLabs session created: {driver.session_id}')
         return cls(driver, logger=_logger)
 
     @classmethod
@@ -172,7 +172,7 @@ class SeleniumSession:
             )
         )
         
-        _logger.info('Connected to SauceLabs session')
+        # _logger.info('Connected to SauceLabs session')
         return cls(driver, logger=_logger)
 
     @classmethod
@@ -573,74 +573,24 @@ class SeleniumSession:
             Configured FirefoxOptions
         """
         from selenium import webdriver
+        from browser_use.selenium.firefox_profile import apply_firefox_preferences
 
         options = webdriver.FirefoxOptions()
         if headless:
             options.add_argument('--headless')
 
-        # Suppress notifications and first-run dialogs
-        options.set_preference('dom.webnotifications.enabled', False)
-        options.set_preference('toolkit.telemetry.reportingpolicy.firstRun', False)
-        options.set_preference('browser.shell.checkDefaultBrowser', False)
-        options.set_preference('browser.startup.homepage_override.mstone', 'ignore')
-
-        if stealth:
-            # Hide WebDriver detection
-            options.set_preference('dom.webdriver.enabled', False)
-            options.set_preference('useAutomationExtension', False)
-
-            # Disable navigator.webdriver flag
-            options.set_preference('marionette.actors.enabled', True)
-
-            # General privacy settings (avoid fingerprinting detection)
-            options.set_preference('privacy.trackingprotection.enabled', False)
-            options.set_preference('network.http.sendRefererHeader', 2)
-            options.set_preference('general.useragent.override', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0')
-
-            # Disable telemetry that might flag automation
-            options.set_preference('toolkit.telemetry.enabled', False)
-            options.set_preference('datareporting.healthreport.uploadEnabled', False)
-            options.set_preference('datareporting.policy.dataSubmissionEnabled', False)
-
-            # Media/WebRTC settings
-            options.set_preference('media.peerconnection.enabled', False)
-            options.set_preference('media.navigator.enabled', False)
-
-            # Geolocation
-            options.set_preference('geo.enabled', False)
-
-        # Disable DRM/Widevine CDM download popup ("Firefox is installing components...")
-        options.set_preference('media.eme.enabled', False)
-        options.set_preference('media.gmp-manager.updateEnabled', False)
-        options.set_preference('media.gmp-widevinecdm.enabled', False)
-        options.set_preference('media.gmp-widevinecdm.visible', False)
-        options.set_preference('media.gmp-gmpopenh264.enabled', False)
+        # Apply standardized preferences
+        apply_firefox_preferences(
+            options,
+            include_default=True,
+            include_stealth=stealth,
+            additional_prefs={
+                # Additional session-specific overrides can go here if needed
+                'media.peerconnection.enabled': False,  # Strict WebRTC blocking for local session
+            }
+        )
 
         return options
-
-    @staticmethod
-    def _make_firefox_capabilities(stealth: bool = True) -> dict:
-        """
-        Create Firefox capabilities for SauceLabs with stealth settings.
-
-        Args:
-            stealth: Whether to apply stealth preferences
-
-        Returns:
-            Capabilities dict for SauceLabs
-        """
-        caps = {
-            'browserName': 'firefox',
-            'moz:firefoxOptions': {
-                'prefs': {
-                    'dom.webdriver.enabled': False,
-                    'useAutomationExtension': False,
-                    'security.webdriver_user_requires_override': True,
-                    'privacy.resistFingerprinting': stealth,
-                }
-            }
-        }
-        return caps
 
     # ==================== Session Management ====================
 

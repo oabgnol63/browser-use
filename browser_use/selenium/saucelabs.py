@@ -12,10 +12,7 @@ from typing import Literal
 from selenium import webdriver
 from selenium.webdriver.remote.webdriver import WebDriver
 
-from browser_use.selenium.firefox_profile import (
-    FIREFOX_DEFAULT_PREFS,
-    FIREFOX_STEALTH_PREFS,
-)
+from browser_use.selenium.firefox_profile import apply_firefox_preferences
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +87,8 @@ def create_saucelabs_session(
         'accessKey': access_key,
         'name': test_name,
         'build': 'browser-use',
+        'idleTimeout': 300,
+        'maxDuration': 1800,
     }
     
     if browser == 'firefox':
@@ -98,23 +97,12 @@ def create_saucelabs_session(
         options.platform_name = platform
         options.set_capability('sauce:options', sauce_options)
 
-        if stealth:
-            # Apply comprehensive stealth and automation preferences for Firefox
-            # Uses centralized preferences from browser_use.browser.profile
-            for pref_name, pref_value in FIREFOX_STEALTH_PREFS.items():
-                options.set_preference(pref_name, pref_value)
-            
-            # Apply subset of default prefs that help with automation stability
-            automation_prefs = {
-                'dom.webdriver.enabled': False,  # Critical for stealth
-                'browser.tabs.warnOnClose': False,
-                'browser.tabs.warnOnCloseOtherTabs': False,
-                'browser.warnOnQuit': False,
-                'dom.disable_beforeunload': True,
-                'browser.download.manager.showWhenStarting': False,
-            }
-            for pref_name, pref_value in automation_prefs.items():
-                options.set_preference(pref_name, pref_value)
+        # Apply preferences
+        apply_firefox_preferences(
+            options,
+            include_default=True,
+            include_stealth=stealth,
+        )
     elif browser == 'safari':
         options = webdriver.SafariOptions()
         options.browser_version = browser_version

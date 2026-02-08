@@ -38,9 +38,9 @@ async def main():
     
     # Create a new Sauce Labs session using the SeleniumSession class method
     selenium_session = await SeleniumSession.new_saucelabs_session(
-        browser='firefox',
+        browser='safari',
         browser_version='latest',
-        platform='Windows 10',
+        platform='macOS 13',
         test_name='browser-use-unified-test',
         region='us-west',
         username=username,
@@ -93,7 +93,7 @@ Navigate forward to the article page.
         
     finally:
         # Close the Selenium session
-        await selenium_session.close()
+        # await selenium_session.close()
         print("Done.")
 
 

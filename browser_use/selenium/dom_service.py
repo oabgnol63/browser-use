@@ -685,6 +685,51 @@ class SeleniumDomService:
 
         # Ensure JS-generated xpath is preserved in attributes
         attributes = node_data.get('attributes', {})
+
+        # In compact mode, filter out less important attributes to save tokens
+        if self.compact_mode:
+            # Keep only essential attributes + data attributes for testing/selection
+            keep_attrs = {
+                'id',
+                'name',
+                'type',
+                'value',
+                'placeholder',
+                'aria-label',
+                'role',
+                'class',
+                'title',
+                'alt',
+                'href',
+                'src',
+                'target',
+                'checked',
+                'disabled',
+                'selected',
+                'expanded',
+                'aria-expanded',
+                'aria-checked',
+                'aria-selected',
+                'readonly',
+                'required',
+                'min',
+                'max',
+                'step',
+                'pattern',
+                'accept',
+                'multiple',
+                'autocomplete',
+                'for',
+                'tabindex',
+            }
+            # Also keep data-testid, data-test, etc. as they are often used for selectors
+            attributes = {
+                k: v
+                for k, v in attributes.items()
+                if k in keep_attrs or k.startswith('data-test') or k.startswith('aria-')
+            }
+
+        # Always include xpath for reliable element selection - essential for Selenium clicks
         if 'xpath' in node_data:
             attributes['xpath'] = node_data['xpath']
         
@@ -908,6 +953,7 @@ class SeleniumDomService:
                 'maxIframeDepth': 1,  # Don't recurse into nested iframes
                 'maxIframes': 0,
                 'includeCrossOriginIframes': False,
+                'compactMode': self.compact_mode,
             }
             
             try:
