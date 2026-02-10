@@ -19,6 +19,7 @@ from browser_use.browser.events import (
     SwitchTabEvent,
     CloseTabEvent,
     BrowserStateRequestEvent,
+    SendKeysEvent,
 )
 from browser_use.browser.views import BrowserStateSummary, TabInfo
 from browser_use.selenium.session import SeleniumSession
@@ -62,6 +63,7 @@ class SeleniumBrowserSession(BrowserSession):
         BaseWatchdog.attach_handler_to_session(self, ClickElementEvent, self.on_ClickElementEvent)
         BaseWatchdog.attach_handler_to_session(self, ClickCoordinateEvent, self.on_ClickCoordinateEvent)
         BaseWatchdog.attach_handler_to_session(self, TypeTextEvent, self.on_TypeTextEvent)
+        BaseWatchdog.attach_handler_to_session(self, SendKeysEvent, self.on_SendKeysEvent)
         BaseWatchdog.attach_handler_to_session(self, ScrollEvent, self.on_ScrollEvent)
         BaseWatchdog.attach_handler_to_session(self, GoBackEvent, self.on_GoBackEvent)
         BaseWatchdog.attach_handler_to_session(self, GoForwardEvent, self.on_GoForwardEvent)
@@ -85,9 +87,9 @@ class SeleniumBrowserSession(BrowserSession):
         await self._selenium_session.navigate(event.url)
 
     async def on_ClickElementEvent(self, event: ClickElementEvent) -> dict:
-        # Check if element is in an iframe and use auto-handling
-        return await self._selenium_session.action_service.click_element_auto(
-            event.node, 
+        # click_element now handles iframe detection internally
+        return await self._selenium_session.action_service.click_element(
+            event.node,
             self._cached_selector_map
         )
 
@@ -95,12 +97,15 @@ class SeleniumBrowserSession(BrowserSession):
         return await self._selenium_session.click_coordinates(event.coordinate_x, event.coordinate_y)
 
     async def on_TypeTextEvent(self, event: TypeTextEvent) -> dict:
-        # Check if element is in an iframe and use auto-handling
-        return await self._selenium_session.action_service.type_text_auto(
-            element_node=event.node, 
-            text=event.text, 
+        # type_text now handles iframe detection internally
+        return await self._selenium_session.action_service.type_text(
+            element_node=event.node,
+            text=event.text,
             clear_first=event.clear
         )
+
+    async def on_SendKeysEvent(self, event: SendKeysEvent) -> dict:
+        return await self._selenium_session.action_service.send_keys(event.keys)
 
     async def on_ScrollEvent(self, event: ScrollEvent) -> dict:
         return await self._selenium_session.action_service.scroll(
