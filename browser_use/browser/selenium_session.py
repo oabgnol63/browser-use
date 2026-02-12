@@ -263,8 +263,17 @@ class SeleniumBrowserSession(BrowserSession):
                 pixels_right=0,
             )
         
+        clean_screenshot_b64 = None
+        if include_screenshot:
+            # Clear highlights first to ensure clean state
+            await self._selenium_session.dom_service.clear_all_highlights()
+            import base64
+            clean_screenshot_bytes = await self.take_screenshot()
+            clean_screenshot_b64 = base64.b64encode(clean_screenshot_bytes).decode('utf-8')
+
         # We need a dummy DOM state if not included
         if include_dom:
+            # This will draw highlights if highlight_elements=True (default)
             dom_state, _ = await self.get_dom_state()
         else:
             from browser_use.dom.views import SerializedDOMState
@@ -288,6 +297,7 @@ class SeleniumBrowserSession(BrowserSession):
             title=page_info_dict['title'],
             tabs=[tab_info],
             screenshot=screenshot_b64,
+            clean_screenshot=clean_screenshot_b64,
             page_info=page_info,
         )
 

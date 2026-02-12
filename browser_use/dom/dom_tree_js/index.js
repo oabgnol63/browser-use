@@ -57,6 +57,13 @@
 	let iframeCount = 0;
 	const iframeNodes = [];
 
+	// Iframe coordinate offset tracking
+	// When processing elements inside same-origin iframes, getBoundingClientRect()
+	// returns coordinates relative to the iframe viewport, not the main document.
+	// These offsets accumulate the iframe position to convert to main document coordinates.
+	let iframeOffsetX = 0;
+	let iframeOffsetY = 0;
+
 	// Interactive element selectors
 	const INTERACTIVE_SELECTORS = [
 		'a[href]',
@@ -233,6 +240,11 @@
 			const topElement = document.elementFromPoint(centerX, centerY);
 			if (topElement === element) return true;
 			if (element.contains(topElement)) return true;
+
+			// Handle pointer-events: none wrappers: if the top element is an
+			// ancestor of our element, the element is effectively visible and
+			// clickable through the parent.
+			if (topElement && topElement.contains(element)) return true;
 
 			// Additional check: element might still be visible under a positioned sibling
 			// Check for overlapping elements with higher stacking priority
@@ -450,8 +462,13 @@
 
 	/**
 	 * Create highlight overlay for an element
+	 * @param {Element} element - The DOM element to highlight
+	 * @param {number} index - The highlight index
+	 * @param {boolean} isFocused - Whether the element is focused
+	 * @param {boolean} isTopElement - Whether the element is topmost
+	 * @param {Object} adjustedRect - Pre-adjusted rect with iframe offsets applied
 	 */
-	function createHighlight(element, index, isFocused, isTopElement) {
+	function createHighlight(element, index, isFocused, isTopElement, adjustedRect) {
 		// Skip creating highlights for hidden elements (covered by other elements)
 		if (isTopElement === false) {
 			return;
@@ -472,7 +489,8 @@
 			document.body.appendChild(highlightContainer);
 		}
 
-		const rect = element.getBoundingClientRect();
+		// Use pre-adjusted rect (already has iframe offsets applied)
+		const rect = adjustedRect || element.getBoundingClientRect();
 		const highlight = document.createElement('div');
 		highlight.className = 'browser-use-highlight';
 		highlight.setAttribute('data-highlight-index', index);
@@ -563,22 +581,33 @@
 
 		// Get element bounds
 		const rect = node.getBoundingClientRect();
+		// Apply iframe offset to convert iframe-relative coords to main document coords
 		const viewport = {
-			x: rect.left,
-			y: rect.top,
+			x: rect.left + iframeOffsetX,
+			y: rect.top + iframeOffsetY,
 			width: rect.width,
 			height: rect.height
 		};
 
 		// Collect interactive elements for later sorted index assignment
 		let currentHighlightIndex = null;
+
 		if (isInteractive && isVisible && (inViewport || viewportExpansion > 0)) {
 			perfMetrics.nodeMetrics.interactiveNodes++;
+			// Create adjusted rect with iframe offsets for correct sorting and highlighting
+			const adjustedRect = {
+				left: rect.left + iframeOffsetX,
+				top: rect.top + iframeOffsetY,
+				right: rect.right + iframeOffsetX,
+				bottom: rect.bottom + iframeOffsetY,
+				width: rect.width,
+				height: rect.height
+			};
 			// Store for later sorting by visual position
 			interactiveElements.push({
 				nodeId: nodeId,
 				element: node,
-				rect: rect,
+				rect: adjustedRect,
 				isTop: isTop
 			});
 			// Assign a temporary placeholder (will be updated after sorting)
@@ -633,7 +662,7 @@
 		// Note: currentHighlightIndex is -1 at this point (temporary placeholder),
 		// it gets updated after sorting. Use isInteractive check instead.
 		const shouldIncludeXpath = !compactMode || (compactMode && isInteractive && isVisible);
-		
+
 		const nodeData = {
 			tagName: node.tagName.toLowerCase(),
 			attributes: getElementAttributes(node),
@@ -747,9 +776,6 @@
 		return iframeNode;
 	}
 
-	/**
-	 * Process an iframe and its contents recursively
-	 */
 	function processIframe(iframe, parentId, depth) {
 		if (iframeCount >= maxIframes) {
 			if (debugMode) {
@@ -761,6 +787,16 @@
 		if (depth >= maxIframeDepth) {
 			if (debugMode) {
 				console.log(`[Browser-Use DOM] Skipping iframe at depth ${depth} - max depth (${maxIframeDepth}) exceeded`);
+			}
+			return;
+		}
+
+		// Skip iframes that are not visible or not the top element from the parent document.
+		// This filters out hidden ad iframes, iframes behind overlays, off-screen iframes, etc.
+		// without relying on fragile pattern matching.
+		if (!isElementVisible(iframe) || !isTopElement(iframe)) {
+			if (debugMode) {
+				console.log(`[Browser-Use DOM] Skipping non-visible/obstructed iframe: ${iframe.id || iframe.src?.substring(0, 60) || 'unknown'}`);
 			}
 			return;
 		}
@@ -777,9 +813,20 @@
 				iframeNodes.push(iframeNode);
 				iframeCount++;
 
-				// Recursively process iframe contents
+				// Save current iframe offset and accumulate this iframe's position
+				const iframeRect = iframe.getBoundingClientRect();
+				const prevOffsetX = iframeOffsetX;
+				const prevOffsetY = iframeOffsetY;
+				iframeOffsetX += iframeRect.left;
+				iframeOffsetY += iframeRect.top;
+
+				// Recursively process iframe contents (coordinates will be adjusted by offsets)
 				const iframeRootId = processNode(iframeDoc.body, iframeNode.nodeId);
 				iframeNode.children = [iframeRootId];
+
+				// Restore previous iframe offset
+				iframeOffsetX = prevOffsetX;
+				iframeOffsetY = prevOffsetY;
 
 				perfMetrics.nodeMetrics.filteredEmptyInteractive++;
 				if (debugMode) {
@@ -970,9 +1017,23 @@
 					const currentIsLink = current.element.tagName === 'A' || current.element.tagName === 'BUTTON' || current.element.getAttribute('role') === 'button';
 
 					if (otherIsLink && !currentIsLink) {
-						shouldFilter = true;
-						filterReason = 'contained-by-link';
-						break;
+						// Don't filter if there's an intermediate button/interactive element
+						// between the link and this element. E.g. <a><button><span>Sign In</span></button></a>
+						// The span shouldn't be filtered by the distant <a> when <button> is in between.
+						let hasIntermediateButton = false;
+						let p = current.element.parentElement;
+						while (p && p !== other.element) {
+							if (p.tagName === 'BUTTON' || p.getAttribute('role') === 'button') {
+								hasIntermediateButton = true;
+								break;
+							}
+							p = p.parentElement;
+						}
+						if (!hasIntermediateButton) {
+							shouldFilter = true;
+							filterReason = 'contained-by-link';
+							break;
+						}
 					}
 				}
 
@@ -1092,7 +1153,8 @@
 				// Create visual highlight if enabled (only for topmost elements)
 				if (doHighlightElements) {
 					const isFocused = focusHighlightIndex === index;
-					createHighlight(item.element, index, isFocused, item.isTop);
+					// Pass the pre-adjusted rect (with iframe offsets) for correct positioning
+					createHighlight(item.element, index, isFocused, item.isTop, item.rect);
 				}
 			} else {
 				if (debugMode) {

@@ -1250,7 +1250,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 			return ActionResult(extracted_content=formatted, long_term_memory=memory)
 
 		@self.registry.action(
-			"""Query DOM elements by CSS selector (like find). Zero LLM cost, instant. Returns matching elements with tag, text, and attributes. Use to explore page structure, count items, get links/attributes. Use attributes=["href","src"] to extract specific attributes.""",
+			"""Query DOM elements by CSS selector. Zero LLM cost, instant. Returns matching elements with tag, text, and attributes. Use to explore page structure, count items, get links/attributes. IMPORTANT: Use standard CSS selectors only (querySelectorAll). Pseudo-classes like :contains are NOT supported. Use attributes=["href","src"] to extract specific attributes.""",
 			param_model=FindElementsAction,
 		)
 		async def find_elements(params: FindElementsAction, browser_session: BrowserSession):

@@ -98,6 +98,7 @@ class BrowserStateSummary:
 	tabs: list[TabInfo]
 	screenshot: str | None = field(default=None, repr=False)
 	page_info: PageInfo | None = None  # Enhanced page information
+	clean_screenshot: str | None = field(default=None, repr=False)
 
 	# Keep legacy fields for backward compatibility
 	pixels_above: int = 0

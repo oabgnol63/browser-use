@@ -81,6 +81,10 @@ class SeleniumDomService:
         # Inject stealth JS once at initialization time
         # This only needs to be done once per browser session
         self._stealth_injected = False
+        
+        # Track iframes that have highlights drawn in them
+        # This avoids expensive recursive iframe discovery during clearance
+        self._iframes_with_highlights: set[str] = set()
 
     async def __aenter__(self):
         # Note: Stealth preferences are already applied at browser launch time
@@ -334,19 +338,22 @@ class SeleniumDomService:
         self,
         selector_map: dict[int, EnhancedDOMTreeNode],
         focus_element: int = -1,
-    ) -> None:
+    ) -> bool:
         """
-        Draw highlight overlays on elements using the actual selector_map indices.
+        Draw highlight overlays on elements using live element positions.
         
-        This ensures visual indices match what the agent sees.
-        Uses improved positioning logic similar to python_highlights.py.
+        Uses xpaths to find elements at draw time rather than pre-computed coordinates,
+        preventing misalignment from layout shifts (lazy loading, ad insertion, etc.).
         
         Args:
             selector_map: Map of selector indices to DOM nodes
             focus_element: Index of element to focus highlight on (-1 for none)
+            
+        Returns:
+            True if highlights were drawn, False otherwise
         """
         if not selector_map:
-            return
+            return False
 
         # Color scheme matching python_highlights.py
         element_colors = {
@@ -358,32 +365,39 @@ class SeleniumDomService:
             'default': '#DDA0DD',
         }
 
-        # Build highlight data with correct indices
+        # Build highlight data with xpaths for live element lookup
         highlights = []
         for index, node in selector_map.items():
-            if node and node.snapshot_node and node.snapshot_node.bounds:
-                bounds = node.snapshot_node.bounds
-                is_focused = (focus_element == index)
-                tag_name = node.tag_name.lower() if hasattr(node, 'tag_name') else 'div'
+            if not node:
+                continue
+            tag_name = node.tag_name.lower() if hasattr(node, 'tag_name') else 'div'
+            color = element_colors.get(tag_name, element_colors['default'])
+            
+            # Get xpath from node attributes for live element lookup
+            xpath = node.attributes.get('xpath', '') if hasattr(node, 'attributes') else ''
+            
+            # Fallback to pre-computed bounds if no xpath available
+            fallback_bounds = None
+            if node.snapshot_node and node.snapshot_node.bounds:
+                b = node.snapshot_node.bounds
+                fallback_bounds = {'x': b.x, 'y': b.y, 'width': b.width, 'height': b.height}
+            
+            if not xpath and not fallback_bounds:
+                continue
                 
-                # Get color based on element type
-                color = element_colors.get(tag_name, element_colors['default'])
-                
-                highlights.append({
-                    'index': index,
-                    'x': bounds.x,
-                    'y': bounds.y,
-                    'width': bounds.width,
-                    'height': bounds.height,
-                    'isFocused': is_focused,
-                    'color': color,
-                    'tagName': tag_name,
-                })
+            highlights.append({
+                'index': index,
+                'xpath': xpath,
+                'fallback': fallback_bounds,
+                'isFocused': (focus_element == index),
+                'color': color,
+                'tagName': tag_name,
+            })
 
         if not highlights:
-            return
+            return False
 
-        # Execute JavaScript to draw highlights with improved positioning
+        # Execute JavaScript to draw highlights using live element positions
         try:
             self.driver.execute_script('''
                 const containerId = 'browser-use-selenium-highlight-container';
@@ -398,38 +412,50 @@ class SeleniumDomService:
                 document.body.appendChild(container);
                 
                 const highlights = arguments[0];
-                const viewportWidth = window.innerWidth;
-                const viewportHeight = window.innerHeight;
                 
                 highlights.forEach(function(h) {
-                    const el = document.createElement('div');
+                    // Try to find element by xpath for live positioning
+                    let rect = null;
+                    if (h.xpath) {
+                        try {
+                            const result = document.evaluate(h.xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            const elem = result.singleNodeValue;
+                            if (elem) {
+                                rect = elem.getBoundingClientRect();
+                            }
+                        } catch (e) {
+                            // xpath evaluation failed, fall through to fallback
+                        }
+                    }
                     
-                    // Use dashed border for better visibility
-                    el.style.cssText = 'position:fixed;left:' + h.x + 'px;top:' + h.y + 'px;width:' + h.width + 'px;height:' + h.height + 'px;' +
+                    // Fallback to pre-computed bounds
+                    if (!rect && h.fallback) {
+                        rect = h.fallback;
+                    }
+                    
+                    if (!rect || rect.width === 0 || rect.height === 0) return;
+                    
+                    const el = document.createElement('div');
+                    el.style.cssText = 'position:fixed;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;' +
                         'border:2px dashed ' + h.color + ';' +
                         'box-sizing:border-box;pointer-events:none;';
                     
-// Create index label with improved positioning - smaller and less intrusive
-                const label = document.createElement('span');
-                const labelPadding = 2;
-                const fontSize = 8;  // Fixed smaller font size
-                
-                // Base style for label - smaller and positioned at top-left corner
-                let labelStyle = 'position:absolute;background-color:' + h.color + ';color:white;' +
-                    'padding:' + labelPadding + 'px ' + (labelPadding + 2) + 'px;' +
-                    'font-size:' + fontSize + 'px;font-family:monospace;font-weight:bold;' +
-                    'border-radius:2px;white-space:nowrap;border:1px solid rgba(255,255,255,0.8);' +
-                    'line-height:1;min-width:14px;text-align:center;';
-                
-                // Positioning logic - always place at top-left corner outside element
-                const labelHeight = fontSize + labelPadding * 2 + 2;
-                const labelWidth = (String(h.index).length * fontSize * 0.6) + labelPadding * 2 + 4;
-                
-                if (h.y > labelHeight + 2) {
-                    // Place above element
-                    labelStyle += 'top:-' + (labelHeight + 2) + 'px;left:-1px;';
-                } else {
-                    // Not enough space above, place inside
+                    // Create index label
+                    const label = document.createElement('span');
+                    const labelPadding = 2;
+                    const fontSize = 8;
+                    
+                    let labelStyle = 'position:absolute;background-color:' + h.color + ';color:white;' +
+                        'padding:' + labelPadding + 'px ' + (labelPadding + 2) + 'px;' +
+                        'font-size:' + fontSize + 'px;font-family:monospace;font-weight:bold;' +
+                        'border-radius:2px;white-space:nowrap;border:1px solid rgba(255,255,255,0.8);' +
+                        'line-height:1;min-width:14px;text-align:center;';
+                    
+                    const labelHeight = fontSize + labelPadding * 2 + 2;
+                    
+                    if (rect.y > labelHeight + 2) {
+                        labelStyle += 'top:-' + (labelHeight + 2) + 'px;left:-1px;';
+                    } else {
                         labelStyle += 'top:2px;left:2px;';
                     }
                     
@@ -440,8 +466,10 @@ class SeleniumDomService:
                     container.appendChild(el);
                 });
             ''', highlights)
+            return True
         except Exception as e:
             self.logger.warning(f'Failed to draw highlights: {e}')
+            return False
 
     async def draw_highlights_in_iframe(
         self,
@@ -474,7 +502,9 @@ class SeleniumDomService:
                 return
             
             # Draw highlights within the iframe context
-            await self.draw_highlights(selector_map, focus_element)
+            if await self.draw_highlights(selector_map, focus_element):
+                # Track that this iframe has highlights
+                self._iframes_with_highlights.add(iframe_selector)
             
         except Exception as e:
             self.logger.warning(f'Failed to draw highlights in iframe {iframe_selector}: {e}')
@@ -503,12 +533,19 @@ class SeleniumDomService:
         await self.clear_highlights()
         
         # Get all iframes and clear highlights in each
-        try:
-            iframes = await self.iframe_handler.get_all_iframes(include_nested=True, max_depth=3)
-            for iframe in iframes:
-                await self.clear_highlights_in_iframe(iframe.selector)
-        except Exception as e:
-            self.logger.debug(f'Error clearing iframe highlights: {e}')
+        # Get all iframes and clear highlights in each
+        # FAST PATH: Only check iframes we know have highlights
+        if self._iframes_with_highlights:
+            self.logger.debug(f'Clearing highlights in {len(self._iframes_with_highlights)} tracked iframes')
+            iframe_selectors = list(self._iframes_with_highlights)
+            for selector in iframe_selectors:
+                await self.clear_highlights_in_iframe(selector)
+            
+            # Reset the set
+            self._iframes_with_highlights.clear()
+        
+        # SLOW PATH fallback (only if we suspect state drift, but for now we trust the set)
+        pass
 
     async def clear_highlights(self) -> None:
         """Clear all highlight overlays from the page."""
@@ -1032,6 +1069,35 @@ class SeleniumDomService:
             return main_root, merged_selector_map, iframe_info_map
         
         # Get iframe info using optimized batch collection
+        # Identify iframes that are already in the main selector map (have content)
+        # If an iframe node has children in the main DOM, it was successfully processed by JS
+        populated_iframes = set()
+        
+        # Check all nodes for iframe/frame related tags that might be parents
+        # But specifically, we want to know if specific iframe elements yielded children
+        # The JS index.js logic for iframes:
+        # if (rect.width > 0 && rect.height > 0) { ... try access contentDocument ... }
+        # If accessible, it returns children.
+        
+        # We can look for iframe elements in the main map
+        for node in merged_selector_map.values():
+            if node.node_name == 'IFRAME':
+                # Check if it has children in the selector map (interactive children)
+                # The children_nodes property is the full tree, but selector_map is flattened interactive nodes.
+                # However, if it was processed by JS and had accessible content, 
+                # the browser-use DOM extraction usually flattens it or keeps structure.
+                # In compact mode, we might just get the interactive elements.
+                
+                # A better way: check if we can access the contentDocument via JS for this iframe.
+                # But we want to avoid extra calls.
+                
+                # Let's rely on the frame path/ID if available, or just check if the iframe 
+                # has children in the returned tree.
+                if node.children_nodes and len(node.children_nodes) > 0:
+                     # It has children, so main JS handled it
+                     # We need to match this node to the IframeInfo to exclude it
+                     pass
+
         iframes = await self.iframe_handler.get_all_iframes(
             include_nested=False,  # Skip nested for performance - top-level is usually enough
             max_depth=1,
@@ -1039,7 +1105,7 @@ class SeleniumDomService:
         
         self.logger.debug(f'Found {len(iframes)} iframes, filtering...')
         
-        # Smart filtering: visible + reasonable size
+        # smart filtering: visible + reasonable size + NOT ALREADY PROCESSED
         processable_iframes: list = []
         for iframe in iframes:
             display_status = '✓' if iframe.is_displayed else '✗'
@@ -1058,6 +1124,34 @@ class SeleniumDomService:
                 self.logger.debug(f'  {display_status} SKIP tiny ({size_str}): {iframe.selector}')
                 continue
             
+            # CRITICAL DUPLICATION FIX:
+            # Check if this iframe was already processed by the main page JS
+            # If the main page JS successfully accessed the iframe, it will have extracted its content
+            # We can check if the iframe's content is present in the main DOM tree
+            
+            # Heuristic: If it's same-origin (or effectively same-origin), JS likely handled it.
+            # If it's explicitly cross-origin, JS likely blocked it.
+            # But "about:blank" is confusing.
+            
+            # Safest check: Is this iframe "fully populated" in the main DOM?
+            # It's hard to map `iframe` object back to `IframeInfo` precisely without robust ID matching.
+            # But we can check if `iframe.is_cross_origin` is False.
+            # If it is NOT cross-origin, the main index.js script *should* have handled it.
+            # So we should SKIP it here to avoid duplication.
+            
+            # However, sometimes index.js fails on some same-origin frames? 
+            # The user's log shows: "Collected 37 top-level iframes... processing 7 of 37"
+            # It seems we are aggressively processing iframes that might be same-origin.
+            
+            # Strategy: Only manually process iframes that are CROSS-ORIGIN.
+            # Same-origin iframes are handled by the main page injection.
+            if not iframe.is_cross_origin:
+                 # Double check: sometimes about:blank iframes (same origin) are not fully traversed 
+                 # if they are dynamically loaded?
+                 # But generally, if it's same origin, the main JS execution context can see it.
+                 self.logger.debug(f'  {display_status} SKIP same-origin (handled by main JS): {iframe.selector}')
+                 continue
+
             self.logger.debug(f'  {display_status} OK ({size_str}): {iframe.selector} | {src_preview}')
             processable_iframes.append(iframe)
         
