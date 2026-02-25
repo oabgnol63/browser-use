@@ -128,7 +128,7 @@ def setup_logging(stream=None, log_level=None, force_setup=False, debug_log_file
 		console.setFormatter(BrowserUseFormatter('%(message)s', log_level))
 	else:
 		console.setLevel(log_level)  # Keep console at original log level (e.g., INFO)
-		console.setFormatter(BrowserUseFormatter('%(levelname)-8s [%(name)s] %(message)s', log_level))
+		console.setFormatter(BrowserUseFormatter('%(asctime)s - %(levelname)-8s [%(name)s] %(message)s', log_level))
 
 	# Configure root logger only
 	root.addHandler(console)
@@ -185,7 +185,7 @@ def setup_logging(stream=None, log_level=None, force_setup=False, debug_log_file
 		setup_cdp_logging(
 			level=cdp_level,
 			stream=stream or sys.stdout,
-			format_string='%(levelname)-8s [%(name)s] %(message)s' if log_type != 'result' else '%(message)s',
+			format_string='%(asctime)s - %(levelname)-8s [%(name)s] %(message)s' if log_type != 'result' else '%(message)s',
 		)
 	except ImportError:
 		# If cdp_use doesn't have the new logging module, fall back to manual config

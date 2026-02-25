@@ -175,7 +175,25 @@ class PaintOrderRemover:
 				)
 
 				if rect_union.contains(rect):
-					node.ignored_by_paint_order = True
+					# Don't mark as ignored if this node is itself interactive AND the covering rect is roughly the same size.
+					# Parent containers often cover the same bounding box as their interactive children
+					# (e.g., the login panel column covers the same area as the Log in button inside it),
+					# but interactive children must still be reachable.
+					# However, if a large modal covers a small button, the button should be ignored.
+					attrs = node.original_node.attributes or {}
+					tag = (node.original_node.tag_name or '').lower()
+					role = attrs.get('role', '').lower()
+					tabindex = attrs.get('tabindex', '')
+					INTERACTIVE_TAGS = {'a', 'button', 'input', 'select', 'textarea'}
+					INTERACTIVE_ROLES = {'button', 'link', 'checkbox', 'radio', 'menuitem', 'tab', 'option', 'switch', 'combobox', 'textbox', 'searchbox', 'spinbutton', 'slider'}
+					is_node_interactive = (
+						tag in INTERACTIVE_TAGS
+						or role in INTERACTIVE_ROLES
+						or tabindex == '0'
+					)
+					
+					if not is_node_interactive:
+						node.ignored_by_paint_order = True
 
 				# don't add to the nodes if opacity is less then 0.95 or background-color is transparent
 				if (

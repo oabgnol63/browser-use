@@ -80,7 +80,7 @@ class SeleniumBrowserSession(BrowserSession):
         # Initialize required state for tools that expect browser to be "connected"
         self.agent_focus_target_id = "selenium-page-0"
         # Return success - Selenium is already running since we created the session externally
-        return {"type": "selenium", "session_id": self._selenium_session.session_id}
+        return {"type": "selenium", "session_id": self._selenium_session.session_id or ""}
 
     async def on_NavigateToUrlEvent(self, event: NavigateToUrlEvent) -> None:
         self.logger.info(f"Selenium navigating to: {event.url}")
@@ -177,11 +177,11 @@ class SeleniumBrowserSession(BrowserSession):
         return self._selenium_session.current_url
 
     async def take_screenshot(
-        self, 
-        path: str | None = None, 
-        full_page: bool = False, 
-        format: str = 'png', 
-        quality: int | None = None, 
+        self,
+        path: str | None = None,
+        full_page: bool = False,
+        format: str = 'png',
+        quality: int | None = None,
         clip: dict | None = None
     ) -> bytes:
         # Selenium basic screenshot doesn't support quality/clip easily without extra work
