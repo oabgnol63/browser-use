@@ -49,6 +49,7 @@ from browser_use.tools.views import (
 	NavigateAction,
 	NoParamsAction,
 	ReadContentAction,
+	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
 	SearchAction,
@@ -1467,6 +1468,96 @@ You will be given a query and the markdown of a webpage that has been filtered t
 					metadata={'include_screenshot': True},
 				)
 
+		# PDF Actions
+
+		@self.registry.action(
+			'Save the current page as a PDF file. Returns the file path of the saved PDF. '
+			'Use this to capture the full page content (including content below the fold) as a printable document.',
+			param_model=SaveAsPdfAction,
+		)
+		async def save_as_pdf(
+			params: SaveAsPdfAction,
+			browser_session: BrowserSession,
+			file_system: FileSystem,
+		):
+			"""Save the current page as a PDF using CDP Page.printToPDF."""
+			import base64
+			import re
+
+			# Paper format dimensions in inches (width, height)
+			paper_sizes: dict[str, tuple[float, float]] = {
+				'letter': (8.5, 11),
+				'legal': (8.5, 14),
+				'a4': (8.27, 11.69),
+				'a3': (11.69, 16.54),
+				'tabloid': (11, 17),
+			}
+
+			paper_key = params.paper_format.lower()
+			if paper_key not in paper_sizes:
+				paper_key = 'letter'
+			paper_width, paper_height = paper_sizes[paper_key]
+
+			cdp_session = await browser_session.get_or_create_cdp_session(focus=True)
+
+			result = await asyncio.wait_for(
+				cdp_session.cdp_client.send.Page.printToPDF(
+					params={
+						'printBackground': params.print_background,
+						'landscape': params.landscape,
+						'scale': params.scale,
+						'paperWidth': paper_width,
+						'paperHeight': paper_height,
+						'preferCSSPageSize': True,
+					},
+					session_id=cdp_session.session_id,
+				),
+				timeout=30.0,
+			)
+
+			pdf_data = result.get('data')
+			assert pdf_data, 'CDP Page.printToPDF returned no data'
+
+			pdf_bytes = base64.b64decode(pdf_data)
+
+			# Determine filename
+			if params.file_name:
+				file_name = params.file_name
+			else:
+				try:
+					page_title = await asyncio.wait_for(browser_session.get_current_page_title(), timeout=2.0)
+					safe_title = re.sub(r'[^\w\s-]', '', page_title).strip()[:50]
+					file_name = safe_title if safe_title else 'page'
+				except Exception:
+					file_name = 'page'
+
+			if not file_name.lower().endswith('.pdf'):
+				file_name = f'{file_name}.pdf'
+			file_name = FileSystem.sanitize_filename(file_name)
+
+			file_path = file_system.get_dir() / file_name
+			# Handle duplicate filenames
+			if file_path.exists():
+				base, ext = os.path.splitext(file_name)
+				counter = 1
+				while (file_system.get_dir() / f'{base} ({counter}){ext}').exists():
+					counter += 1
+				file_name = f'{base} ({counter}){ext}'
+				file_path = file_system.get_dir() / file_name
+
+			async with await anyio.open_file(file_path, 'wb') as f:
+				await f.write(pdf_bytes)
+
+			file_size = file_path.stat().st_size
+			msg = f'Saved page as PDF: {file_name} ({file_size:,} bytes)'
+			logger.info(f'📄 {msg}. Full path: {file_path}')
+
+			return ActionResult(
+				extracted_content=msg,
+				long_term_memory=f'{msg}. Full path: {file_path}',
+				attachments=[str(file_path)],
+			)
+
 		# Dropdown Actions
 
 		@self.registry.action(
@@ -1891,7 +1982,8 @@ Context: {context}"""
 				return ActionResult(extracted_content=error_msg, long_term_memory=error_msg)
 
 		@self.registry.action(
-			"""Execute browser JavaScript. Best practice: wrap in IIFE (function(){...})() with try-catch for safety. Use ONLY browser APIs (document, window, DOM). NO Node.js APIs (fs, require, process). Example: (function(){try{const el=document.querySelector('#id');return el?el.value:'not found'}catch(e){return 'Error: '+e.message}})() Avoid comments. Use for hover, drag, zoom, custom selectors, extract/filter links, shadow DOM, or analysing page structure. Limit output size.""",
+			"""Execute browser JavaScript. Best practice: wrap in IIFE (function(){...})() with try-catch for safety. Use ONLY browser APIs (document, window, DOM). NO Node.js APIs (fs, require, process). Example: (function(){try{const el=document.querySelector('#id');return el?el.value:'not found'}catch(e){return 'Error: '+e.message}})() Avoid comments. Use for hover, drag, zoom, custom selectors, extract/filter links, or analysing page structure. IMPORTANT: Shadow DOM elements with [index] markers can be clicked directly with click(index) — do NOT use evaluate() to click them. Only use evaluate for shadow DOM elements that are NOT indexed. Limit output size.""",
+			terminates_sequence=True,
 		)
 		async def evaluate(code: str, browser_session: BrowserSession):
 			# Execute JavaScript with proper error handling and promise support
@@ -2072,16 +2164,35 @@ Validated Code (after quote fixing):
 				'Complete task with structured output.',
 				param_model=StructuredOutputAction[output_model],
 			)
-			async def done(params: StructuredOutputAction):
+			async def done(params: StructuredOutputAction, file_system: FileSystem, browser_session: BrowserSession):
 				# Exclude success from the output JSON
 				# Use mode='json' to properly serialize enums at all nesting levels
 				output_dict = params.data.model_dump(mode='json')
+
+				attachments: list[str] = []
+
+				# 1. Resolve any explicitly requested files via files_to_display
+				if params.files_to_display:
+					for file_name in params.files_to_display:
+						file_content = file_system.display_file(file_name)
+						if file_content:
+							attachments.append(str(file_system.get_dir() / file_name))
+
+				# 2. Auto-attach actual session downloads (CDP-tracked browser downloads)
+				#    but NOT user-supplied whitelist paths from available_file_paths
+				session_downloads = browser_session.downloaded_files
+				if session_downloads:
+					existing = set(attachments)
+					for file_path in session_downloads:
+						if file_path not in existing:
+							attachments.append(file_path)
 
 				return ActionResult(
 					is_done=True,
 					success=params.success,
 					extracted_content=json.dumps(output_dict, ensure_ascii=False),
 					long_term_memory=f'Task completed. Success Status: {params.success}',
+					attachments=attachments,
 				)
 
 		else:

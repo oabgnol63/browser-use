@@ -87,16 +87,19 @@ class DoneAction(BaseModel):
 T = TypeVar('T', bound=BaseModel)
 
 
-def _hide_success_from_schema(schema: dict) -> None:
-	"""Remove 'success' from the JSON schema to avoid field name collisions with user models."""
-	schema.get('properties', {}).pop('success', None)
+def _hide_internal_fields_from_schema(schema: dict) -> None:
+	"""Remove internal fields from the JSON schema to avoid collisions with user models."""
+	props = schema.get('properties', {})
+	props.pop('success', None)
+	props.pop('files_to_display', None)
 
 
 class StructuredOutputAction(BaseModel, Generic[T]):
-	model_config = ConfigDict(json_schema_extra=_hide_success_from_schema)
+	model_config = ConfigDict(json_schema_extra=_hide_internal_fields_from_schema)
 
 	success: bool = Field(default=True, description='True if user_request completed successfully')
 	data: T = Field(description='The actual output data matching the requested schema')
+	files_to_display: list[str] | None = Field(default=[])
 
 
 class SwitchTabAction(BaseModel):
@@ -135,6 +138,20 @@ class ScreenshotAction(BaseModel):
 	file_name: str | None = Field(
 		default=None,
 		description='If provided, saves screenshot to this file and returns path. Otherwise screenshot is included in next observation.',
+	)
+
+
+class SaveAsPdfAction(BaseModel):
+	file_name: str | None = Field(
+		default=None,
+		description='Output PDF filename (without path). Defaults to page title. Extension .pdf is added automatically if missing.',
+	)
+	print_background: bool = Field(default=True, description='Include background graphics and colors')
+	landscape: bool = Field(default=False, description='Use landscape orientation')
+	scale: float = Field(default=1.0, ge=0.1, le=2.0, description='Scale of the webpage rendering (0.1 to 2.0)')
+	paper_format: str = Field(
+		default='Letter',
+		description='Paper size: Letter, Legal, A4, A3, or Tabloid',
 	)
 
 

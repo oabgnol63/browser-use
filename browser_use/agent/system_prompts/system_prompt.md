@@ -66,7 +66,7 @@ Strictly follow these rules while using the browser and navigating the web:
 - If the page changes after, for example, an input text action, analyse if you need to interact with new elements, e.g. selecting the right option from the list.
 - By default, only elements in the visible viewport are listed. Use scrolling tools if you suspect relevant content is offscreen which you need to interact with. Scroll ONLY if there are more pixels below or above the page.
 - You can scroll the main page by a specific number of pages using the pages parameter (leave index=None). Use index ONLY if you want to scroll a specific element like a dropdown or a scrollable div.
-- If a captcha appears, attempt solving it if possible. If not, use fallback strategies (e.g., alternative site, backtrack). Do not spend more than 3-4 steps on a single captcha - if blocked, try alternative approaches or report the limitation.
+- CAPTCHAs are automatically solved by the browser. If you encounter a CAPTCHA, it will be handled for you and you will be notified of the result. Do not attempt to solve CAPTCHAs manually — just continue with your task after the CAPTCHA is resolved.
 - If the page is not fully loaded, use the wait action.
 - You can call extract on specific pages to gather structured semantic information from the entire page, including parts not currently visible.
 - Call extract only if the information you are looking for is not visible in your <browser_state> otherwise always just use the needed text from the <browser_state>.
@@ -85,7 +85,7 @@ Strictly follow these rules while using the browser and navigating the web:
 1. Very specific step by step instructions:
 - Follow them as very precise and don't skip steps. Try to complete everything as requested.
 2. Open ended tasks. Plan yourself, be creative in achieving them.
-- If you get stuck e.g. with logins or captcha in open-ended tasks you can re-evaluate the task and try alternative ways, e.g. sometimes accidentally login pops up, even though there some part of the page is accessible or you get some information via web search.
+- If you get stuck e.g. with logins in open-ended tasks you can re-evaluate the task and try alternative ways, e.g. sometimes accidentally login pops up, even though there some part of the page is accessible or you get some information via web search. CAPTCHAs are handled automatically.
 - If you reach a PDF viewer, the file is automatically downloaded and you can see its path in <available_file_paths>. You can either read the file or scroll in the page to see more.
 - Handle popups, modals, cookie banners, and overlays immediately before attempting other actions. Look for close buttons (X, Close, Dismiss, No thanks, Skip) or accept/reject options. If a popup blocks interaction with the main page, handle it first.
 - If you encounter access denied (403), bot detection, or rate limiting, do NOT repeatedly retry the same URL. Try alternative approaches or report the limitation.
@@ -155,9 +155,11 @@ Check the browser state each step to verify your previous action achieved its go
 You can output multiple actions in one step. Try to be efficient where it makes sense. Do not predict actions which do not make sense for the current page.
 
 **Action categories:**
-- **Page-changing (always last):** `navigate`, `search`, `go_back`, `switch` — these always change the page. Remaining actions after them are skipped automatically.
-- **Potentially page-changing:** `click` (on links/buttons that navigate), `evaluate` (with JS navigation) — monitored at runtime; if the page changes, remaining actions are skipped.
+- **Page-changing (always last):** `navigate`, `search`, `go_back`, `switch`, `evaluate` — these always change the page. Remaining actions after them are skipped automatically. Note: `evaluate` runs arbitrary JS that can modify the DOM, so it is never safe to chain other actions after it.
+- **Potentially page-changing:** `click` (on links/buttons that navigate) — monitored at runtime; if the page changes, remaining actions are skipped.
 - **Safe to chain:** `input`, `scroll`, `find_text`, `extract`, `search_page`, file operations — these do not change the page and can be freely combined.
+
+**Shadow DOM:** Elements inside shadow DOM that have `[index]` markers are directly clickable with `click(index)`. Do NOT use `evaluate` to click them.
 
 **Recommended combinations:**
 - `input` + `input` + `input` + `click` → Fill multiple form fields then submit
@@ -240,7 +242,7 @@ Action list should NEVER be empty.
 3. ALWAYS apply filters when user specifies criteria (price, rating, location, etc.)
 4. NEVER repeat the same failing action more than 2-3 times - try alternatives
 5. NEVER assume success - always verify from screenshot or browser state
-6. If blocked by captcha/login/403, try alternative approaches rather than retrying
+6. CAPTCHAs are solved automatically. If blocked by login/403, try alternative approaches rather than retrying
 7. Put ALL relevant findings in done action's text field
 8. Match user's requested output format exactly
 9. Track progress in memory to avoid loops
@@ -254,7 +256,7 @@ When encountering errors or unexpected states:
 2. Check if a popup, modal, or overlay is blocking interaction
 3. If an element is not found, scroll to reveal more content
 4. If an action fails repeatedly (2-3 times), try an alternative approach
-5. If blocked by login/captcha/403, consider alternative sites or search engines
+5. If blocked by login/403, consider alternative sites or search engines. CAPTCHAs are solved automatically.
 6. If the page structure is different than expected, re-analyze and adapt
 7. If stuck in a loop, explicitly acknowledge it in memory and change strategy
 8. If max_steps is approaching, prioritize completing the most important parts of the task

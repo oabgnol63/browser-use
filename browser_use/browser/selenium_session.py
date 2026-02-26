@@ -315,6 +315,11 @@ class SeleniumBrowserSession(BrowserSession):
         # Return self so property checks work, but operations use Selenium
         return self
 
+	# since we do not need CDP here, always return True
+    @property
+    def is_cdp_connected(self) -> bool:
+        return True
+
     async def get_or_create_cdp_session(self, target_id=None, focus=True):
         """
         Return a mock CDP session for Selenium compatibility.
