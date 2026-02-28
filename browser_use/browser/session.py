@@ -91,7 +91,7 @@ class CDPSession(BaseModel):
 
 	model_config = ConfigDict(arbitrary_types_allowed=True, revalidate_instances='never')
 
-	cdp_client: CDPClient
+	cdp_client: Any
 	target_id: TargetID
 	session_id: SessionID
 
@@ -1744,7 +1744,7 @@ class BrowserSession(BaseModel):
 			self._cdp_client_root = CDPClient(
 				self.cdp_url,
 				additional_headers=headers,
-				max_ws_frame_size=20 * 1024 * 1024,  # Use 200MB limit to handle pages with very large DOMs
+				max_ws_frame_size=200 * 1024 * 1024,  # Use 200MB limit to handle pages with very large DOMs
 			)
 
 			assert self._cdp_client_root is not None
