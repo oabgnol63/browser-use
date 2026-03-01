@@ -128,6 +128,13 @@
 	function isElementVisible(element) {
 		if (!element || !element.getBoundingClientRect) return false;
 
+		// Use modern checkVisibility API if available (checks ancestors too)
+		if (typeof element.checkVisibility === 'function') {
+			if (!element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+				return false;
+			}
+		}
+
 		const style = window.getComputedStyle(element);
 		if (style.display === 'none' ||
 			style.visibility === 'hidden' ||
@@ -136,9 +143,37 @@
 			return false;
 		}
 
+		// Fallback for older browsers: check ancestors for opacity 0
+		if (typeof element.checkVisibility !== 'function') {
+			let curr = element.parentElement;
+			while (curr && curr !== document.body) {
+				const parentStyle = window.getComputedStyle(curr);
+				if (parentStyle.opacity === '0' || parentStyle.display === 'none' || parentStyle.visibility === 'hidden') {
+					return false;
+				}
+				curr = curr.parentElement;
+			}
+		}
+
 		const rect = element.getBoundingClientRect();
-		if (rect.width === 0 && rect.height === 0) {
+		if (rect.width === 0 || rect.height === 0) {
 			return false;
+		}
+
+		// Check if the center point is clipped by an overflow: hidden/scroll/auto ancestor
+		const centerX = rect.left + rect.width / 2;
+		const centerY = rect.top + rect.height / 2;
+		let clipCurr = element.parentElement;
+		while (clipCurr && clipCurr !== document.body && clipCurr !== document.documentElement) {
+			const style = window.getComputedStyle(clipCurr);
+			if (style.overflow !== 'visible' || style.overflowX !== 'visible' || style.overflowY !== 'visible') {
+				const parentRect = clipCurr.getBoundingClientRect();
+				if (centerX < parentRect.left || centerX > parentRect.right ||
+					centerY < parentRect.top || centerY > parentRect.bottom) {
+					return false;
+				}
+			}
+			clipCurr = clipCurr.parentElement;
 		}
 
 		// Check offsetParent - if null, element is not in layout
@@ -988,13 +1023,13 @@
 				// Check if this element contains ANY other interactive element
 				// (Innermost rule: parents usually filter themselves out if they have interactive children)
 				if (current.element.contains(other.element) && current.element !== other.element) {
-					// EXCEPTION: If I am a link and the child is NOT a link/button, 
+					// EXCEPTION: If I am a link or button and the child is NOT a link/button, 
 					// I am the primary target, so keep me.
-					const currentIsLink = current.element.tagName === 'A';
-					const otherIsLink = other.element.tagName === 'A' || other.element.tagName === 'BUTTON' || other.element.getAttribute('role') === 'button';
+					const currentIsTarget = current.element.tagName === 'A' || current.element.tagName === 'BUTTON' || current.element.getAttribute('role') === 'button';
+					const otherIsTarget = other.element.tagName === 'A' || other.element.tagName === 'BUTTON' || other.element.getAttribute('role') === 'button';
 
-					if (currentIsLink && !otherIsLink) {
-						// Don't filter parent link
+					if (currentIsTarget && !otherIsTarget) {
+						// Don't filter parent link/button when child is just a generic interactive element
 						continue;
 					}
 
@@ -1011,14 +1046,14 @@
 
 				// Check if this element is CONTAINED by another interactive element
 				if (other.element.contains(current.element) && other.element !== current.element) {
-					// If my parent is a link and I am NOT a link/button, 
-					// the link is the primary target, so filter me out.
-					const otherIsLink = other.element.tagName === 'A';
-					const currentIsLink = current.element.tagName === 'A' || current.element.tagName === 'BUTTON' || current.element.getAttribute('role') === 'button';
+					// If my parent is a link or button and I am NOT a link/button, 
+					// the link/button is the primary target, so filter me out.
+					const otherIsTarget = other.element.tagName === 'A' || other.element.tagName === 'BUTTON' || other.element.getAttribute('role') === 'button';
+					const currentIsTarget = current.element.tagName === 'A' || current.element.tagName === 'BUTTON' || current.element.getAttribute('role') === 'button';
 
-					if (otherIsLink && !currentIsLink) {
+					if (otherIsTarget && !currentIsTarget) {
 						// Don't filter if there's an intermediate button/interactive element
-						// between the link and this element. E.g. <a><button><span>Sign In</span></button></a>
+						// between the target and this element. E.g. <a><button><span>Sign In</span></button></a>
 						// The span shouldn't be filtered by the distant <a> when <button> is in between.
 						let hasIntermediateButton = false;
 						let p = current.element.parentElement;
