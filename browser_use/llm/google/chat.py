@@ -3,6 +3,7 @@ import json
 import logging
 import random
 import time
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, overload
 
@@ -255,7 +256,45 @@ class ChatGoogle(BaseChatModel):
 
 		# Add system instruction if present
 		if system_instruction:
-			config['system_instruction'] = system_instruction
+			# Cache long system instructions explicitly to save tokens across steps
+			if len(system_instruction) > 4000:
+				system_hash = hashlib.md5(system_instruction.encode()).hexdigest()
+				
+				if not hasattr(self, '_system_caches'):
+					# Keep dictionary of caches so we can handle changing system prompts 
+					# (e.g., if there are multiple ChatGoogle instances doing different tasks)
+					self._system_caches = {}
+				
+				cache_name = self._system_caches.get(system_hash)
+				
+				if cache_name is None:
+					try:
+						self.logger.debug(f'Creating explicit context cache for system prompt ({len(system_instruction)} chars)')
+						
+						# Use sync client via to_thread - the async client has a bug where
+						# cache creation hangs for 15-80+ seconds, while sync completes in <2s
+						client = self.get_client()
+						cache_config = types.CreateCachedContentConfig(
+							system_instruction=system_instruction,
+							ttl='1800s'  # 20 mins TTL
+						)
+						cache = await asyncio.to_thread(
+							client.caches.create,
+							model=self.model,
+							config=cache_config,
+						)
+						cache_name = cache.name
+						self._system_caches[system_hash] = cache_name
+						self.logger.debug(f'Created cache: {cache_name}')
+					except Exception as e:
+						self.logger.warning(f'Failed to create context cache: {e}')
+				
+				if cache_name:
+					config['cached_content'] = cache_name
+				else:
+					config['system_instruction'] = system_instruction
+			else:
+				config['system_instruction'] = system_instruction
 
 		if self.top_p is not None:
 			config['top_p'] = self.top_p
@@ -643,3 +682,20 @@ class ChatGoogle(BaseChatModel):
 			return obj
 
 		return clean_schema(schema)
+
+	async def cleanup_caches(self) -> None:
+		"""
+		Delete any context caches created by this instance.
+		"""
+		if not hasattr(self, '_system_caches') or not self._system_caches:
+			return
+
+		client = self.get_client()
+		
+		for system_hash, cache_name in list(self._system_caches.items()):
+			try:
+				self.logger.debug(f'Deleting context cache: {cache_name}')
+				await asyncio.to_thread(client.caches.delete, name=cache_name)
+				del self._system_caches[system_hash]
+			except Exception as e:
+				self.logger.warning(f'Failed to delete context cache {cache_name}: {e}')

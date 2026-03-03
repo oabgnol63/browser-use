@@ -1250,6 +1250,18 @@ class DOMTreeSerializer:
 				except (AttributeError, ValueError):
 					continue
 
+		# Include accessibility name (ax_name) from ax_node.name if not already present
+		# ax_node.name holds the computed accessible name (visible text, aria-label, etc.)
+		# For Selenium: ax_node.properties is None, so this is the only way to surface text
+		# For CDP: ax_node.name is separate from properties - this adds it without duplication
+		if 'ax_name' in include_attributes and node.ax_node and node.ax_node.name:
+			ax_name_value = node.ax_node.name.strip()
+			if ax_name_value and 'ax_name' not in attributes_to_include:
+				# Skip if the same text is already present via aria-label, title, or placeholder
+				existing_values = {v for v in attributes_to_include.values() if isinstance(v, str)}
+				if ax_name_value not in existing_values:
+					attributes_to_include['ax_name'] = ax_name_value
+
 		# Special handling for form elements - ensure current value is shown
 		# For text inputs, textareas, and selects, prioritize showing the current value from AX tree
 		if node.tag_name and node.tag_name.lower() in ['input', 'textarea', 'select']:

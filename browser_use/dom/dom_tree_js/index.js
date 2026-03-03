@@ -166,6 +166,10 @@
 		let clipCurr = element.parentElement;
 		while (clipCurr && clipCurr !== document.body && clipCurr !== document.documentElement) {
 			const style = window.getComputedStyle(clipCurr);
+			if (style.display === 'contents') {
+				clipCurr = clipCurr.parentElement;
+				continue;
+			}
 			if (style.overflow !== 'visible' || style.overflowX !== 'visible' || style.overflowY !== 'visible') {
 				const parentRect = clipCurr.getBoundingClientRect();
 				if (centerX < parentRect.left || centerX > parentRect.right ||

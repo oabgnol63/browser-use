@@ -317,23 +317,27 @@ Available tabs:
 """
 		return browser_state
 
-	def _get_agent_state_description(self) -> str:
-		if self.step_info:
-			step_info_description = f'Step{self.step_info.step_number + 1} maximum:{self.step_info.max_steps}\n'
-		else:
-			step_info_description = ''
-
+	def _get_static_context(self) -> str:
 		time_str = datetime.now().strftime('%Y-%m-%d')
-		step_info_description += f'Today:{time_str}'
-
-		_todo_contents = self.file_system.get_todo_contents() if self.file_system else ''
-		if not len(_todo_contents):
-			_todo_contents = '[empty todo.md, fill it when applicable]'
+		step_info_description = f'Today:{time_str}'
 
 		agent_state = f"""
 <user_request>
 {self.task}
 </user_request>
+"""
+		if self.sensitive_data:
+			agent_state += f'<sensitive_data>{self.sensitive_data}</sensitive_data>\n'
+
+		agent_state += f'<date_info>{step_info_description}</date_info>\n'
+		return agent_state
+
+	def _get_dynamic_context(self) -> str:
+		_todo_contents = self.file_system.get_todo_contents() if self.file_system else ''
+		if not len(_todo_contents):
+			_todo_contents = '[empty todo.md, fill it when applicable]'
+
+		context = f"""
 <file_system>
 {self.file_system.describe() if self.file_system else 'No file system available'}
 </file_system>
@@ -342,16 +346,13 @@ Available tabs:
 </todo_contents>
 """
 		if self.plan_description:
-			agent_state += f'<plan>\n{self.plan_description}\n</plan>\n'
+			context += f'<plan>\n{self.plan_description}\n</plan>\n'
 
-		if self.sensitive_data:
-			agent_state += f'<sensitive_data>{self.sensitive_data}</sensitive_data>\n'
-
-		agent_state += f'<step_info>{step_info_description}</step_info>\n'
 		if self.available_file_paths:
 			available_file_paths_text = '\n'.join(self.available_file_paths)
-			agent_state += f'<available_file_paths>{available_file_paths_text}\nUse with absolute paths</available_file_paths>\n'
-		return agent_state
+			context += f'<available_file_paths>{available_file_paths_text}\nUse with absolute paths</available_file_paths>\n'
+
+		return context
 
 	def _resize_screenshot(self, screenshot_b64: str) -> str:
 		"""Resize screenshot to llm_screenshot_size if configured."""
@@ -394,37 +395,51 @@ Available tabs:
 			use_vision = False
 
 		# Build complete state description
-		state_description = (
+		# 1. Static agent_state goes first to enable prompt caching
+		static_description = '<agent_state>\n' + self._get_static_context().strip('\n') + '\n</agent_state>\n\n'
+
+		# 2. Dynamic agent_history goes next
+		static_description += (
 			'<agent_history>\n'
 			+ (self.agent_history_description.strip('\n') if self.agent_history_description else '')
 			+ '\n</agent_history>\n\n'
 		)
-		state_description += '<agent_state>\n' + self._get_agent_state_description().strip('\n') + '\n</agent_state>\n'
-		state_description += '<browser_state>\n' + self._get_browser_state_description().strip('\n') + '\n</browser_state>\n'
+
+		# 3. Dynamic current context, step info, and browser state go last
+		dynamic_description = '<current_context>\n' + self._get_dynamic_context().strip('\n') + '\n</current_context>\n\n'
+
+		# 4. Dynamic current step info and browser state go last
+		if self.step_info:
+			dynamic_description += f'<step_info>Step{self.step_info.step_number + 1} maximum:{self.step_info.max_steps}</step_info>\n\n'
+
+		dynamic_description += '<browser_state>\n' + self._get_browser_state_description().strip('\n') + '\n</browser_state>\n'
 		# Only add read_state if it has content
 		read_state_description = self.read_state_description.strip('\n').strip() if self.read_state_description else ''
 		if read_state_description:
-			state_description += '<read_state>\n' + read_state_description + '\n</read_state>\n'
+			dynamic_description += '<read_state>\n' + read_state_description + '\n</read_state>\n'
 
 		if self.page_filtered_actions:
-			state_description += '<page_specific_actions>\n'
-			state_description += self.page_filtered_actions + '\n'
-			state_description += '</page_specific_actions>\n'
+			dynamic_description += '<page_specific_actions>\n'
+			dynamic_description += self.page_filtered_actions + '\n'
+			dynamic_description += '</page_specific_actions>\n'
 
 		# Add unavailable skills information if any
 		if self.unavailable_skills_info:
-			state_description += '\n' + self.unavailable_skills_info + '\n'
+			dynamic_description += '\n' + self.unavailable_skills_info + '\n'
 
 		# Sanitize surrogates from all text content
-		state_description = sanitize_surrogates(state_description)
+		static_description = sanitize_surrogates(static_description)
+		dynamic_description = sanitize_surrogates(dynamic_description)
 
 		# Check if we have images to include (from read_file action)
 		has_images = bool(self.read_state_images)
 
-		if (use_vision is True and self.screenshots) or has_images:
-			# Start with text description
-			content_parts: list[ContentPartTextParam | ContentPartImageParam] = [ContentPartTextParam(text=state_description)]
+		content_parts: list[ContentPartTextParam | ContentPartImageParam] = [
+			ContentPartTextParam(text=static_description),
+			ContentPartTextParam(text=dynamic_description)
+		]
 
+		if (use_vision is True and self.screenshots) or has_images:
 			# Add sample images
 			content_parts.extend(self.sample_images)
 
@@ -481,9 +496,7 @@ Available tabs:
 					)
 				)
 
-			return UserMessage(content=content_parts, cache=True)
-
-		return UserMessage(content=state_description, cache=True)
+		return UserMessage(content=content_parts, cache=True)
 
 
 def get_rerun_summary_prompt(original_task: str, total_steps: int, success_count: int, error_count: int) -> str:

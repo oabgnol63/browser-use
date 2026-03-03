@@ -1159,6 +1159,34 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.logger.debug(
 			f'🤖 Step {self.state.n_steps}: Calling LLM with {len(input_messages)} messages (model: {self.llm.model})...'
 		)
+		
+		# DEBUG: Log the messages to see DOM content
+		try:
+			log_content = f"\n\n--- STEP {self.state.n_steps} ---\n"
+			for idx, m in enumerate(input_messages):
+				log_content += f"\nMessage {idx} ({type(m).__name__}):\n"
+				try:
+					if isinstance(m.content, list):
+						for item in m.content:
+							if isinstance(item, dict):
+								if item.get('type') == 'text':
+									log_content += str(item.get('text', ''))
+								elif item.get('type') == 'image_url':
+									log_content += "[IMAGE]"
+								else:
+									log_content += str(item)
+							elif hasattr(item, 'text'):
+								log_content += str(item.text)
+							else:
+								log_content += str(item)
+					else:
+						log_content += str(m.content)
+				except Exception as e:
+					log_content += f"[Error parsing content: {e}. Raw: {m.content}]"
+			log_content += "\n-------------------\n"
+			self.logger.debug(log_content)
+		except Exception as e:
+			self.logger.error(f"Failed to log messages: {e}")
 
 		try:
 			model_output = await asyncio.wait_for(
@@ -3932,6 +3960,13 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 	async def close(self):
 		"""Close all resources"""
 		try:
+			from browser_use.llm.google.chat import ChatGoogle
+			if isinstance(self.llm, ChatGoogle):
+				try:
+					await self.llm.cleanup_caches()
+				except Exception as e:
+					self.logger.debug(f'Failed to cleanup LLM caches: {e}')
+
 			# Only close browser if keep_alive is False (or not set)
 			if self.browser_session is not None:
 				if not self.browser_session.browser_profile.keep_alive:
