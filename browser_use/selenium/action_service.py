@@ -13,7 +13,7 @@ Enhanced iframe support:
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from browser_use.dom.views import EnhancedDOMTreeNode
 
@@ -21,7 +21,10 @@ if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
 
 from browser_use.selenium.iframe_handler import SeleniumIframeHandler
-
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.actions.action_builder import ActionBuilder
+from selenium.common.exceptions import NoSuchElementException
 
 class SeleniumActionService:
     """
@@ -95,8 +98,6 @@ class SeleniumActionService:
         Returns:
             Dict with click result
         """
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.action_chains import ActionChains
         
         # Check if the element is within an iframe
         is_in_iframe, iframe_selector = self._is_element_in_iframe(element_node)
@@ -124,41 +125,200 @@ class SeleniumActionService:
                 self.logger.error(f'Failed to click in iframe: {e}')
                 raise
         
-        self.logger.debug(f'Clicking element with xpath: {xpath}')
-        
+        method = 'xpath'
         try:
-            # Find element by xpath
-            element = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.driver.find_element(By.XPATH, xpath)
-            )
+            # Robust element finding with fallbacks
+            element, method = await self._find_element_robust(element_node)
             
-            # Scroll element into view
+            # 1. Scroll the element into the center of the viewport
             await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", element
                 )
             )
-            
-            # Small delay for scroll to complete
             await asyncio.sleep(0.1)
             
-            # Click using ActionChains for better reliability
-            def do_click():
+            # 2. Perform a "safe" move and click. 
+            # To avoid crossing sticky top-nav hover menus (like CBS Latest),
+            # we do an "L-shaped" approach: move to the left edge of the screen
+            # at the target's Y level, wait for menus to close, then move horizontally.
+            def do_safe_click():
+                
+                # Get viewport coordinates of the target element
+                rect = self.driver.execute_script("return arguments[0].getBoundingClientRect();", element)
+                target_y = max(10, int(rect['top'] + rect['height'] / 2))
+                
+                # Move to the safe left edge (x=1) at the element's Y coordinate
+                action_builder = ActionBuilder(self.driver)
+                action_builder.pointer_action.move_to_location(1, target_y)
+                action_builder.perform()
+                
+                # Use standard ActionChains to wait and move horizontally
                 actions = ActionChains(self.driver)
+                actions.pause(0.5) # Give CSS hover menus time to close
                 actions.move_to_element(element).click().perform()
+
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, do_safe_click)
+            except Exception as e:
+                self.logger.warning(f'ActionChains safe routing failed: {e}. Falling back to JS click.')
+                # Fallback to JS click if ActionChains physical click fails (e.g. element covered by a true ad)
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.driver.execute_script("arguments[0].click();", element)
+                )
             
-            await asyncio.get_event_loop().run_in_executor(None, do_click)
-            
-            self.logger.debug('Click successful')
+            self.logger.debug(f'Click successful using {method}')
             return {
                 'success': True,
                 'xpath': xpath,
+                'method': method,
                 'tag_name': element_node.node_name,
             }
         except Exception as e:
-            self.logger.error(f'Click failed: {e}')
+            self.logger.error(f'Click failed ({method}): {e}')
             raise
+
+    async def _find_element_robust(self, element_node: EnhancedDOMTreeNode) -> tuple[Any, str]:
+        """
+        Find an element using multiple strategies to handle stale positional xpaths.
+        
+        Priority:
+        1. Original xpath from DOM extraction (most accurate right after extraction)
+        2. href-based CSS selector (for <a> tags, robust against DOM reflow)
+        3. text-anchored xpath (for buttons/links with known text)
+        """
+        # Extract expected attributes for debugging and fallback strategies
+        expected_text = None
+        if element_node.ax_node and element_node.ax_node.name:
+            expected_text = element_node.ax_node.name.strip()
+        if not expected_text and element_node.node_value:
+            expected_text = element_node.node_value.strip()
+        first_line_text = expected_text.split('\n')[0].strip() if expected_text else None
+        href = element_node.attributes.get('href')
+        xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
+
+        self.logger.debug(
+            f'_find_element_robust: node_name={element_node.node_name}, '
+            f'expected_text="{(first_line_text or "")[:60]}", '
+            f'href="{(href or "")[:80]}", '
+            f'xpath="{xpath[:80]}"'
+        )
+
+        # Helper to log found element details
+        async def _log_element_details(elem: Any, strategy: str) -> None:
+            try:
+                info = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: {
+                        'tag': elem.tag_name,
+                        'text': (elem.text or '')[:80],
+                        'href': elem.get_attribute('href') or '',
+                        'location': elem.location,
+                        'size': elem.size,
+                        'displayed': elem.is_displayed(),
+                    }
+                )
+                self.logger.debug(
+                    f'  Found via {strategy}: tag={info["tag"]}, '
+                    f'text="{info["text"][:50]}", '
+                    f'href="{info["href"][:60]}", '
+                    f'location={info["location"]}, size={info["size"]}, '
+                    f'displayed={info["displayed"]}'
+                )
+            except Exception as log_err:
+                self.logger.debug(f'  Found via {strategy} (could not log details: {log_err})')
+
+        # Strategy 1: Original xpath from DOM extraction
+        try:
+            self.logger.debug(f'  Strategy 1: trying xpath: {xpath[:100]}')
+            element = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.driver.find_element(By.XPATH, xpath)
+            )
+            await _log_element_details(element, 'xpath')
+            
+            # Validate: if we have expected text, check the found element matches
+            if first_line_text:
+                found_text = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: element.text or ''
+                )
+                if first_line_text not in found_text and len(first_line_text) > 5:
+                    self.logger.warning(
+                        f'  XPATH STALE: expected text "{first_line_text[:50]}" '
+                        f'but found "{found_text[:50]}". Trying fallbacks...'
+                    )
+                    raise NoSuchElementException('xpath found wrong element (stale)')
+            
+            return element, 'xpath'
+        except (NoSuchElementException, Exception) as e:
+            self.logger.debug(f'  Strategy 1 (xpath) failed: {e}')
+
+        # Strategy 2: href-based CSS selector for <a> tags
+        if element_node.node_name.lower() == 'a' and href:
+            try:
+                css_selector = f'a[href="{href}"]'
+                self.logger.debug(f'  Strategy 2: trying CSS selector: {css_selector[:100]}')
+                candidates = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.driver.find_elements(By.CSS_SELECTOR, css_selector)
+                )
+                self.logger.debug(f'  Found {len(candidates)} candidate(s) by href')
+                
+                if len(candidates) == 1:
+                    await _log_element_details(candidates[0], 'href-unique')
+                    return candidates[0], 'href'
+                elif len(candidates) > 1 and first_line_text:
+                    # Disambiguate by text
+                    for i, candidate in enumerate(candidates):
+                        try:
+                            ctext = await asyncio.get_event_loop().run_in_executor(
+                                None, lambda c=candidate: c.text or ''
+                            )
+                            self.logger.debug(f'    candidate[{i}] text="{ctext[:60]}"')
+                            if first_line_text in ctext:
+                                await _log_element_details(candidate, f'href+text[{i}]')
+                                return candidate, 'href+text'
+                        except Exception:
+                            continue
+                    # Fall back to first displayed
+                    for candidate in candidates:
+                        try:
+                            displayed = await asyncio.get_event_loop().run_in_executor(
+                                None, lambda c=candidate: c.is_displayed()
+                            )
+                            if displayed:
+                                await _log_element_details(candidate, 'href+visible')
+                                return candidate, 'href+visible'
+                        except Exception:
+                            continue
+                    await _log_element_details(candidates[0], 'href-first')
+                    return candidates[0], 'href'
+                elif len(candidates) > 1:
+                    await _log_element_details(candidates[0], 'href-first-notext')
+                    return candidates[0], 'href'
+            except NoSuchElementException:
+                self.logger.debug('  Strategy 2 (href) failed: no elements found')
+
+        # Strategy 3: text-anchored xpath
+        if first_line_text and element_node.node_name.lower() in ('a', 'button'):
+            try:
+                tag = element_node.node_name.lower()
+                text_xpath = f'//{tag}[contains(normalize-space(), "{first_line_text}")]'
+                self.logger.debug(f'  Strategy 3: trying text-xpath: {text_xpath[:100]}')
+                element = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.driver.find_element(By.XPATH, text_xpath)
+                )
+                await _log_element_details(element, 'text-xpath')
+                return element, 'text-xpath'
+            except NoSuchElementException:
+                self.logger.debug('  Strategy 3 (text-xpath) failed')
+
+        # All strategies failed
+        raise NoSuchElementException(
+            f'Could not find element: {element_node.node_name} '
+            f'text="{(first_line_text or "")[:50]}" href="{(href or "")[:50]}"'
+        )
+
 
     async def click_coordinates(self, x: int, y: int) -> dict:
         """
@@ -170,9 +330,7 @@ class SeleniumActionService:
             
         Returns:
             Dict with click result
-        """
-        from selenium.webdriver.common.action_chains import ActionChains
-        
+        """        
         self.logger.debug(f'Clicking at coordinates: ({x}, {y})')
         
         try:
@@ -264,7 +422,6 @@ class SeleniumActionService:
                 )
             
             # Use ActionChains for Safari as it's often more reliable for focus and typing
-            from selenium.webdriver.common.action_chains import ActionChains
             
             if clear_first:
                 if is_safari:
