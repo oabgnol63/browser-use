@@ -315,6 +315,7 @@ class MessageManager:
 			if action_result.images:
 				self.state.read_state_images.extend(action_result.images)
 				logger.debug(f'Added {len(action_result.images)} image(s) to read_state_images')
+				action_result.images = None  # Free memory, as they are no longer needed in history
 
 			if action_result.long_term_memory:
 				action_results += f'{action_result.long_term_memory}\n'
