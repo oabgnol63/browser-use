@@ -78,76 +78,15 @@ class SeleniumDomService:
         self.js_code = raw_js_code
         self.logger.debug(f'JavaScript code loaded, length: {len(self.js_code)} chars')
 
-        # Inject stealth JS once at initialization time
-        # This only needs to be done once per browser session
-        self._stealth_injected = False
-        
         # Track iframes that have highlights drawn in them
         # This avoids expensive recursive iframe discovery during clearance
         self._iframes_with_highlights: set[str] = set()
 
     async def __aenter__(self):
-        # Note: Stealth preferences are already applied at browser launch time
-        # via FIREFOX_STEALTH_PREFS when stealth=True (the default).
-        # No need to inject JS here - browser preferences handle it.
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         pass
-
-    async def inject_stealth_js(self) -> None:
-        """
-        Inject JavaScript to hide automation flags at runtime.
-
-        This complements browser preferences by patching navigator properties
-        that may still be detectable after browser launch.
-
-        Note: This is called once at initialization time via __aenter__.
-        The injection persists across page navigations within the same session.
-        """
-        # Only inject once per session - stealth JS persists across navigations
-        if getattr(self, '_stealth_injected', False):
-            self.logger.debug('Stealth JS already injected, skipping')
-            return
-
-        self.logger.debug('Injecting stealth JavaScript...')
-        try:
-            self.driver.execute_script('''
-                // Hide navigator.webdriver flag
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined,
-                    configurable: true,
-                    enumerable: true
-                });
-
-                // Remove from prototype chain as well
-                try {
-                    delete navigator.__proto__.webdriver;
-                } catch (e) {
-                    // May fail in some browsers, that's okay
-                }
-
-                // Add fake plugins to match real browser fingerprint
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5],
-                    configurable: true
-                });
-
-                // Spoof MIME types
-                Object.defineProperty(navigator, 'mimeTypes', {
-                    get: () => ({
-                        length: 3,
-                        0: { type: 'application/pdf', suffixes: 'pdf', description: 'PDF Viewer' },
-                        1: { type: 'application/x-shockwave-flash', suffixes: 'swf', description: 'Shockwave Flash' },
-                        2: { type: 'text/html', suffixes: 'html', description: 'HTML Document' }
-                    }),
-                    configurable: true
-                });
-            ''')
-            self._stealth_injected = True
-            self.logger.debug('Stealth JavaScript injected successfully')
-        except Exception as e:
-            self.logger.warning(f'Failed to inject stealth JS: {e}')
 
     @time_execution_async('--selenium_get_dom_tree')
     async def get_dom_tree(

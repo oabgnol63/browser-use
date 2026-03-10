@@ -741,18 +741,29 @@
 
 		while (current && current.nodeType === Node.ELEMENT_NODE) {
 			let index = 1;
-			let sibling = current.previousSibling;
+			let hasSameTagSiblings = false;
+			const tagName = current.tagName.toLowerCase();
 
+			// Count previous siblings of same tag
+			let sibling = current.previousSibling;
 			while (sibling) {
-				if (sibling.nodeType === Node.ELEMENT_NODE &&
-					sibling.tagName === current.tagName) {
+				if (sibling.nodeType === Node.ELEMENT_NODE && sibling.tagName.toLowerCase() === tagName) {
 					index++;
+					hasSameTagSiblings = true;
 				}
 				sibling = sibling.previousSibling;
 			}
 
-			const tagName = current.tagName.toLowerCase();
-			const part = index > 1 ? `${tagName}[${index}]` : tagName;
+			// Check if there are next siblings of same tag
+			sibling = current.nextSibling;
+			while (sibling && !hasSameTagSiblings) {
+				if (sibling.nodeType === Node.ELEMENT_NODE && sibling.tagName.toLowerCase() === tagName) {
+					hasSameTagSiblings = true;
+				}
+				sibling = sibling.nextSibling;
+			}
+
+			const part = hasSameTagSiblings ? `${tagName}[${index}]` : tagName;
 			parts.unshift(part);
 
 			current = current.parentNode;

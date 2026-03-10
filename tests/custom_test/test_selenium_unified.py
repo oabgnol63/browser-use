@@ -45,7 +45,6 @@ async def main():
         region='us-west',
         username=username,
         access_key=access_key,
-        stealth=True,
     )
     
     # 2. Wrap it in the event-driven SeleniumBrowserSession

@@ -225,22 +225,6 @@ FIREFOX_DEFAULT_PREFS: dict[str, bool | int | str] = {
 	'browser.urlbar.suggest.engines': False,
 }
 
-# Firefox stealth preferences to avoid bot detection
-FIREFOX_STEALTH_PREFS: dict[str, bool | int | str] = {
-	'dom.webdriver.enabled': False,  # Hide webdriver flag (CRITICAL for stealth)
-	'useAutomationExtension': False,
-	'marionette.enabled': False,  # Hide marionette (when not needed)
-	'privacy.resistFingerprinting': False,  # Disabled - can cause issues with automation
-	'webgl.disabled': False,  # Keep WebGL enabled (disabling is suspicious)
-	'media.peerconnection.enabled': True,  # Keep WebRTC enabled (disabling is suspicious)
-	
-	# Navigator properties
-	'general.platform.override': '',  # Use default platform
-	'general.appversion.override': '',  # Use default app version
-	
-	# Disable automation-revealing features but keep them working
-	'devtools.selfxss.count': 100,  # Avoid self-XSS warning
-}
 
 # Firefox security-disabled preferences (use with caution)
 FIREFOX_DISABLE_SECURITY_PREFS: dict[str, bool | int | str] = {
@@ -266,7 +250,6 @@ FIREFOX_DETERMINISTIC_RENDERING_PREFS: dict[str, bool | int | str] = {
 
 def get_firefox_preferences(
 	include_default: bool = True,
-	include_stealth: bool = True,
 	disable_security: bool = False,
 	deterministic_rendering: bool = False,
 	download_dir: str | None = None,
@@ -280,7 +263,6 @@ def get_firefox_preferences(
 	
 	Args:
 		include_default: Include standard automation preferences (recommended True)
-		include_stealth: Include stealth preferences to avoid bot detection
 		disable_security: Include security-disabling preferences (use with caution!)
 		deterministic_rendering: Include preferences for consistent rendering/screenshots
 		download_dir: Custom download directory path (will set browser.download.dir)
@@ -303,9 +285,6 @@ def get_firefox_preferences(
 	if include_default:
 		prefs.update(FIREFOX_DEFAULT_PREFS)
 	
-	if include_stealth:
-		prefs.update(FIREFOX_STEALTH_PREFS)
-	
 	if disable_security:
 		prefs.update(FIREFOX_DISABLE_SECURITY_PREFS)
 	
@@ -325,7 +304,6 @@ def get_firefox_preferences(
 def apply_firefox_preferences(
 	options: 'webdriver.FirefoxOptions',  # type: ignore[name-defined]
 	include_default: bool = True,
-	include_stealth: bool = True,
 	disable_security: bool = False,
 	deterministic_rendering: bool = False,
 	download_dir: str | None = None,
@@ -340,7 +318,6 @@ def apply_firefox_preferences(
 	Args:
 		options: Selenium FirefoxOptions object to configure
 		include_default: Include standard automation preferences (recommended True)
-		include_stealth: Include stealth preferences to avoid bot detection
 		disable_security: Include security-disabling preferences (use with caution!)
 		deterministic_rendering: Include preferences for consistent rendering/screenshots
 		download_dir: Custom download directory path
@@ -356,7 +333,6 @@ def apply_firefox_preferences(
 	"""
 	prefs = get_firefox_preferences(
 		include_default=include_default,
-		include_stealth=include_stealth,
 		disable_security=disable_security,
 		deterministic_rendering=deterministic_rendering,
 		download_dir=download_dir,

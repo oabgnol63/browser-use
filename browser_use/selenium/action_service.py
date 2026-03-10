@@ -13,6 +13,7 @@ Enhanced iframe support:
 import asyncio
 import logging
 import time
+import random
 from typing import TYPE_CHECKING, Any
 
 from browser_use.dom.views import EnhancedDOMTreeNode
@@ -25,6 +26,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.action_builder import ActionBuilder
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import StaleElementReferenceException
 
 class SeleniumActionService:
     """
@@ -130,44 +133,54 @@ class SeleniumActionService:
             # Robust element finding with fallbacks
             element, method = await self._find_element_robust(element_node)
             
-            # 1. Scroll the element into the center of the viewport
+            # 1. Scroll the element into the center of the viewport smoothly
             await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center'});", element
+                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", element
                 )
             )
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(random.uniform(0.3, 0.6))
             
-            # 2. Perform a "safe" move and click. 
-            # To avoid crossing sticky top-nav hover menus (like CBS Latest),
-            # we do an "L-shaped" approach: move to the left edge of the screen
-            # at the target's Y level, wait for menus to close, then move horizontally.
+            # 2. Perform a human-like move and click.
             def do_safe_click():
-                
-                # Get viewport coordinates of the target element
-                rect = self.driver.execute_script("return arguments[0].getBoundingClientRect();", element)
-                target_y = max(10, int(rect['top'] + rect['height'] / 2))
-                
-                # Move to the safe left edge (x=1) at the element's Y coordinate
-                action_builder = ActionBuilder(self.driver)
-                action_builder.pointer_action.move_to_location(1, target_y)
-                action_builder.perform()
-                
-                # Use standard ActionChains to wait and move horizontally
-                actions = ActionChains(self.driver)
-                actions.pause(0.5) # Give CSS hover menus time to close
-                actions.move_to_element(element).click().perform()
+                self._perform_human_click(element=element)
 
             try:
                 await asyncio.get_event_loop().run_in_executor(None, do_safe_click)
             except Exception as e:
-                self.logger.warning(f'ActionChains safe routing failed: {e}. Falling back to JS click.')
-                # Fallback to JS click if ActionChains physical click fails (e.g. element covered by a true ad)
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: self.driver.execute_script("arguments[0].click();", element)
-                )
+                self.logger.warning(f'ActionChains human click failed: {e}. Falling back to element.click()')
+                try:
+                    await asyncio.get_event_loop().run_in_executor(None, lambda: element.click())
+                except Exception as e2:
+                    self.logger.warning(f'element.click() failed: {e2}. Falling back to JS click or location.href')
+                    href = element_node.attributes.get('href')
+                    if element_node.node_name.lower() == 'a' and href:
+                        # For links, direct JS navigation is most reliable if all clicks fail
+                        # Provide absolute URL if possible to avoid relative path issues
+                        await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self.driver.execute_script("window.location.href = arguments[0].href || arguments[1];", element, href)
+                        )
+                    else:
+                        await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self.driver.execute_script("arguments[0].click();", element)
+                        )
+            
+            # 3. Post-click wait to accommodate slow SPA navigation (esp for <a> tags)
+            if element_node.node_name.lower() == 'a':
+                self.logger.debug(f'Waiting up to 12s for SPA navigation on <a> click...')
+                await asyncio.sleep(2.0)
+                for _ in range(10):
+                    ready = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.driver.execute_script("return document.readyState === 'complete'")
+                    )
+                    if ready:
+                        break
+                    await asyncio.sleep(1.0)
+            else:
+                await asyncio.sleep(0.5)
             
             self.logger.debug(f'Click successful using {method}')
             return {
@@ -335,10 +348,7 @@ class SeleniumActionService:
         
         try:
             def do_click():
-                actions = ActionChains(self.driver)
-                # Move to body element first, then offset
-                body = self.driver.find_element("tag name", "body")
-                actions.move_to_element_with_offset(body, x, y).click().perform()
+                self._perform_human_click(target_x=x, target_y=y)
             
             await asyncio.get_event_loop().run_in_executor(None, do_click)
             
@@ -368,8 +378,6 @@ class SeleniumActionService:
         Returns:
             Dict with type result
         """
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
         
         self.logger.debug(f'Typing text: {text[:20]}...' if len(text) > 20 else f'Typing text: {text}')
         
@@ -479,8 +487,6 @@ class SeleniumActionService:
         Returns:
             Dict with result
         """
-        from selenium.webdriver.common.keys import Keys
-        from selenium.common.exceptions import StaleElementReferenceException
         
         self.logger.debug(f'Sending keys: {keys}')
         
@@ -615,40 +621,57 @@ class SeleniumActionService:
         """
         self.logger.debug(f'Scrolling {direction} by {amount}px')
         
-        scroll_x = 0
-        scroll_y = 0
-        
-        if direction == 'down':
-            scroll_y = amount
-        elif direction == 'up':
-            scroll_y = -amount
-        elif direction == 'right':
-            scroll_x = amount
-        elif direction == 'left':
-            scroll_x = -amount
-        
         try:
-            # Check if element is in iframe
+            # Split the scroll amount into random chunks to simulate human scrolling
+            chunks = []
+            remaining = amount
+            if amount != 0:
+                while abs(remaining) > 0:
+                    step = random.randint(min(20, abs(remaining)), min(100, abs(remaining)))
+                    if remaining < 0:
+                        step = -step
+                    chunks.append(step)
+                    remaining -= step
+
+            # Helper for execution
+            async def run_smooth_scroll(is_iframe_context: bool, frame_selector: str = ""):
+                success = False
+                for chunk in chunks:
+                    cx = chunk if direction in ('left', 'right') else 0
+                    cy = chunk if direction in ('up', 'down') else 0
+                    
+                    if element_node:
+                        xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
+                        script = f"""
+                            var element = document.evaluate('{xpath}', document, null, 
+                                XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                            if (element) {{
+                                element.scrollBy({cx}, {cy});
+                                return true;
+                            }}
+                            return false;
+                        """
+                    else:
+                        script = f"window.scrollBy({cx}, {cy}); return true;"
+                        
+                    if is_iframe_context:
+                        result = await self.iframe_handler.execute_in_frame(frame_selector, script)
+                    else:
+                        result = await asyncio.get_event_loop().run_in_executor(
+                            None, lambda s=script: self.driver.execute_script(s)
+                        )
+                    
+                    if not result and element_node:
+                        break  # element not found
+                    success = result or not element_node
+                    await asyncio.sleep(random.uniform(0.01, 0.05))
+                return success
+
             if element_node:
                 is_in_iframe, iframe_selector = self._is_element_in_iframe(element_node)
-                xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
-                
                 if is_in_iframe and iframe_selector:
                     self.logger.debug(f'Scrolling in iframe: {iframe_selector}')
-                    script = f'''
-                        var element = document.evaluate('{xpath}', document, null, 
-                            XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        if (element) {{
-                            element.scrollBy({scroll_x}, {scroll_y});
-                            return true;
-                        }}
-                        return false;
-                    '''
-                    result = await self.iframe_handler.execute_in_frame(
-                        iframe_selector,
-                        script,
-                    )
-                    
+                    result = await run_smooth_scroll(True, iframe_selector)
                     return {
                         'success': bool(result),
                         'iframe': iframe_selector,
@@ -656,23 +679,7 @@ class SeleniumActionService:
                         'amount': amount,
                     }
 
-            if element_node:
-                xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
-                script = f"""
-                    var element = document.evaluate('{xpath}', document, null, 
-                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    if (element) {{
-                        element.scrollBy({scroll_x}, {scroll_y});
-                        return true;
-                    }}
-                    return false;
-                """
-            else:
-                script = f"window.scrollBy({scroll_x}, {scroll_y}); return true;"
-            
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.driver.execute_script(script)
-            )
+            result = await run_smooth_scroll(False)
             
             return {
                 'success': result,
@@ -798,6 +805,64 @@ class SeleniumActionService:
 
     # ==================== Helper Methods ====================
 
+    def _perform_human_click(self, element=None, target_x=None, target_y=None):
+        """Perform a highly randomized human-like click using ActionBuilder and Selenium actions."""
+        action_builder = ActionBuilder(self.driver)
+
+        if element:
+            # Get viewport coordinates of the target element
+            rect = self.driver.execute_script("return arguments[0].getBoundingClientRect();", element)
+            tx = max(1, int(rect['left'] + rect['width'] / 2 + random.uniform(-rect['width']/4, rect['width']/4)))
+            ty = max(1, int(rect['top'] + rect['height'] / 2 + random.uniform(-rect['height']/4, rect['height']/4)))
+        elif target_x is not None and target_y is not None:
+            tx = target_x
+            ty = target_y
+        else:
+            raise ValueError("Must provide element or target coordinates")
+
+        try:
+            window_size = self.driver.get_window_size()
+            start_x = random.randint(0, window_size.get('width', 1000) // 2)
+            start_y = random.randint(0, window_size.get('height', 800))
+
+            def bezier_curve(p0, p1, p2, p3, num_points=20):
+                points = []
+                for i in range(num_points + 1):
+                    t = i / num_points
+                    x = int((1 - t)**3 * p0[0] + 3 * (1 - t)**2 * t * p1[0] + 3 * (1 - t) * t**2 * p2[0] + t**3 * p3[0])
+                    y = int((1 - t)**3 * p0[1] + 3 * (1 - t)**2 * t * p1[1] + 3 * (1 - t) * t**2 * p2[1] + t**3 * p3[1])
+                    points.append((x, y))
+                return points
+
+            # Randomized control points for organic arc
+            cp1 = (start_x + (tx - start_x) * random.uniform(0.1, 0.5), start_y + (ty - start_y) * random.uniform(0.1, 0.9) + random.uniform(-50, 50))
+            cp2 = (start_x + (tx - start_x) * random.uniform(0.5, 0.9), start_y + (ty - start_y) * random.uniform(0.1, 0.9) + random.uniform(-50, 50))
+
+            curve_points = bezier_curve((start_x, start_y), cp1, cp2, (tx, ty), num_points=random.randint(25, 45))
+
+            action_builder.pointer_action.move_to_location(start_x, start_y)
+            for i, pt in enumerate(curve_points):
+                action_builder.pointer_action.move_to_location(pt[0], max(1, pt[1]))
+                # Jitter pause to mimic human motor imperfection
+                if i % 3 == 0:
+                    action_builder.pointer_action.pause(random.uniform(0.01, 0.04))
+                else:
+                    action_builder.pointer_action.pause(random.uniform(0.001, 0.005))
+
+            # Hesitation before click
+            action_builder.pointer_action.pause(random.uniform(0.15, 0.45))
+        except Exception as e:
+            self.logger.warning(f"Failed to generate human mouse trajectory: {e}")
+            # Fallback direct move
+            action_builder.pointer_action.move_to_location(tx, ty)
+
+        # Human realistic click (pointer down, pause, pointer up)
+        action_builder.pointer_action.pointer_down()
+        action_builder.pointer_action.pause(random.uniform(0.05, 0.12)) # Human click duration
+        action_builder.pointer_action.pointer_up()
+
+        # Perform the entire action sequence
+        action_builder.perform()
     def _is_element_in_iframe(self, element_node: EnhancedDOMTreeNode) -> tuple[bool, str | None]:
         """
         Check if an element is from an iframe and return the iframe selector.

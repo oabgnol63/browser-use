@@ -16,7 +16,7 @@ from browser_use.selenium.action_service import SeleniumActionService
 from browser_use.selenium.iframe_handler import SeleniumIframeHandler, IframeInfo, FrameContext
 from browser_use.selenium.firefox_profile import (
     FIREFOX_DEFAULT_PREFS,
-    FIREFOX_STEALTH_PREFS,
+
     FIREFOX_DISABLE_SECURITY_PREFS,
     FIREFOX_DETERMINISTIC_RENDERING_PREFS,
     FIREFOX_HEADLESS_ARGS,
@@ -36,7 +36,7 @@ __all__ = [
     'FrameContext',
     # Firefox configuration
     'FIREFOX_DEFAULT_PREFS',
-    'FIREFOX_STEALTH_PREFS',
+
     'FIREFOX_DISABLE_SECURITY_PREFS',
     'FIREFOX_DETERMINISTIC_RENDERING_PREFS',
     'FIREFOX_HEADLESS_ARGS',

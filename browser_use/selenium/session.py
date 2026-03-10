@@ -23,6 +23,9 @@ from browser_use.selenium.saucelabs import (
     get_saucelabs_credentials,
 )
 from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
+from browser_use.dom.serializer.serializer import DOMTreeSerializer
+from selenium import webdriver
+from browser_use.selenium.firefox_profile import apply_firefox_preferences
 
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
@@ -96,7 +99,8 @@ class SeleniumSession:
         region: str = 'us-west',
         username: str | None = None,
         access_key: str | None = None,
-        stealth: bool = True,
+        extension_path: str | list[str] | None = None,
+        firefox_preferences: dict | None = None,
         logger: logging.Logger | None = None,
     ) -> 'SeleniumSession':
         """
@@ -110,14 +114,15 @@ class SeleniumSession:
             region: SauceLabs region
             username: SauceLabs username (or use SAUCE_USERNAME env)
             access_key: SauceLabs access key (or use SAUCE_ACCESS_KEY env)
-            stealth: Apply stealth preferences to avoid CAPTCHA/detection (default: True)
+            extension_path: Path to Firefox extension to install
+            firefox_preferences: Additional Firefox preferences to apply
             logger: Optional logger
 
         Returns:
             SeleniumSession connected to new SauceLabs browser
         """
         _logger = logger or logging.getLogger(__name__)
-        _logger.info(f'Creating new SauceLabs {browser} session (stealth={stealth})...')
+        _logger.info(f'Creating new SauceLabs {browser} session...')
 
         # Create driver in thread pool to avoid blocking
         driver = await asyncio.get_event_loop().run_in_executor(
@@ -130,7 +135,8 @@ class SeleniumSession:
                 region=region,
                 username=username,
                 access_key=access_key,
-                stealth=stealth,
+                extension_path=extension_path,
+                firefox_preferences=firefox_preferences,
             )
         )
 
@@ -193,14 +199,13 @@ class SeleniumSession:
         Returns:
             SeleniumSession connected to local browser
         """
-        from selenium import webdriver
         
         _logger = logger or logging.getLogger(__name__)
         _logger.info(f'Creating local {browser} session (headless={headless})...')
         
         def create_driver():
             if browser == 'firefox':
-                options = cls._make_firefox_options(headless=headless, stealth=True)
+                options = cls._make_firefox_options(headless=headless)
                 return webdriver.Firefox(options=options)
             elif browser == 'chrome':
                 options = webdriver.ChromeOptions()
@@ -276,7 +281,7 @@ class SeleniumSession:
             self._iframe_info_cache = iframe_info
             
             # Create serialized state - serialize the main root for the DOM text representation
-            from browser_use.dom.serializer.serializer import DOMTreeSerializer
+            
             serializer = DOMTreeSerializer(
                 main_root,
                 paint_order_filtering=self.dom_service.paint_order_filtering,
@@ -436,7 +441,6 @@ class SeleniumSession:
         self._iframe_info_cache = iframe_info
         
         # Create serialized state for LLM
-        from browser_use.dom.serializer.serializer import DOMTreeSerializer
         serialized_state, _ = DOMTreeSerializer(
             main_root,
             self._cached_dom_state,
@@ -560,35 +564,20 @@ class SeleniumSession:
 
     # ==================== Browser Configuration ====================
 
-    @staticmethod
-    def _make_firefox_options(headless: bool = False, stealth: bool = True):
+    def _make_firefox_options(headless: bool = False):
         """
-        Create Firefox options with stealth configuration to avoid detection.
+        Create Firefox options.
 
         Args:
             headless: Whether to run in headless mode
-            stealth: Whether to apply stealth preferences to avoid CAPTCHA/detection
 
         Returns:
             Configured FirefoxOptions
         """
-        from selenium import webdriver
-        from browser_use.selenium.firefox_profile import apply_firefox_preferences
 
         options = webdriver.FirefoxOptions()
         if headless:
             options.add_argument('--headless')
-
-        # Apply standardized preferences
-        apply_firefox_preferences(
-            options,
-            include_default=True,
-            include_stealth=stealth,
-            additional_prefs={
-                # Additional session-specific overrides can go here if needed
-                'media.peerconnection.enabled': False,  # Strict WebRTC blocking for local session
-            }
-        )
 
         return options
 
