@@ -2,7 +2,7 @@
 name = "browser-use"
 description = "Make websites accessible for AI agents"
 authors = [{ name = "Gregor Zunic" }]
-version = "0.12.1"
+version = "0.12.2"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 classifiers = [
@@ -48,10 +48,10 @@ dependencies = [
     "markdownify==1.2.2",
     "python-docx==1.2.0",
     "browser-use-sdk==2.0.15",
+    "litellm>=1.82.2",
     "selenium==4.41.0",
-    "numpy==2.4.2",
     "opencv-python==4.13.0.92",
-    "streamlit==1.54.0",
+    "streamlit==1.55.0",
 ]
 # google-api-core: only used for Google LLM APIs
 # pyperclip: only used for examples that use copy/paste

@@ -16,6 +16,7 @@ from cdp_use import CDPClient
 from cdp_use.cdp.fetch import AuthRequiredEvent, RequestPausedEvent
 from cdp_use.cdp.network import Cookie
 from cdp_use.cdp.target import SessionID, TargetID
+from cdp_use.cdp.target.commands import CreateTargetParameters
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from uuid_extensions import uuid7str
 
@@ -907,7 +908,12 @@ class BrowserSession(BaseModel):
 			await self.event_bus.dispatch(NavigationStartedEvent(target_id=target_id, url=event.url))
 
 			# Navigate to URL with proper lifecycle waiting
-			await self._navigate_and_wait(event.url, target_id, wait_until=event.wait_until)
+			await self._navigate_and_wait(
+				event.url,
+				target_id,
+				timeout=event.timeout_ms / 1000 if event.timeout_ms is not None else None,
+				wait_until=event.wait_until,
+			)
 
 			# Close any extension options pages that might have opened
 			await self._close_extension_options_pages()
@@ -2540,36 +2546,46 @@ class BrowserSession(BaseModel):
 
 	async def remove_highlights(self) -> None:
 		"""Remove highlights from the page using CDP."""
-		if not self.browser_profile.highlight_elements:
+		if not self.browser_profile.highlight_elements and not self.browser_profile.dom_highlight_elements:
 			return
 
 		try:
-			# Get cached session
-			cdp_session = await self.get_or_create_cdp_session()
+			async with asyncio.timeout(7.0):
+				# Get cached session
+				cdp_session = await self.get_or_create_cdp_session()
 
-			# Remove highlights via JavaScript - be thorough
-			script = """
-			(function() {
-				// Optimization: Remove the container first using ID (O(1))
-				// This removes all highlights instantly without scanning the whole DOM
-				const highlightContainer = document.getElementById('browser-use-debug-highlights');
-				if (highlightContainer) {
-					highlightContainer.remove();
-				}
+				# Remove highlights via JavaScript - be thorough
+				script = """
+				(function() {
+					// Remove all browser-use highlight elements
+					const highlights = document.querySelectorAll('[data-browser-use-highlight]');
+					console.log('Removing', highlights.length, 'browser-use highlight elements');
+					highlights.forEach(el => el.remove());
 
-				return { removed: highlightContainer ? 1 : 0 };
-			})();
-			"""
-			result = await cdp_session.cdp_client.send.Runtime.evaluate(
-				params={'expression': script, 'returnByValue': True}, session_id=cdp_session.session_id
-			)
+					// Also remove by ID in case selector missed anything
+					const highlightContainer = document.getElementById('browser-use-debug-highlights');
+					if (highlightContainer) {
+						console.log('Removing highlight container by ID');
+						highlightContainer.remove();
+					}
 
-			# Log the result for debugging
-			if result and 'result' in result and 'value' in result['result']:
-				removed_count = result['result']['value'].get('removed', 0)
-				self.logger.debug(f'Successfully removed {removed_count} highlight elements')
-			else:
-				self.logger.debug('Highlight removal completed')
+					// Final cleanup - remove any orphaned tooltips
+					const orphanedTooltips = document.querySelectorAll('[data-browser-use-highlight="tooltip"]');
+					orphanedTooltips.forEach(el => el.remove());
+
+					return { removed: highlights.length };
+				})();
+				"""
+				result = await cdp_session.cdp_client.send.Runtime.evaluate(
+					params={'expression': script, 'returnByValue': True}, session_id=cdp_session.session_id
+				)
+
+				# Log the result for debugging
+				if result and 'result' in result and 'value' in result['result']:
+					removed_count = result['result']['value'].get('removed', 0)
+					self.logger.debug(f'Successfully removed {removed_count} highlight elements')
+				else:
+					self.logger.debug('Highlight removal completed')
 
 		except Exception as e:
 			self.logger.warning(f'Failed to remove highlights: {e}')
@@ -3207,16 +3223,16 @@ class BrowserSession(BaseModel):
 
 	async def _cdp_create_new_page(self, url: str = 'about:blank', background: bool = False, new_window: bool = False) -> str:
 		"""Create a new page/tab using CDP Target.createTarget. Returns target ID."""
+		# Only include newWindow when True, letting Chrome auto-create window as needed
+		params = CreateTargetParameters(url=url, background=background)
+		if new_window:
+			params['newWindow'] = True
 		# Use the root CDP client to create tabs at the browser level
 		if self._cdp_client_root:
-			result = await self._cdp_client_root.send.Target.createTarget(
-				params={'url': url, 'newWindow': new_window, 'background': background}
-			)
+			result = await self._cdp_client_root.send.Target.createTarget(params=params)
 		else:
 			# Fallback to using cdp_client if root is not available
-			result = await self.cdp_client.send.Target.createTarget(
-				params={'url': url, 'newWindow': new_window, 'background': background}
-			)
+			result = await self.cdp_client.send.Target.createTarget(params=params)
 		return result['targetId']
 
 	async def _cdp_close_page(self, target_id: TargetID) -> None:
