@@ -21,7 +21,7 @@ GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2'
 from browser_use.browser.profile import ViewportSize
 from browser_use.browser import ProxySettings, CloudBrowserProfile
 from browser_use import Agent, Tools, ActionResult, ChatGoogle, BrowserSession
-from sauce_manager import saucelabs_session_creation, close_saucelabs_session, _do_login_cdp_async
+from browser_use.sauce_manager import saucelabs_session_creation, close_saucelabs_session, _do_login_cdp_async
 
 async def main():
     tools = Tools()

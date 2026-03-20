@@ -87,3 +87,5 @@ plot.py
 .claude/
 .roo/
 .roo*
+.agents/
+docs/superpowers/
