@@ -55,6 +55,10 @@ class OldConfig:
 		return os.getenv('BROWSER_USE_LOGGING_LEVEL', 'info').lower()
 
 	@property
+	def BROWSER_USE_PRINT_LLM_MESSAGES(self) -> bool:
+		return os.getenv('BROWSER_USE_PRINT_LLM_MESSAGES', 'false').lower()[:1] in 'ty1'
+
+	@property
 	def ANONYMIZED_TELEMETRY(self) -> bool:
 		return os.getenv('ANONYMIZED_TELEMETRY', 'true').lower()[:1] in 'ty1'
 
@@ -189,6 +193,7 @@ class FlatEnvConfig(BaseSettings):
 	# Logging and telemetry
 	BROWSER_USE_LOGGING_LEVEL: str = Field(default='info')
 	CDP_LOGGING_LEVEL: str = Field(default='WARNING')
+	BROWSER_USE_PRINT_LLM_MESSAGES: bool = Field(default=False)
 	BROWSER_USE_DEBUG_LOG_FILE: str | None = Field(default=None)
 	BROWSER_USE_INFO_LOG_FILE: str | None = Field(default=None)
 	ANONYMIZED_TELEMETRY: bool = Field(default=True)

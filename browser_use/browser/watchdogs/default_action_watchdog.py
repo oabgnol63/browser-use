@@ -1311,7 +1311,20 @@ class DefaultActionWatchdog(BaseWatchdog):
 								} catch (e) {
 									// ignore
 								}
-								this.value = "";
+								
+								// React-compatible value clearing
+								const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+									window.HTMLInputElement.prototype, 'value'
+								)?.set || Object.getOwnPropertyDescriptor(
+									window.HTMLTextAreaElement.prototype, 'value'
+								)?.set;
+								
+								if (nativeInputValueSetter) {
+									nativeInputValueSetter.call(this, "");
+								} else {
+									this.value = "";
+								}
+								
 								this.dispatchEvent(new Event("input", { bubbles: true }));
 								this.dispatchEvent(new Event("change", { bubbles: true }));
 								return {cleared: true, method: 'value', finalText: this.value};
@@ -1762,6 +1775,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 				if not cleared_successfully:
 					self.logger.warning('⚠️ Text field clearing failed, typing may append to existing text')
 
+			# Give framework handlers (like React onFocus/onChange) time to settle
+			# This prevents asynchronous cursor resets that cause the first letter to jump
+			await asyncio.sleep(0.1)
+
 			# Step 4: Type the text character by character using proper human-like key events
 			# This emulates exactly how a human would type, which modern websites expect
 			if is_sensitive:
@@ -1902,7 +1919,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 						)
 
 				# Small delay between characters to look human (realistic typing speed)
-				await asyncio.sleep(0.001)
+				await asyncio.sleep(0.02)
 
 			# Step 4: Trigger framework-aware DOM events after typing completion
 			# Modern JavaScript frameworks (React, Vue, Angular) rely on these events

@@ -1161,32 +1161,33 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		)
 		
 		# DEBUG: Log the messages to see DOM content
-		try:
-			log_content = f"\n\n--- STEP {self.state.n_steps} ---\n"
-			for idx, m in enumerate(input_messages):
-				log_content += f"\nMessage {idx} ({type(m).__name__}):\n"
-				try:
-					if isinstance(m.content, list):
-						for item in m.content:
-							if isinstance(item, dict):
-								if item.get('type') == 'text':
-									log_content += str(item.get('text', ''))
-								elif item.get('type') == 'image_url':
-									log_content += "[IMAGE]"
+		if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+			try:
+				log_content = f"\n\n--- STEP {self.state.n_steps} ---\n"
+				for idx, m in enumerate(input_messages):
+					log_content += f"\nMessage {idx} ({type(m).__name__}):\n"
+					try:
+						if isinstance(m.content, list):
+							for item in m.content:
+								if isinstance(item, dict):
+									if item.get('type') == 'text':
+										log_content += str(item.get('text', ''))
+									elif item.get('type') == 'image_url':
+										log_content += "[IMAGE]"
+									else:
+										log_content += str(item)
+								elif hasattr(item, 'text'):
+									log_content += str(item.text)
 								else:
 									log_content += str(item)
-							elif hasattr(item, 'text'):
-								log_content += str(item.text)
-							else:
-								log_content += str(item)
-					else:
-						log_content += str(m.content)
-				except Exception as e:
-					log_content += f"[Error parsing content: {e}. Raw: {m.content}]"
-			log_content += "\n-------------------\n"
-			self.logger.debug(log_content)
-		except Exception as e:
-			self.logger.error(f"Failed to log messages: {e}")
+						else:
+							log_content += str(m.content)
+					except Exception as e:
+						log_content += f"[Error parsing content: {e}. Raw: {m.content}]"
+				log_content += "\n-------------------\n"
+				self.logger.info(log_content)
+			except Exception as e:
+				self.logger.error(f"Failed to log messages: {e}")
 
 		try:
 			model_output = await asyncio.wait_for(
