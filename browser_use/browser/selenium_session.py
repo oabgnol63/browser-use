@@ -15,6 +15,7 @@ from browser_use.browser.events import (
     BrowserStopEvent,
     GoBackEvent,
     GoForwardEvent,
+    HoverElementEvent,
     RefreshEvent,
     SwitchTabEvent,
     CloseTabEvent,
@@ -61,6 +62,7 @@ class SeleniumBrowserSession(BrowserSession):
         BaseWatchdog.attach_handler_to_session(self, BrowserStopEvent, self.on_BrowserStopEvent)
         BaseWatchdog.attach_handler_to_session(self, NavigateToUrlEvent, self.on_NavigateToUrlEvent)
         BaseWatchdog.attach_handler_to_session(self, ClickElementEvent, self.on_ClickElementEvent)
+        BaseWatchdog.attach_handler_to_session(self, HoverElementEvent, self.on_HoverElementEvent)
         BaseWatchdog.attach_handler_to_session(self, ClickCoordinateEvent, self.on_ClickCoordinateEvent)
         BaseWatchdog.attach_handler_to_session(self, TypeTextEvent, self.on_TypeTextEvent)
         BaseWatchdog.attach_handler_to_session(self, SendKeysEvent, self.on_SendKeysEvent)
@@ -89,6 +91,12 @@ class SeleniumBrowserSession(BrowserSession):
     async def on_ClickElementEvent(self, event: ClickElementEvent) -> dict:
         # click_element now handles iframe detection internally
         return await self._selenium_session.action_service.click_element(
+            event.node,
+            self._cached_selector_map
+        )
+
+    async def on_HoverElementEvent(self, event: HoverElementEvent) -> dict:
+        return await self._selenium_session.action_service.hover_element(
             event.node,
             self._cached_selector_map
         )

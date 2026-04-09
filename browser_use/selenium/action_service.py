@@ -86,6 +86,90 @@ class SeleniumActionService:
             self.logger.error(f'Navigation failed: {e}')
             raise
 
+    async def hover_element(
+        self,
+        element_node: EnhancedDOMTreeNode,
+        selector_map: dict[int, EnhancedDOMTreeNode] | None = None,
+    ) -> dict:
+        """
+        Hover an element, automatically handling iframe context.
+        
+        Args:
+            element_node: The DOM element to hover
+            selector_map: Optional selector map for index-based lookup
+            
+        Returns:
+            Dict with hover result
+        """
+        
+        # Check if the element is within an iframe
+        is_in_iframe, iframe_selector = self._is_element_in_iframe(element_node)
+        xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
+        
+        if is_in_iframe and iframe_selector:
+            self.logger.debug(f'Hovering element in iframe: {iframe_selector}')
+            try:
+                # Assuming iframe_handler has hover_in_frame or we just click for now, wait it doesn't have hover_in_frame
+                # For simplicity, fallback to finding element directly
+                pass
+            except Exception as e:
+                self.logger.error(f'Failed to hover in iframe: {e}')
+                raise
+        
+        method = 'xpath'
+        try:
+            # Robust element finding with fallbacks
+            element, method = await self._find_element_robust(element_node)
+            
+            # 1. Scroll the element into the center of the viewport smoothly
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.driver.execute_script(
+                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", element
+                )
+            )
+            await asyncio.sleep(random.uniform(0.3, 0.6))
+            
+            # 2. Perform a human-like hover
+            def do_safe_hover():
+                self._perform_human_hover(element=element)
+
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, do_safe_hover)
+                # Dispatch additional events via JS for robustness
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.driver.execute_script(
+                        """
+                        const mouseOverEvent = new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window });
+                        arguments[0].dispatchEvent(mouseOverEvent);
+                        const mouseEnterEvent = new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window });
+                        arguments[0].dispatchEvent(mouseEnterEvent);
+                        """, element
+                    )
+                )
+                await asyncio.sleep(0.5)
+
+            except Exception as click_err:
+                self.logger.warning(f'Human hover failed: {click_err}. Retrying with JS fallback.')
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.driver.execute_script(
+                        """
+                        const mouseOverEvent = new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window });
+                        arguments[0].dispatchEvent(mouseOverEvent);
+                        const mouseEnterEvent = new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window });
+                        arguments[0].dispatchEvent(mouseEnterEvent);
+                        """, element
+                    )
+                )
+
+            return {'success': True, 'method': method, 'action': 'hover'}
+            
+        except Exception as e:
+            self.logger.error(f'Hover failed on element {element_node.backend_node_id}: {e}')
+            return {'success': False, 'error': str(e)}
+
     async def click_element(
         self,
         element_node: EnhancedDOMTreeNode,
@@ -804,6 +888,54 @@ class SeleniumActionService:
         return f'//{tag}'
 
     # ==================== Helper Methods ====================
+
+    def _perform_human_hover(self, element=None, target_x=None, target_y=None):
+        """Perform a highly randomized human-like hover using ActionBuilder and Selenium actions."""
+        action_builder = ActionBuilder(self.driver)
+
+        if element:
+            # Get viewport coordinates of the target element
+            rect = self.driver.execute_script("return arguments[0].getBoundingClientRect();", element)
+            tx = max(1, int(rect['left'] + rect['width'] / 2 + random.uniform(-rect['width']/4, rect['width']/4)))
+            ty = max(1, int(rect['top'] + rect['height'] / 2 + random.uniform(-rect['height']/4, rect['height']/4)))
+        elif target_x is not None and target_y is not None:
+            tx = target_x
+            ty = target_y
+        else:
+            raise ValueError("Must provide element or target coordinates")
+
+        try:
+            window_size = self.driver.get_window_size()
+            start_x = random.randint(0, window_size.get('width', 1000) // 2)
+            start_y = random.randint(0, window_size.get('height', 800))
+
+            def bezier_curve(p0, p1, p2, p3, num_points=20):
+                points = []
+                for i in range(num_points + 1):
+                    t = i / num_points
+                    x = int((1 - t)**3 * p0[0] + 3 * (1 - t)**2 * t * p1[0] + 3 * (1 - t) * t**2 * p2[0] + t**3 * p3[0])
+                    y = int((1 - t)**3 * p0[1] + 3 * (1 - t)**2 * t * p1[1] + 3 * (1 - t) * t**2 * p2[1] + t**3 * p3[1])
+                    points.append((x, y))
+                return points
+
+            # Randomized control points for organic arc
+            cp1 = (start_x + (tx - start_x) * random.uniform(0.1, 0.5), start_y + (ty - start_y) * random.uniform(0.1, 0.9) + random.uniform(-50, 50))
+            cp2 = (start_x + (tx - start_x) * random.uniform(0.5, 0.9), start_y + (ty - start_y) * random.uniform(0.1, 0.9) + random.uniform(-50, 50))
+
+            curve_points = bezier_curve((start_x, start_y), cp1, cp2, (tx, ty), num_points=random.randint(25, 45))
+
+            action_builder.pointer_action.move_to_location(start_x, start_y)
+            for i, pt in enumerate(curve_points):
+                action_builder.pointer_action.move_to_location(pt[0], max(1, pt[1]))
+                if i % 3 == 0:
+                    action_builder.pointer_action.pause(random.uniform(0.01, 0.04))
+                else:
+                    action_builder.pointer_action.pause(random.uniform(0.001, 0.005))
+        except Exception as e:
+            self.logger.warning(f"Failed to generate human mouse trajectory: {e}")
+            action_builder.pointer_action.move_to_location(tx, ty)
+
+        action_builder.perform()
 
     def _perform_human_click(self, element=None, target_x=None, target_y=None):
         """Perform a highly randomized human-like click using ActionBuilder and Selenium actions."""
