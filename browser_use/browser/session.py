@@ -1528,6 +1528,7 @@ class BrowserSession(BaseModel):
 		include_screenshot: bool = True,
 		cached: bool = False,
 		include_recent_events: bool = False,
+		include_dom: bool = True,
 	) -> BrowserStateSummary:
 		if cached and self._cached_browser_state_summary is not None and self._cached_browser_state_summary.dom_state:
 			# Don't use cached state if it has 0 interactive elements
@@ -1549,7 +1550,7 @@ class BrowserSession(BaseModel):
 			BrowserStateRequestEvent,
 			self.event_bus.dispatch(
 				BrowserStateRequestEvent(
-					include_dom=True,
+					include_dom=include_dom,
 					include_screenshot=include_screenshot,
 					include_recent_events=include_recent_events,
 				)

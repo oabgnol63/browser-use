@@ -399,6 +399,17 @@ class ChatGoogle(BaseChatModel):
 
 				else:
 					# Handle structured output
+					if kwargs.get('use_native_computer_use'):
+						# Inject Gemini's built-in computer-use tool to enable spatial reasoning capabilities
+						# But do NOT bypass JSON structured output. We want the model to output JSON with coordinates.
+						self.logger.debug(f'🔧 Injecting native computer-use tools while maintaining {output_format.__name__} schema')
+						computer_use_tool = types.Tool(
+							computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER)
+						)
+						if 'tools' not in config:
+							config['tools'] = []
+						config['tools'].append(computer_use_tool)
+						
 					if self.supports_structured_output:
 						# Use native JSON mode
 						self.logger.debug(f'🔧 Requesting structured output for {output_format.__name__}')

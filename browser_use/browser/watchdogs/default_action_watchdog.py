@@ -13,6 +13,9 @@ from browser_use.browser.events import (
 	GetDropdownOptionsEvent,
 	GoBackEvent,
 	GoForwardEvent,
+	HoverCoordinateEvent,
+	DragAndDropCoordinateEvent,
+	ScrollCoordinateEvent,
 	HoverElementEvent,
 	RefreshEvent,
 	ScrollEvent,
@@ -549,9 +552,128 @@ class DefaultActionWatchdog(BaseWatchdog):
 			return await self._execute_click_with_download_detection(
 				self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False)
 			)
-
 		except Exception:
 			raise
+
+	async def on_HoverCoordinateEvent(self, event: HoverCoordinateEvent) -> dict | None:
+		"""Handle hover at coordinates with CDP."""
+		try:
+			if not self.browser_session.agent_focus_target_id:
+				error_msg = 'Cannot execute hover: browser session is corrupted (target_id=None). Session may have crashed.'
+				self.logger.error(f'{error_msg}')
+				raise BrowserError(error_msg)
+
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			session_id = cdp_session.session_id
+
+			self.logger.debug(f'👆 Hovering mouse at ({event.coordinate_x}, {event.coordinate_y})...')
+
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={
+					'type': 'mouseMoved',
+					'x': event.coordinate_x,
+					'y': event.coordinate_y,
+				},
+				session_id=session_id,
+			)
+			await asyncio.sleep(0.5)
+
+			self.logger.debug(f'🖱️ Hovered successfully at ({event.coordinate_x}, {event.coordinate_y})')
+			return {'hover_x': event.coordinate_x, 'hover_y': event.coordinate_y}
+
+		except Exception as e:
+			self.logger.error(f'Failed to hover at coordinates ({event.coordinate_x}, {event.coordinate_y}): {type(e).__name__}: {e}')
+			raise BrowserError(
+				message=f'Failed to hover at coordinates: {e}',
+				long_term_memory=f'Failed to hover at coordinates ({event.coordinate_x}, {event.coordinate_y}).',
+			)
+
+	async def on_DragAndDropCoordinateEvent(self, event: DragAndDropCoordinateEvent) -> dict | None:
+		"""Handle drag and drop between coordinates with CDP."""
+		try:
+			if not self.browser_session.agent_focus_target_id:
+				error_msg = 'Cannot execute drag and drop: browser session is corrupted.'
+				self.logger.error(f'{error_msg}')
+				raise BrowserError(error_msg)
+
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			session_id = cdp_session.session_id
+
+			self.logger.debug(f'👆 Dragging from ({event.start_x}, {event.start_y}) to ({event.end_x}, {event.end_y})...')
+
+			# Move to start
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': event.start_x, 'y': event.start_y},
+				session_id=session_id,
+			)
+			await asyncio.sleep(0.1)
+
+			# Mouse down at start
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mousePressed', 'x': event.start_x, 'y': event.start_y, 'button': 'left', 'clickCount': 1},
+				session_id=session_id,
+			)
+			await asyncio.sleep(0.1)
+
+			# Move to end (with intermediate steps for realism)
+			steps = 5
+			for i in range(1, steps + 1):
+				x = event.start_x + (event.end_x - event.start_x) * (i / steps)
+				y = event.start_y + (event.end_y - event.start_y) * (i / steps)
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={'type': 'mouseMoved', 'x': int(x), 'y': int(y), 'button': 'left'},
+					session_id=session_id,
+				)
+				await asyncio.sleep(0.05)
+
+			# Mouse up at end
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseReleased', 'x': event.end_x, 'y': event.end_y, 'button': 'left', 'clickCount': 1},
+				session_id=session_id,
+			)
+			await asyncio.sleep(0.1)
+
+			return {'start_x': event.start_x, 'start_y': event.start_y, 'end_x': event.end_x, 'end_y': event.end_y}
+
+		except Exception as e:
+			self.logger.error(f'Failed to drag and drop: {type(e).__name__}: {e}')
+			raise BrowserError(message=f'Failed to drag and drop: {e}', long_term_memory='Failed to drag and drop coordinates.')
+
+	async def on_ScrollCoordinateEvent(self, event: ScrollCoordinateEvent) -> None:
+		"""Handle scroll at coordinates request with CDP."""
+		if not self.browser_session.agent_focus_target_id:
+			raise BrowserError('No active target for scrolling')
+
+		try:
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			session_id = cdp_session.session_id
+			
+			pixels = event.amount if event.direction == 'down' else -event.amount
+
+			# Move mouse to the coordinate first
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': event.coordinate_x, 'y': event.coordinate_y},
+				session_id=session_id,
+			)
+			await asyncio.sleep(0.05)
+
+			# Dispatch mouse wheel event at coordinate
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={
+					'type': 'mouseWheel',
+					'x': event.coordinate_x,
+					'y': event.coordinate_y,
+					'deltaX': 0,
+					'deltaY': pixels,
+				},
+				session_id=session_id,
+			)
+			
+			self.logger.debug(f'📜 Scrolled {event.direction} by {event.amount}px at ({event.coordinate_x}, {event.coordinate_y})')
+			return None
+		except Exception as e:
+			self.logger.error(f'Failed to scroll at coordinates: {e}')
+			raise BrowserError(message=f'Failed to scroll at coordinates: {e}')
 
 	async def on_TypeTextEvent(self, event: TypeTextEvent) -> dict | None:
 		"""Handle text input request with CDP."""

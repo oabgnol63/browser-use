@@ -59,6 +59,7 @@ class AgentSettings(BaseModel):
 	"""Configuration options for the Agent"""
 
 	use_vision: bool | Literal['auto'] = True
+	use_native_computer_use: bool = False
 	vision_detail_level: Literal['auto', 'low', 'high'] = 'auto'
 	save_conversation_path: str | Path | None = None
 	save_conversation_path_encoding: str | None = 'utf-8'
@@ -104,6 +105,20 @@ class PageFingerprint(BaseModel):
 	def from_browser_state(url: str, dom_text: str, element_count: int) -> PageFingerprint:
 		text_hash = hashlib.sha256(dom_text.encode('utf-8', errors='replace')).hexdigest()[:16]
 		return PageFingerprint(url=url, element_count=element_count, text_hash=text_hash)
+
+
+class VisualPageFingerprint(BaseModel):
+	"""Lightweight fingerprint of the visual browser page state."""
+
+	model_config = ConfigDict(frozen=True)
+
+	url: str
+	screenshot_hash: str  # First 16 chars of SHA-256 of the screenshot representation
+
+	@staticmethod
+	def from_browser_state(url: str, screenshot_b64: str) -> VisualPageFingerprint:
+		screenshot_hash = hashlib.sha256(screenshot_b64.encode('utf-8', errors='replace')).hexdigest()[:16]
+		return VisualPageFingerprint(url=url, screenshot_hash=screenshot_hash)
 
 
 def _normalize_action_for_hash(action_name: str, params: dict[str, Any]) -> str:
@@ -167,7 +182,7 @@ class ActionLoopDetector(BaseModel):
 	recent_action_hashes: list[str] = Field(default_factory=list)
 
 	# Page fingerprint tracking for stagnation detection
-	recent_page_fingerprints: list[PageFingerprint] = Field(default_factory=list)
+	recent_page_fingerprints: list[PageFingerprint | VisualPageFingerprint] = Field(default_factory=list)
 
 	# Current repetition state
 	max_repetition_count: int = 0  # Highest count of any single hash in the window
@@ -186,6 +201,23 @@ class ActionLoopDetector(BaseModel):
 	def record_page_state(self, url: str, dom_text: str, element_count: int) -> None:
 		"""Record the current page fingerprint and update stagnation count."""
 		fp = PageFingerprint.from_browser_state(url, dom_text, element_count)
+		self._record_fingerprint(fp)
+
+	def record_visual_page_state(self, url: str, screenshot_b64: str | None) -> None:
+		"""Record the current visual page fingerprint and update stagnation count."""
+		if not screenshot_b64:
+			self.reset_page_stagnation()
+			return
+		fp = VisualPageFingerprint.from_browser_state(url, screenshot_b64)
+		self._record_fingerprint(fp)
+
+	def reset_page_stagnation(self) -> None:
+		"""Reset page stagnation tracking when no comparable page state is available."""
+		self.consecutive_stagnant_pages = 0
+		self.recent_page_fingerprints.clear()
+
+	def _record_fingerprint(self, fp: PageFingerprint | VisualPageFingerprint) -> None:
+		"""Record a page fingerprint and update stagnation count."""
 		if self.recent_page_fingerprints and self.recent_page_fingerprints[-1] == fp:
 			self.consecutive_stagnant_pages += 1
 		else:

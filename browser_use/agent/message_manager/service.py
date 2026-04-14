@@ -106,6 +106,7 @@ class MessageManager:
 		file_system: FileSystem,
 		state: MessageManagerState = MessageManagerState(),
 		use_thinking: bool = True,
+		use_native_computer_use: bool = False,
 		include_attributes: list[str] | None = None,
 		sensitive_data: dict[str, str | dict[str, str]] | None = None,
 		max_history_items: int | None = None,
@@ -122,6 +123,7 @@ class MessageManager:
 		self.file_system = file_system
 		self.sensitive_data_description = ''
 		self.use_thinking = use_thinking
+		self.use_native_computer_use = use_native_computer_use
 		self.max_history_items = max_history_items
 		self.vision_detail_level = vision_detail_level
 		self.include_tool_call_examples = include_tool_call_examples
@@ -492,6 +494,7 @@ class MessageManager:
 			llm_screenshot_size=self.llm_screenshot_size,
 			unavailable_skills_info=unavailable_skills_info,
 			plan_description=plan_description,
+			use_native_computer_use=self.use_native_computer_use,
 		).get_user_message(effective_use_vision)
 
 		# Store state message text for history

@@ -145,6 +145,25 @@ class ScrollAction(BaseModel):
 	index: int | None = Field(default=None, description='Optional element index to scroll within specific container. Leave empty to scroll the main page.')
 
 
+class HoverCoordinateAction(BaseModel):
+	coordinate_x: int = Field(description='Horizontal coordinate relative to viewport left edge')
+	coordinate_y: int = Field(description='Vertical coordinate relative to viewport top edge')
+
+
+class DragAndDropCoordinateAction(BaseModel):
+	start_x: int = Field(description='Start horizontal coordinate relative to viewport left edge')
+	start_y: int = Field(description='Start vertical coordinate relative to viewport top edge')
+	end_x: int = Field(description='End horizontal coordinate relative to viewport left edge')
+	end_y: int = Field(description='End vertical coordinate relative to viewport top edge')
+
+
+class ScrollCoordinateAction(BaseModel):
+	x: int = Field(description='Horizontal coordinate to scroll at relative to viewport left edge')
+	y: int = Field(description='Vertical coordinate to scroll at relative to viewport top edge')
+	down: bool = Field(default=True, description='Scroll down (True) or up (False)')
+	pages: float = Field(default=1.0, description='Number of pages to scroll.')
+
+
 class SendKeysAction(BaseModel):
 	keys: str = Field(description='keys (Escape, Enter, PageDown) or shortcuts (Control+o)')
 

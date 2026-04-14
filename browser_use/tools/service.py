@@ -18,12 +18,17 @@ from browser_use.browser.events import (
 	ClickCoordinateEvent,
 	ClickElementEvent,
 	CloseTabEvent,
+	DragAndDropCoordinateEvent,
 	GetDropdownOptionsEvent,
 	GoBackEvent,
 	GoForwardEvent,
+	HoverCoordinateEvent,
+	HoverElementEvent,
 	NavigateToUrlEvent,
+	ScrollCoordinateEvent,
 	ScrollEvent,
 	ScrollToTextEvent,
+	SelectDropdownOptionEvent,
 	SendKeysEvent,
 	SwitchTabEvent,
 	TypeTextEvent,
@@ -42,9 +47,11 @@ from browser_use.tools.views import (
 	ClickElementActionIndexOnly,
 	CloseTabAction,
 	DoneAction,
+	DragAndDropCoordinateAction,
 	ExtractAction,
 	FindElementsAction,
 	GetDropdownOptionsAction,
+	HoverCoordinateAction,
 	HoverElementAction,
 	HoverElementActionIndexOnly,
 	InputTextAction,
@@ -53,6 +60,7 @@ from browser_use.tools.views import (
 	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
+	ScrollCoordinateAction,
 	SearchAction,
 	SearchPageAction,
 	SelectDropdownOptionAction,
@@ -389,10 +397,12 @@ class Tools(Generic[Context]):
 		exclude_actions: list[str] | None = None,
 		output_model: type[T] | None = None,
 		display_files_in_done_text: bool = True,
+		use_native_computer_use: bool = False,
 	):
 		self.registry = Registry[Context](exclude_actions if exclude_actions is not None else [])
 		self.display_files_in_done_text = display_files_in_done_text
 		self._output_model: type[BaseModel] | None = output_model
+		self._use_native_computer_use = use_native_computer_use
 		self._coordinate_clicking_enabled: bool = False
 
 		"""Register all default browser actions"""
@@ -457,6 +467,7 @@ class Tools(Generic[Context]):
 				await event.event_result(raise_if_any=True, raise_if_none=False)
 
 				# Health check: detect empty DOM for http/https pages and retry once.
+				# Skip when use_native_computer_use=True — DOM is never built in that mode.
 				# Uses _root is None (truly blank) OR empty llm_representation() (no actionable
 				# content for the LLM, e.g. SPA not yet rendered, empty body).
 				# NOTE: llm_representation() returns a non-empty placeholder when _root is None,
@@ -464,7 +475,7 @@ class Tools(Generic[Context]):
 				def _page_appears_empty(s) -> bool:
 					return s.dom_state._root is None or not s.dom_state.llm_representation().strip()
 
-				if not params.new_tab:
+				if not params.new_tab and not self._use_native_computer_use:
 					state = await browser_session.get_browser_state_summary(include_screenshot=False)
 					url_is_http = state.url.lower().startswith(('http://', 'https://'))
 					if url_is_http and _page_appears_empty(state):
@@ -654,7 +665,9 @@ class Tools(Generic[Context]):
 			except BrowserError as e:
 				return handle_browser_error(e)
 			except Exception as e:
-				error_msg = f'Failed to click at coordinates ({params.coordinate_x}, {params.coordinate_y}): {_sanitize_error_message(e)}'
+				error_msg = (
+					f'Failed to click at coordinates ({params.coordinate_x}, {params.coordinate_y}): {_sanitize_error_message(e)}'
+				)
 				return ActionResult(error=error_msg)
 
 		async def _click_by_index(
@@ -729,19 +742,27 @@ class Tools(Generic[Context]):
 				return ActionResult(error='Both coordinate_x and coordinate_y must be provided')
 
 			try:
-				from browser_use.browser.events import HoverElementEvent
 				actual_x, actual_y = _convert_llm_coordinates_to_viewport(
 					params.coordinate_x, params.coordinate_y, browser_session
 				)
 
 				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
-				# Create a dummy node for HoverElementEvent since coordinate hover might not have a node yet
-				# Alternatively, use ClickCoordinateEvent but for hover? Wait, let's just use evaluate script for coordinate hover or we need a HoverCoordinateEvent.
-				# Actually, the user asked for hover by index mainly. Let's just return error for coordinate hover if HoverCoordinateEvent is not implemented, or we can just evaluate.
-				return ActionResult(error='Hover by coordinates is not currently supported. Use hover by index instead.')
+				event = browser_session.event_bus.dispatch(
+					HoverCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y)
+				)
+				await event
+				result = await event.event_result(raise_if_any=True, raise_if_none=False)
+				return ActionResult(
+					is_done=False,
+					extracted_content=None,
+					error=None,
+					include_in_memory=True,
+				)
 			except Exception as e:
-				error_msg = f'Failed to hover at coordinates ({params.coordinate_x}, {params.coordinate_y}): {_sanitize_error_message(e)}'
+				error_msg = (
+					f'Failed to hover at coordinates ({params.coordinate_x}, {params.coordinate_y}): {_sanitize_error_message(e)}'
+				)
 				return ActionResult(error=error_msg)
 
 		async def _hover_by_index(
@@ -765,7 +786,6 @@ class Tools(Generic[Context]):
 					browser_session.highlight_interaction_element(node), name='highlight_hover_element', suppress_exceptions=True
 				)
 
-				from browser_use.browser.events import HoverElementEvent
 				event = browser_session.event_bus.dispatch(HoverElementEvent(node=node))
 				await event
 				hover_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
@@ -792,6 +812,89 @@ class Tools(Generic[Context]):
 		# Register click action (index-only by default)
 		self._register_click_action()
 		self._register_hover_action()
+
+		@self.registry.action(
+			'Drag and drop between coordinates.',
+			param_model=DragAndDropCoordinateAction,
+		)
+		async def drag_and_drop_coordinate(params: DragAndDropCoordinateAction, browser_session: BrowserSession):
+			try:
+				start_x, start_y = _convert_llm_coordinates_to_viewport(params.start_x, params.start_y, browser_session)
+				end_x, end_y = _convert_llm_coordinates_to_viewport(params.end_x, params.end_y, browser_session)
+
+				asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
+				asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
+
+				event = browser_session.event_bus.dispatch(
+					DragAndDropCoordinateEvent(start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y)
+				)
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Dragged from ({params.start_x}, {params.start_y}) to ({params.end_x}, {params.end_y})'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to drag and drop: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
+
+		@self.registry.action(
+			'Scroll at specific coordinates.',
+			param_model=ScrollCoordinateAction,
+		)
+		async def scroll_coordinate(params: ScrollCoordinateAction, browser_session: BrowserSession):
+			try:
+				actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
+
+				# Calculate viewport height for pixels
+				try:
+					cdp_session = await browser_session.get_or_create_cdp_session()
+					metrics = await cdp_session.cdp_client.send.Page.getLayoutMetrics(session_id=cdp_session.session_id)
+					viewport_height = int(
+						metrics.get('cssVisualViewport', {}).get('clientHeight')
+						or metrics.get('cssLayoutViewport', {}).get('clientHeight', 1000)
+					)
+				except Exception:
+					viewport_height = 1000
+
+				pixels = int(params.pages * viewport_height)
+				direction = 'down' if params.down else 'up'
+
+				event = browser_session.event_bus.dispatch(
+					ScrollCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, direction=direction, amount=pixels)
+				)
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Scrolled {direction} {params.pages} pages at ({params.x}, {params.y})'
+				logger.info(f'📜 {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to scroll at coordinates: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
+
+		@self.registry.action(
+			'Hover at specific coordinates.',
+			param_model=HoverCoordinateAction,
+		)
+		async def hover_coordinate(params: HoverCoordinateAction, browser_session: BrowserSession):
+			try:
+				actual_x, actual_y = _convert_llm_coordinates_to_viewport(
+					params.coordinate_x, params.coordinate_y, browser_session
+				)
+
+				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+
+				event = browser_session.event_bus.dispatch(HoverCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y))
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Hovered at ({params.coordinate_x}, {params.coordinate_y})'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to hover at coordinates: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
 
 		@self.registry.action(
 			'Input text into element by index.',
@@ -1291,7 +1394,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				else:
 					file_name = await file_system.save_extracted_content(extracted_content)
 					# Provide a preview plus the filename so the agent knows what it found
-					preview = extracted_content[:1500] + "\n... (content truncated, full version in " + file_name + ")"
+					preview = extracted_content[:1500] + '\n... (content truncated, full version in ' + file_name + ')'
 					memory = f'Query: {query}\nContent saved to {file_name}.\nPreview:\n{preview}'
 					include_extracted_content_only_once = True
 
@@ -1696,7 +1799,6 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				return ActionResult(extracted_content=msg)
 
 			# Dispatch SelectDropdownOptionEvent to the event handler
-			from browser_use.browser.events import SelectDropdownOptionEvent
 
 			event = browser_session.event_bus.dispatch(SelectDropdownOptionEvent(node=node, text=params.text))
 			selection_data = await event.event_result()

@@ -1,7 +1,11 @@
 import importlib.resources
+import base64
+from io import BytesIO
+from PIL import Image, ImageStat
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, Optional
 
+from browser_use.browser.views import PLACEHOLDER_4PX_SCREENSHOT
 from browser_use.dom.views import NodeType, SimplifiedNode
 from browser_use.llm.messages import ContentPartImageParam, ContentPartTextParam, ImageURL, SystemMessage, UserMessage
 from browser_use.observability import observe_debug
@@ -35,12 +39,14 @@ class SystemPrompt:
 		is_anthropic: bool = False,
 		is_browser_use_model: bool = False,
 		model_name: str | None = None,
+		use_native_computer_use: bool = False,
 	):
 		self.max_actions_per_step = max_actions_per_step
 		self.use_thinking = use_thinking
 		self.flash_mode = flash_mode
 		self.is_anthropic = is_anthropic
 		self.is_browser_use_model = is_browser_use_model
+		self.use_native_computer_use = use_native_computer_use
 		self.model_name = model_name
 		# Check if this is an Anthropic 4.5 model that needs longer prompts for caching
 		self.is_anthropic_4_5 = _is_anthropic_4_5_model(model_name)
@@ -60,8 +66,10 @@ class SystemPrompt:
 		"""Load the prompt template from the markdown file."""
 		try:
 			# Choose the appropriate template based on model type and mode
+			if self.use_native_computer_use:
+				template_filename = 'system_prompt_no_dom.md'
 			# Browser-use models use simplified prompts optimized for fine-tuned models
-			if self.is_browser_use_model:
+			elif self.is_browser_use_model:
 				if self.flash_mode:
 					template_filename = 'system_prompt_browser_use_flash.md'
 				elif self.use_thinking:
@@ -124,9 +132,11 @@ class AgentMessagePrompt:
 		llm_screenshot_size: tuple[int, int] | None = None,
 		unavailable_skills_info: str | None = None,
 		plan_description: str | None = None,
+		use_native_computer_use: bool = False,
 	):
 		self.browser_state: 'BrowserStateSummary' = browser_state_summary
 		self.file_system: 'FileSystem | None' = file_system
+		self.use_native_computer_use = use_native_computer_use
 		self.agent_history_description: str | None = agent_history_description
 		self.read_state_description: str | None = read_state_description
 		self.task: str | None = task
@@ -219,39 +229,136 @@ class AgentMessagePrompt:
 		traverse_node(self.browser_state.dom_state._root)
 		return stats
 
+	def _assess_visual_load_state(self) -> tuple[str, list[str]]:
+		"""Classify screenshot visibility for vision-only mode without exposing DOM details."""
+		screenshot_b64 = self.browser_state.clean_screenshot or self.browser_state.screenshot
+		if not screenshot_b64 and self.screenshots:
+			screenshot_b64 = self.screenshots[-1]
+
+		if not screenshot_b64:
+			return 'unknown', ['No screenshot available']
+
+		if screenshot_b64 == PLACEHOLDER_4PX_SCREENSHOT:
+			return 'blank_placeholder', ['Screenshot is the known 4x4 blank placeholder image']
+
+		try:
+			img = Image.open(BytesIO(base64.b64decode(screenshot_b64))).convert('RGB')
+			if img.width <= 8 and img.height <= 8:
+				return 'blank_placeholder', [f'Screenshot is tiny ({img.width}x{img.height})']
+
+			sample = img.resize((64, 64), Image.Resampling.BILINEAR)
+			stat = ImageStat.Stat(sample)
+			channel_ranges = [high - low for low, high in sample.getextrema()]
+			mean_brightness = sum(stat.mean) / len(stat.mean)
+			max_stddev = max(stat.stddev)
+			max_range = max(channel_ranges)
+
+			if mean_brightness > 247 and max_stddev < 7 and max_range < 18:
+				return (
+					'blank_or_minimal',
+					[
+						f'Screenshot is almost entirely bright and flat (brightness={mean_brightness:.1f}, stddev={max_stddev:.1f})'
+					],
+				)
+
+			if max_stddev < 4 and max_range < 12:
+				return (
+					'blank_or_minimal',
+					[f'Screenshot has very little visual variation (stddev={max_stddev:.1f}, range={max_range})'],
+				)
+
+			return (
+				'content_visible',
+				[f'Screenshot shows normal visual variation (stddev={max_stddev:.1f}, range={max_range})'],
+			)
+		except Exception as e:
+			return 'unknown', [f'Visual load analysis failed: {type(e).__name__}']
+
+	def _get_load_state_description(self) -> str:
+		"""Provide a compact readiness hint for vision-only mode."""
+		if not self.use_native_computer_use:
+			return ''
+
+		signals: list[str] = []
+		load_state = 'interactive_ready'
+		recommendation = 'Visible content is present. Interact based on the screenshot.'
+
+		if is_new_tab_page(self.browser_state.url):
+			load_state = 'new_tab'
+			signals.append('Current page is a browser new-tab/start page')
+			recommendation = 'Navigate to the requested site rather than clicking random coordinates.'
+		else:
+			visual_state, visual_signals = self._assess_visual_load_state()
+			signals.extend(visual_signals)
+
+			pending_requests = self.browser_state.pending_network_requests
+			if pending_requests:
+				longest_request_ms = int(max(request.loading_duration_ms for request in pending_requests))
+				signals.append(f'{len(pending_requests)} pending network request(s), longest active for {longest_request_ms} ms')
+
+			if not self.browser_state.title.strip():
+				signals.append('Page title is empty')
+
+			if visual_state in ('blank_placeholder', 'blank_or_minimal'):
+				if pending_requests:
+					load_state = 'loading'
+					recommendation = (
+						'Page appears not fully loaded. Use wait(3-5) before clicking coordinates. '
+						'If it stays blank or minimal on the same URL after waiting, navigate to the same URL again once to reload.'
+					)
+				else:
+					load_state = 'blank_or_minimal'
+					recommendation = (
+						'Do not guess coordinates on a blank or minimal page. Wait first; if unchanged on the same URL, '
+						'navigate to the same URL again once to reload.'
+					)
+			elif len(pending_requests) >= 3:
+				load_state = 'loading'
+				recommendation = 'The page is still loading network resources. Prefer wait(3-5) before taking a precise visual action.'
+
+		signals_text = '\n'.join(f'- {signal}' for signal in signals) if signals else '- No special load signals detected'
+		return f'<load_state>\nstate={load_state}\n{signals_text}\nrecommendation={recommendation}\n</load_state>\n'
+
 	@observe_debug(ignore_input=True, ignore_output=True, name='_get_browser_state_description')
 	def _get_browser_state_description(self) -> str:
-		# Extract page statistics first
-		page_stats = self._extract_page_statistics()
+		# Extract page statistics only if not in native computer-use mode
+		stats_text = ''
+		if not self.use_native_computer_use:
+			page_stats = self._extract_page_statistics()
 
-		# Format statistics
-		stats_text = '<page_stats>'
-		if page_stats['total_elements'] < 10:
-			stats_text += 'Page appears empty (SPA not loaded?) - '
-		# Skeleton screen: many elements but almost no text = loading placeholders
-		elif page_stats['total_elements'] > 20 and page_stats['text_chars'] < page_stats['total_elements'] * 5:
-			stats_text += 'Page appears to show skeleton/placeholder content (still loading?) - '
-		stats_text += f'{page_stats["links"]} links, {page_stats["interactive_elements"]} interactive, '
-		stats_text += f'{page_stats["iframes"]} iframes'
-		if page_stats['shadow_open'] > 0 or page_stats['shadow_closed'] > 0:
-			stats_text += f', {page_stats["shadow_open"]} shadow(open), {page_stats["shadow_closed"]} shadow(closed)'
-		if page_stats['images'] > 0:
-			stats_text += f', {page_stats["images"]} images'
-		stats_text += f', {page_stats["total_elements"]} total elements'
-		stats_text += '</page_stats>\n'
+			# Format statistics
+			stats_text = '<page_stats>'
+			if page_stats['total_elements'] < 10:
+				stats_text += 'Page appears empty (SPA not loaded?) - '
+			# Skeleton screen: many elements but almost no text = loading placeholders
+			elif page_stats['total_elements'] > 20 and page_stats['text_chars'] < page_stats['total_elements'] * 5:
+				stats_text += 'Page appears to show skeleton/placeholder content (still loading?) - '
+			stats_text += f'{page_stats["links"]} links, {page_stats["interactive_elements"]} interactive, '
+			stats_text += f'{page_stats["iframes"]} iframes'
+			if page_stats['shadow_open'] > 0 or page_stats['shadow_closed'] > 0:
+				stats_text += f', {page_stats["shadow_open"]} shadow(open), {page_stats["shadow_closed"]} shadow(closed)'
+			if page_stats['images'] > 0:
+				stats_text += f', {page_stats["images"]} images'
+			stats_text += f', {page_stats["total_elements"]} total elements'
+			stats_text += '</page_stats>\n'
 
-		elements_text = self.browser_state.dom_state.llm_representation(include_attributes=self.include_attributes)
-
-		if len(elements_text) > self.max_clickable_elements_length:
-			elements_text = elements_text[: self.max_clickable_elements_length]
-			truncated_text = f' (truncated to {self.max_clickable_elements_length} characters)'
+		if self.use_native_computer_use:
+			elements_text = "DOM extraction disabled (using native computer-use). Rely entirely on the screenshot and 1000x1000 coordinate plane."
+			truncated_text = ""
 		else:
-			truncated_text = ''
+			elements_text = self.browser_state.dom_state.llm_representation(include_attributes=self.include_attributes)
+
+			if len(elements_text) > self.max_clickable_elements_length:
+				elements_text = elements_text[: self.max_clickable_elements_length]
+				truncated_text = f' (truncated to {self.max_clickable_elements_length} characters)'
+			else:
+				truncated_text = ''
 
 		has_content_above = False
 		has_content_below = False
 		# Enhanced page information for the model
 		page_info_text = ''
+		load_state_text = self._get_load_state_description()
 		if self.browser_state.page_info:
 			pi = self.browser_state.page_info
 			# Compute page statistics dynamically
@@ -315,6 +422,7 @@ class AgentMessagePrompt:
 		browser_state = f"""{stats_text}{current_tab_text}
 Available tabs:
 {tabs_text}
+{load_state_text}
 {page_info_text}
 {recent_events_text}{closed_popups_text}{pdf_message}Interactive elements{truncated_text}:
 {elements_text}
@@ -337,11 +445,13 @@ Available tabs:
 		return agent_state
 
 	def _get_dynamic_context(self) -> str:
+		context = ''
+
 		_todo_contents = self.file_system.get_todo_contents() if self.file_system else ''
 		if not len(_todo_contents):
 			_todo_contents = '[empty todo.md, fill it when applicable]'
 
-		context = f"""
+		context += f"""
 <file_system>
 {self.file_system.describe() if self.file_system else 'No file system available'}
 </file_system>

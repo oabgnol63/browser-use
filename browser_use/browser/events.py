@@ -144,6 +144,37 @@ class ClickCoordinateEvent(BaseEvent[dict]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickCoordinateEvent', 15.0))  # seconds
 
 
+class HoverCoordinateEvent(BaseEvent[dict | None]):
+	"""Hover at specific coordinates."""
+
+	coordinate_x: int
+	coordinate_y: int
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_HoverCoordinateEvent', 10.0))  # seconds
+
+
+class DragAndDropCoordinateEvent(BaseEvent[dict | None]):
+	"""Drag and drop between specific coordinates."""
+
+	start_x: int
+	start_y: int
+	end_x: int
+	end_y: int
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropCoordinateEvent', 15.0))  # seconds
+
+
+class ScrollCoordinateEvent(BaseEvent[None]):
+	"""Scroll at specific coordinates."""
+
+	coordinate_x: int
+	coordinate_y: int
+	direction: Literal['up', 'down', 'left', 'right']
+	amount: int  # pixels
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ScrollCoordinateEvent', 8.0))  # seconds
+
+
 class HoverElementEvent(ElementSelectedEvent[dict[str, Any] | None]):
 	"""Hover over an element."""
 

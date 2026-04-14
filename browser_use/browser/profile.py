@@ -183,7 +183,7 @@ CHROME_DEFAULT_ARGS = [
 	'--silent-debugger-extension-api',
 	# Extension welcome tab suppression for automation
 	'--disable-extensions-http-throttling',
-	'--extensions-on-chrome-urls',
+	# '--extensions-on-chrome-urls', #deprecated
 	'--disable-default-apps',
 	f'--disable-features={",".join(CHROME_DISABLED_COMPONENTS)}',
 ]

@@ -164,6 +164,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		output_model_schema: type[AgentStructuredOutput] | None = None,
 		extraction_schema: dict | None = None,
 		use_vision: bool | Literal['auto'] = True,
+		use_native_computer_use: bool = False,
 		save_conversation_path: str | Path | None = None,
 		save_conversation_path_encoding: str | None = 'utf-8',
 		max_failures: int = 5,
@@ -246,6 +247,12 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				llm_screenshot_size = (1400, 850)
 				logger.info('🖼️  Auto-configured LLM screenshot size for Claude Sonnet: 1400x850')
 
+		# Force 1000x1000 screenshot for Gemini native computer use since it returns 1000x1000 coords
+		# and tools/service.py denormalizes based on llm_screenshot_size
+		if use_native_computer_use:
+			llm_screenshot_size = (1000, 1000)
+			logger.info('🖼️  Auto-configured LLM screenshot size for native computer-use: 1000x1000')
+
 		if page_extraction_llm is None:
 			page_extraction_llm = llm
 		if judge_llm is None:
@@ -313,7 +320,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		else:
 			# Exclude screenshot tool when use_vision is not auto
 			exclude_actions = ['screenshot'] if use_vision != 'auto' else []
-			self.tools = Tools(exclude_actions=exclude_actions, display_files_in_done_text=display_files_in_done_text)
+			self.tools = Tools(exclude_actions=exclude_actions, display_files_in_done_text=display_files_in_done_text, use_native_computer_use=use_native_computer_use)
+
+		# Propagate native computer-use mode to caller-supplied tool registries too.
+		if hasattr(self.tools, '_use_native_computer_use'):
+			self.tools._use_native_computer_use = use_native_computer_use
 
 		# Enforce screenshot exclusion when use_vision != 'auto', even if user passed custom tools
 		if use_vision != 'auto':
@@ -323,7 +334,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		model_name = getattr(llm, 'model', '').lower()
 		supports_coordinate_clicking = any(
 			pattern in model_name for pattern in ['claude-sonnet-4', 'claude-opus-4', 'gemini-3-pro', 'browser-use/']
-		)
+		) or use_native_computer_use
 		if supports_coordinate_clicking:
 			self.tools.set_coordinate_clicking(True)
 
@@ -385,6 +396,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		self.settings = AgentSettings(
 			use_vision=use_vision,
+			use_native_computer_use=use_native_computer_use,
 			vision_detail_level=vision_detail_level,
 			save_conversation_path=save_conversation_path,
 			save_conversation_path_encoding=save_conversation_path_encoding,
@@ -507,10 +519,12 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				is_anthropic=is_anthropic,
 				is_browser_use_model=is_browser_use_model,
 				model_name=self.llm.model,
+				use_native_computer_use=self.settings.use_native_computer_use,
 			).get_system_message(),
 			file_system=self.file_system,
 			state=self.state.message_manager_state,
 			use_thinking=self.settings.use_thinking,
+			use_native_computer_use=self.settings.use_native_computer_use,
 			# Settings that were previously in MessageManagerSettings
 			include_attributes=self.settings.include_attributes,
 			sensitive_data=sensitive_data,
@@ -1088,6 +1102,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		browser_state_summary = await self.browser_session.get_browser_state_summary(
 			include_screenshot=True,  # always capture even if use_vision=False so that cloud sync is useful (it's fast now anyway)
 			include_recent_events=self.include_recent_events,
+			include_dom=not self.settings.use_native_computer_use,
 		)
 		if browser_state_summary.screenshot:
 			self.logger.debug(f'📸 Got browser state WITH screenshot, length: {len(browser_state_summary.screenshot)}')
@@ -1440,17 +1455,31 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if not self.settings.enable_planning:
 			return
 
+		def _normalize_plan_item_text(step_text: str) -> str:
+			"""Normalize model-emitted plan item text to plain todo content."""
+			normalized = step_text.strip()
+			normalized = re.sub(r'^\[(?:x|>| |-)\]\s*', '', normalized, flags=re.IGNORECASE)
+			normalized = re.sub(r'^(?:x|>|-)\s+', '', normalized, flags=re.IGNORECASE)
+			normalized = re.sub(r'^\d+\s*:\s*', '', normalized)
+			return normalized.strip() or step_text.strip()
+
 		# If model provided a new plan via plan_update, replace the current plan
+		# but only if it's actually different from the existing plan (prevents constant resets
+		# when the model sends the same plan every step).
 		if model_output.plan_update is not None:
-			self.state.plan = [PlanItem(text=step_text) for step_text in model_output.plan_update]
-			self.state.current_plan_item_index = 0
-			self.state.plan_generation_step = self.state.n_steps
-			if self.state.plan:
-				self.state.plan[0].status = 'current'
-			self.logger.info(
-				f'📋 Plan {"updated" if self.state.plan_generation_step else "created"} with {len(self.state.plan)} steps'
-			)
-			return
+			new_step_texts = [_normalize_plan_item_text(step_text) for step_text in model_output.plan_update]
+			existing_step_texts = [item.text for item in self.state.plan] if self.state.plan else []
+
+			if new_step_texts != existing_step_texts:
+				self.state.plan = [PlanItem(text=step_text) for step_text in new_step_texts]
+				self.state.current_plan_item_index = 0
+				self.state.plan_generation_step = self.state.n_steps
+				if self.state.plan:
+					self.state.plan[0].status = 'current'
+				self.logger.info(
+					f'📋 Plan {"updated" if self.state.plan_generation_step else "created"} with {len(self.state.plan)} steps'
+				)
+			# Fall through to also process current_plan_item if provided alongside plan_update
 
 		# If model provided a step index update, advance the plan
 		if model_output.current_plan_item is not None and self.state.plan is not None:
@@ -1550,6 +1579,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if not self.settings.loop_detection_enabled:
 			return
 		url = browser_state_summary.url or ''
+		if self.settings.use_native_computer_use:
+			screenshot_b64 = browser_state_summary.clean_screenshot or browser_state_summary.screenshot
+			self.state.loop_detector.record_visual_page_state(url, screenshot_b64)
+			return
+
 		element_count = len(browser_state_summary.dom_state.selector_map) if browser_state_summary.dom_state else 0
 		# Use the DOM text representation for fingerprinting
 		dom_text = ''
@@ -1967,7 +2001,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Build kwargs for ainvoke
 		# Note: ChatBrowserUse will automatically generate action descriptions from output_format schema
-		kwargs: dict = {'output_format': self.AgentOutput, 'session_id': self.session_id}
+		kwargs: dict = {
+			'output_format': self.AgentOutput, 
+			'session_id': self.session_id,
+			'use_native_computer_use': self.settings.use_native_computer_use,
+		}
 
 		try:
 			response = await self.llm.ainvoke(input_messages, **kwargs)
@@ -1980,6 +2018,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# cut the number of actions to max_actions_per_step if needed
 			if len(parsed.action) > self.settings.max_actions_per_step:
 				parsed.action = parsed.action[: self.settings.max_actions_per_step]
+
+			if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+				self.logger.info(f'\n\n--- LLM RESPONSE (step {self.state.n_steps}) ---\n{parsed.model_dump_json(indent=2)}\n-------------------\n')
 
 			if not (hasattr(self.state, 'paused') and (self.state.paused or self.state.stopped)):
 				log_response(parsed, self.tools.registry.registry, self.logger)
@@ -3352,7 +3393,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		last_count = 0
 
 		while (time.time() - start_time) < timeout:
-			state = await self.browser_session.get_browser_state_summary(include_screenshot=False)
+			state = await self.browser_session.get_browser_state_summary(
+				include_screenshot=False,
+				include_dom=not self.settings.use_native_computer_use,
+			)
 			if state and state.dom_state.selector_map:
 				current_count = len(state.dom_state.selector_map)
 				if current_count >= min_elements:
@@ -3368,7 +3412,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Return last state even if we didn't reach min_elements
 		self.logger.warning(f'⚠️ Timeout waiting for {min_elements} elements, proceeding with {last_count} elements')
-		return await self.browser_session.get_browser_state_summary(include_screenshot=False)
+		return await self.browser_session.get_browser_state_summary(
+			include_screenshot=False,
+			include_dom=not self.settings.use_native_computer_use,
+		)
 
 	def _count_expected_elements_from_history(self, history_item: AgentHistory) -> int:
 		"""Estimate the minimum number of elements expected based on history.
@@ -3436,11 +3483,20 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				if min_elements > 0:
 					state = await self._wait_for_minimum_elements(min_elements, timeout=15.0, poll_interval=1.0)
 				else:
-					state = await self.browser_session.get_browser_state_summary(include_screenshot=False)
+					state = await self.browser_session.get_browser_state_summary(
+						include_screenshot=False,
+						include_dom=not self.settings.use_native_computer_use,
+					)
 			else:
-				state = await self.browser_session.get_browser_state_summary(include_screenshot=False)
+				state = await self.browser_session.get_browser_state_summary(
+					include_screenshot=False,
+					include_dom=not self.settings.use_native_computer_use,
+				)
 		else:
-			state = await self.browser_session.get_browser_state_summary(include_screenshot=False)
+			state = await self.browser_session.get_browser_state_summary(
+				include_screenshot=False,
+				include_dom=not self.settings.use_native_computer_use,
+			)
 		if not state or not history_item.model_output:
 			raise ValueError('Invalid state or model output')
 

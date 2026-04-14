@@ -392,9 +392,10 @@ class SessionManager:
 
 		# Enable auto-attach for this session's children (do this FIRST, outside lock)
 		try:
-			await self.browser_session._cdp_client_root.send.Target.setAutoAttach(
-				params={'autoAttach': True, 'waitForDebuggerOnStart': False, 'flatten': True}, session_id=session_id
-			)
+			if not getattr(self.browser_session, '_use_native_computer_use', False):
+				await self.browser_session._cdp_client_root.send.Target.setAutoAttach(
+					params={'autoAttach': True, 'waitForDebuggerOnStart': False, 'flatten': True}, session_id=session_id
+				)
 		except Exception as e:
 			error_str = str(e)
 			# Expected for short-lived targets (workers, temp iframes) that detach before this executes

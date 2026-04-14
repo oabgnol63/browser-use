@@ -4,6 +4,7 @@ from browser_use.agent.service import Agent
 from browser_use.agent.views import (
 	ActionLoopDetector,
 	PageFingerprint,
+	VisualPageFingerprint,
 	compute_action_hash,
 )
 from browser_use.llm.messages import UserMessage
@@ -334,6 +335,43 @@ def test_page_fingerprint_different_element_count_not_equal():
 	fp1 = PageFingerprint.from_browser_state('https://example.com', 'hello world', 50)
 	fp2 = PageFingerprint.from_browser_state('https://example.com', 'hello world', 51)
 	assert fp1 != fp2
+
+
+def test_visual_page_fingerprint_same_screenshot_equal():
+	"""Same screenshot produces equal visual fingerprints."""
+	fp1 = VisualPageFingerprint.from_browser_state('https://example.com', 'image-a')
+	fp2 = VisualPageFingerprint.from_browser_state('https://example.com', 'image-a')
+	assert fp1 == fp2
+
+
+def test_visual_page_fingerprint_different_screenshot_not_equal():
+	"""Different screenshots produce different visual fingerprints."""
+	fp1 = VisualPageFingerprint.from_browser_state('https://example.com', 'image-a')
+	fp2 = VisualPageFingerprint.from_browser_state('https://example.com', 'image-b')
+	assert fp1 != fp2
+
+
+def test_page_stagnation_resets_when_vision_only_screenshot_changes():
+	"""Vision-only stagnation should reset when the screenshot changes on the same URL."""
+	detector = ActionLoopDetector(window_size=20)
+	detector.record_visual_page_state('https://example.com', 'image-a')
+	detector.record_visual_page_state('https://example.com', 'image-a')
+	assert detector.consecutive_stagnant_pages == 1
+
+	detector.record_visual_page_state('https://example.com', 'image-b')
+	assert detector.consecutive_stagnant_pages == 0
+
+
+def test_page_stagnation_resets_when_vision_only_screenshot_missing():
+	"""Missing screenshot should reset visual stagnation tracking."""
+	detector = ActionLoopDetector(window_size=20)
+	detector.record_visual_page_state('https://example.com', 'image-a')
+	detector.record_visual_page_state('https://example.com', 'image-a')
+	assert detector.consecutive_stagnant_pages == 1
+
+	detector.record_visual_page_state('https://example.com', None)
+	assert detector.consecutive_stagnant_pages == 0
+	assert detector.recent_page_fingerprints == []
 
 
 # ─── Agent integration tests ─────────────────────────────────────────────────
