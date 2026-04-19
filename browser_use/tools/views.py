@@ -157,6 +157,13 @@ class DragAndDropCoordinateAction(BaseModel):
 	end_y: int = Field(description='End vertical coordinate relative to viewport top edge')
 
 
+class SwipeCoordinateAction(BaseModel):
+	start_x: int = Field(description='Start horizontal coordinate relative to viewport left edge')
+	start_y: int = Field(description='Start vertical coordinate relative to viewport top edge')
+	end_x: int = Field(description='End horizontal coordinate relative to viewport left edge')
+	end_y: int = Field(description='End vertical coordinate relative to viewport top edge')
+
+
 class ScrollCoordinateAction(BaseModel):
 	x: int = Field(description='Horizontal coordinate to scroll at relative to viewport left edge')
 	y: int = Field(description='Vertical coordinate to scroll at relative to viewport top edge')

@@ -1,6 +1,8 @@
 import os
 import sys
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -15,10 +17,8 @@ PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
 GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2') else GEMINI_API_KEY
 
-from browser_use.browser.profile import BrowserProfile
-from browser_use.browser import ProxySettings
-from browser_use.browser.profile import ViewportSize
 from browser_use import Agent
+from browser_use.browser.profile import BrowserProfile
 from browser_use.llm import ChatGoogle
 
 profile = BrowserProfile(

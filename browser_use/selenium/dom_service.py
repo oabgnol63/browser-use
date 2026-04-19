@@ -16,6 +16,7 @@ import time
 from importlib import resources
 from typing import TYPE_CHECKING
 
+from browser_use.dom.serializer.serializer import DOMTreeSerializer
 from browser_use.dom.views import (
     DOMRect,
     EnhancedAXNode,
@@ -24,13 +25,12 @@ from browser_use.dom.views import (
     NodeType,
     SerializedDOMState,
 )
-from browser_use.dom.serializer.serializer import DOMTreeSerializer
 from browser_use.utils import time_execution_async
 
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
 
-from browser_use.selenium.iframe_handler import SeleniumIframeHandler, IframeInfo
+from browser_use.selenium.iframe_handler import IframeInfo, SeleniumIframeHandler
 
 
 class SeleniumDomService:
@@ -233,14 +233,14 @@ class SeleniumDomService:
         
         # Debug: Compare JS selector map vs serializer's selector map
         if self.logger.getEffectiveLevel() == logging.DEBUG:
-            self.logger.debug(f'==================== SELECTOR MAP COMPARISON ====================')
+            self.logger.debug('==================== SELECTOR MAP COMPARISON ====================')
             self.logger.debug(f'JS selector_map: {len(js_selector_map)} elements (using this)')
             self.logger.debug(f'Serializer selector_map: {len(serialized_dom_state.selector_map)} elements (ignoring)')
             
             if len(js_selector_map) != len(serialized_dom_state.selector_map):
                 self.logger.debug(f'⚠️  Serializer tried to add {len(serialized_dom_state.selector_map) - len(js_selector_map)} elements - using JS map instead')
             
-            self.logger.debug(f'Using JS selector_map elements:')
+            self.logger.debug('Using JS selector_map elements:')
             for idx in sorted(js_selector_map.keys()):  # Show first 20
                 node = js_selector_map[idx]
                 tag = node.tag_name if hasattr(node, 'tag_name') else node.node_name
@@ -914,7 +914,7 @@ class SeleniumDomService:
             )
             
             if count == 0:
-                self.logger.debug(f'  -> SKIP (no interactive elements in iframe)')
+                self.logger.debug('  -> SKIP (no interactive elements in iframe)')
                 return {}
             
             self.logger.debug(f'  -> Found {count} interactive elements, extracting DOM...')
@@ -1120,7 +1120,7 @@ class SeleniumDomService:
                     continue
                 
                 if not iframe_selector_map:
-                    self.logger.debug(f'  -> No interactive elements found in iframe')
+                    self.logger.debug('  -> No interactive elements found in iframe')
                     continue
                 
                 # Track elements for this iframe with their NEW indices

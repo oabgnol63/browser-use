@@ -1,13 +1,11 @@
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.abspath("."))
 
-from selenium import webdriver
-from browser_use.selenium.dom_service import SeleniumDomService
-from browser_use.dom.serializer.serializer import DOMTreeSerializer
 from browser_use.selenium.session import SeleniumSession
+
 
 async def main():
     session = await SeleniumSession.new_local_session(browser='firefox', headless=False)
@@ -62,7 +60,6 @@ async def main():
         check_text_nodes(root_node)
         
         # Test serialization
-        from browser_use.dom.views import SerializedDOMState
         from browser_use.dom.serializer.serializer import DOMTreeSerializer
         
         serializer = DOMTreeSerializer(root_node, None)

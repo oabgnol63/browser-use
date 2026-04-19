@@ -1,8 +1,8 @@
+import base64
 import os
 import sys
 import tempfile
 from collections.abc import Iterable
-import base64
 from enum import Enum
 from functools import cache
 from pathlib import Path

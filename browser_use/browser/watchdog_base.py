@@ -7,10 +7,10 @@ from collections.abc import Iterable
 from typing import Any, ClassVar
 
 from bubus import BaseEvent
-from browser_use.event_bus import EventBus
 from pydantic import BaseModel, ConfigDict, Field
 
 from browser_use.browser.session import BrowserSession
+from browser_use.event_bus import EventBus
 
 
 class BaseWatchdog(BaseModel):

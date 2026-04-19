@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 	# from browser_use.agent.service import Agent
 	from browser_use.agent.views import ActionModel, ActionResult, AgentHistoryList
-	from browser_use.browser import BrowserProfile, CloudBrowserProfile, BrowserSession
+	from browser_use.browser import BrowserProfile, BrowserSession, CloudBrowserProfile
 	from browser_use.browser import BrowserSession as Browser
 	from browser_use.dom.service import DomService
 	from browser_use.llm import models

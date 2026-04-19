@@ -164,6 +164,17 @@ class DragAndDropCoordinateEvent(BaseEvent[dict | None]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropCoordinateEvent', 15.0))  # seconds
 
 
+class SwipeCoordinateEvent(BaseEvent[dict]):
+	"""Swipe between specific coordinates."""
+
+	start_x: int
+	start_y: int
+	end_x: int
+	end_y: int
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_SwipeCoordinateEvent', 15.0))  # seconds
+
+
 class ScrollCoordinateEvent(BaseEvent[None]):
 	"""Scroll at specific coordinates."""
 

@@ -31,11 +31,10 @@ from browser_use.tokens.service import TokenCost
 
 load_dotenv()
 
-from browser_use.event_bus import EventBus
 from pydantic import BaseModel, ValidationError
 from uuid_extensions import uuid7str
 
-from browser_use import Browser, BrowserProfile, CloudBrowserProfile, BrowserSession
+from browser_use import Browser, BrowserProfile, BrowserSession, CloudBrowserProfile
 from browser_use.agent.judge import construct_judge_messages
 
 # Lazy import for gif to avoid heavy agent.views import at startup
@@ -66,6 +65,7 @@ from browser_use.browser.session import DEFAULT_BROWSER_PROFILE
 from browser_use.browser.views import BrowserStateSummary
 from browser_use.config import CONFIG
 from browser_use.dom.views import DOMInteractedElement, MatchLevel
+from browser_use.event_bus import EventBus
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.observability import observe, observe_debug
 from browser_use.telemetry.service import ProductTelemetry

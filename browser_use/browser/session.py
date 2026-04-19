@@ -4,7 +4,6 @@ import asyncio
 import logging
 import re
 import time
-import time
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Union, cast, overload
@@ -12,12 +11,12 @@ from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
 import httpx
-from browser_use.event_bus import EventBus
 from cdp_use import CDPClient
 from cdp_use.cdp.fetch import AuthRequiredEvent, RequestPausedEvent
 from cdp_use.cdp.network import Cookie
 from cdp_use.cdp.target import SessionID, TargetID
 from cdp_use.cdp.target.commands import CreateTargetParameters
+from cdp_use.cdp.target.types import TargetInfo
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from uuid_extensions import uuid7str
 
@@ -50,7 +49,7 @@ from browser_use.browser.events import (
 from browser_use.browser.profile import BrowserProfile, CloudBrowserProfile, ProxySettings
 from browser_use.browser.views import BrowserStateSummary, TabInfo
 from browser_use.dom.views import DOMRect, EnhancedDOMTreeNode
-from cdp_use.cdp.target.types import TargetInfo
+from browser_use.event_bus import EventBus
 from browser_use.observability import observe_debug
 from browser_use.utils import _log_pretty_url, create_task_with_error_handling, is_new_tab_page
 
@@ -507,6 +506,16 @@ class BrowserSession(BaseModel):
 
 	# Mutable public state - which target has agent focus
 	agent_focus_target_id: TargetID | None = None
+
+	@property
+	def backend(self):
+		"""Execution backend for this session. Used by Tools to filter CDP-only/WebDriver-only tools.
+
+		Subclasses that speak W3C WebDriver (Selenium, Appium) override this to return Backend.WEBDRIVER.
+		"""
+		from browser_use.tools.registry.views import Backend
+
+		return Backend.CDP
 
 	# Mutable private state shared between watchdogs
 	_cdp_client_root: CDPClient | None = PrivateAttr(default=None)

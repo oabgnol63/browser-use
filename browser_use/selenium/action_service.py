@@ -12,8 +12,8 @@ Enhanced iframe support:
 
 import asyncio
 import logging
-import time
 import random
+import time
 from typing import TYPE_CHECKING, Any
 
 from browser_use.dom.views import EnhancedDOMTreeNode
@@ -21,13 +21,14 @@ from browser_use.dom.views import EnhancedDOMTreeNode
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
 
-from browser_use.selenium.iframe_handler import SeleniumIframeHandler
-from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.action_builder import ActionBuilder
-from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import StaleElementReferenceException
+
+from browser_use.selenium.iframe_handler import SeleniumIframeHandler
+
 
 class SeleniumActionService:
     """
@@ -254,7 +255,7 @@ class SeleniumActionService:
             
             # 3. Post-click wait to accommodate slow SPA navigation (esp for <a> tags)
             if element_node.node_name.lower() == 'a':
-                self.logger.debug(f'Waiting up to 12s for SPA navigation on <a> click...')
+                self.logger.debug('Waiting up to 12s for SPA navigation on <a> click...')
                 await asyncio.sleep(2.0)
                 for _ in range(10):
                     ready = await asyncio.get_event_loop().run_in_executor(
@@ -445,6 +446,101 @@ class SeleniumActionService:
             self.logger.error(f'Coordinate click failed: {e}')
             raise
 
+    async def hover_coordinate(self, x: int, y: int) -> dict:
+        """Hover the synthetic pointer at the given viewport coordinates."""
+        self.logger.debug(f'Hovering at coordinates: ({x}, {y})')
+
+        def do_hover():
+            action_builder = ActionBuilder(self.driver)
+            action_builder.pointer_action.move_to_location(x, y)
+            action_builder.pointer_action.pause(0.2)
+            action_builder.perform()
+
+        await asyncio.get_event_loop().run_in_executor(None, do_hover)
+        return {'success': True, 'x': x, 'y': y, 'method': 'selenium-pointer-hover'}
+
+    async def scroll_coordinate(self, x: int, y: int, direction: str, amount: int) -> dict:
+        """Scroll the scrollable ancestor at (x, y) in the given direction by `amount` pixels.
+
+        Falls back to scrolling the window if no scrollable ancestor is found.
+        """
+        self.logger.debug(f'Scrolling {direction} by {amount}px at ({x}, {y})')
+
+        dx = amount if direction == 'right' else -amount if direction == 'left' else 0
+        dy = amount if direction == 'down' else -amount if direction == 'up' else 0
+
+        script = f"""
+            var el = document.elementFromPoint({x}, {y});
+            while (el && el !== document.body && el !== document.documentElement) {{
+                var style = getComputedStyle(el);
+                var canScrollY = (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight;
+                var canScrollX = (style.overflowX === 'auto' || style.overflowX === 'scroll') && el.scrollWidth > el.clientWidth;
+                if (canScrollY || canScrollX) break;
+                el = el.parentElement;
+            }}
+            (el && el !== document.body && el !== document.documentElement ? el : window).scrollBy({dx}, {dy});
+            return true;
+        """
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: self.driver.execute_script(script)
+        )
+        return {
+            'success': True,
+            'x': x,
+            'y': y,
+            'direction': direction,
+            'amount': amount,
+            'method': 'selenium-js-scroll-at-point',
+        }
+
+    async def drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int) -> dict:
+        """
+        Drag from one viewport coordinate to another using desktop pointer actions.
+
+        Args:
+            start_x: Start X coordinate
+            start_y: Start Y coordinate
+            end_x: End X coordinate
+            end_y: End Y coordinate
+
+        Returns:
+            Dict with drag result metadata
+        """
+        self.logger.debug(f'Dragging from ({start_x}, {start_y}) to ({end_x}, {end_y})')
+
+        try:
+            def do_drag():
+                action_builder = ActionBuilder(self.driver)
+                action_builder.pointer_action.move_to_location(start_x, start_y)
+                action_builder.pointer_action.pause(random.uniform(0.05, 0.15))
+                action_builder.pointer_action.pointer_down()
+                action_builder.pointer_action.pause(random.uniform(0.2, 0.35))
+
+                steps = 6
+                for step in range(1, steps + 1):
+                    x = int(start_x + (end_x - start_x) * (step / steps))
+                    y = int(start_y + (end_y - start_y) * (step / steps))
+                    action_builder.pointer_action.move_to_location(x, y)
+                    action_builder.pointer_action.pause(random.uniform(0.02, 0.05))
+
+                action_builder.pointer_action.pause(random.uniform(0.08, 0.15))
+                action_builder.pointer_action.pointer_up()
+                action_builder.perform()
+
+            await asyncio.get_event_loop().run_in_executor(None, do_drag)
+
+            return {
+                'success': True,
+                'start_x': start_x,
+                'start_y': start_y,
+                'end_x': end_x,
+                'end_y': end_y,
+                'method': 'selenium-pointer-drag',
+            }
+        except Exception as e:
+            self.logger.error(f'Drag and drop failed: {e}')
+            raise
+
     async def type_text(
         self,
         element_node: EnhancedDOMTreeNode | None,
@@ -621,7 +717,7 @@ class SeleniumActionService:
                     element = await asyncio.get_event_loop().run_in_executor(
                         None, lambda: self.driver.switch_to.active_element
                     )
-                    self.logger.debug(f'Got active element')
+                    self.logger.debug('Got active element')
                     
                     # Construct the key sequence
                     key_sequence = []
@@ -659,7 +755,7 @@ class SeleniumActionService:
                     element = await asyncio.get_event_loop().run_in_executor(
                         None, lambda: self.driver.switch_to.active_element
                     )
-                    self.logger.debug(f'Got active element')
+                    self.logger.debug('Got active element')
                     
                     await asyncio.get_event_loop().run_in_executor(
                         None, lambda: element.send_keys(selenium_key)
@@ -673,7 +769,7 @@ class SeleniumActionService:
             except StaleElementReferenceException as e:
                 self.logger.warning(f'StaleElementReferenceException on attempt {attempt + 1}/{max_retries}: {e}')
                 if attempt < max_retries - 1:
-                    self.logger.info(f'Retrying send_keys after stale element...')
+                    self.logger.info('Retrying send_keys after stale element...')
                     await asyncio.sleep(0.1)
                     continue
                 else:
@@ -995,6 +1091,7 @@ class SeleniumActionService:
 
         # Perform the entire action sequence
         action_builder.perform()
+
     def _is_element_in_iframe(self, element_node: EnhancedDOMTreeNode) -> tuple[bool, str | None]:
         """
         Check if an element is from an iframe and return the iframe selector.

@@ -1,10 +1,11 @@
-import requests
-import time
-import os
-import dotenv
 import asyncio
 import json as _json
+import os
+import time
+
 import aiohttp
+import dotenv
+import requests
 
 dotenv.load_dotenv()
 SAUCELABS_USERNAME = os.getenv("SAUCELABS_USERNAME")
@@ -13,8 +14,9 @@ PROXY_URL = os.getenv("PROXY_URL")
 PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 
-from browser_use.browser.profile import CloudBrowserProfile
 from browser_use.browser import ProxySettings
+from browser_use.browser.profile import CloudBrowserProfile
+
 
 def saucelabs_session_creation(profile: CloudBrowserProfile) -> str:
     
@@ -42,7 +44,7 @@ def saucelabs_session_creation(profile: CloudBrowserProfile) -> str:
     session_id = None
     try:
         import json
-        print(f"🚀 Creating SauceLabs session with CloudBrowserProfile capabilities...")
+        print("🚀 Creating SauceLabs session with CloudBrowserProfile capabilities...")
         
         # Create WebDriver session with W3C format
         session_data = {
@@ -101,7 +103,7 @@ def close_saucelabs_session(cdp_url: str) -> bool:
     hub_url = f"https://{SAUCELABS_USERNAME}:{SAUCELABS_PRIVATEKEY}@ondemand.us-west-1.saucelabs.com:443/wd/hub"
 
     try:
-        print(f"🔄 Sending DELETE request to close session...")
+        print("🔄 Sending DELETE request to close session...")
         response = requests.delete(f"{hub_url}/session/{session_id}", timeout=30)
         
         if response.status_code in [200, 204]:
@@ -312,7 +314,7 @@ async def _do_login_cdp_async(cdp_ws_url: str, login_url: str, username: str, pa
                                 await _cdp_send(ws, "Page.bringToFront", None, seq, session_id=session_id)
                                 
                                 new_target_found = True
-                                print(f"✅ Successfully switched to new tab with login page")
+                                print("✅ Successfully switched to new tab with login page")
                                 break
                     
                     break
@@ -473,7 +475,7 @@ async def _do_login_cdp_async(cdp_ws_url: str, login_url: str, username: str, pa
                 return False
 
             # Step 2: Fill password and click Log In
-            print(f"🔐 Entering password...")
+            print("🔐 Entering password...")
             js_enter_password = f"""
             (function() {{
                 const password = {_json.dumps(password)};

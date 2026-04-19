@@ -19,6 +19,9 @@ from browser_use.telemetry.service import ProductTelemetry
 from browser_use.tools.registry.views import (
 	ActionModel,
 	ActionRegistry,
+	Backend,
+	Mode,
+	Platform,
 	RegisteredAction,
 	SpecialActionParameters,
 )
@@ -37,6 +40,9 @@ class Registry(Generic[Context]):
 		self.telemetry = ProductTelemetry()
 		# Create a new list to avoid mutable default argument issues
 		self.exclude_actions = list(exclude_actions) if exclude_actions is not None else []
+		self.active_mode: Mode | None = None
+		self.active_platform: Platform | None = None
+		self.active_backend: Backend | None = None
 
 	def exclude_action(self, action_name: str) -> None:
 		"""Exclude an action from the registry after initialization.
@@ -294,6 +300,9 @@ class Registry(Generic[Context]):
 		domains: list[str] | None = None,
 		allowed_domains: list[str] | None = None,
 		terminates_sequence: bool = False,
+		modes: set[Mode] | None = None,
+		platforms: set[Platform] | None = None,
+		backends: set[Backend] | None = None,
 	):
 		"""Decorator for registering actions"""
 		# Handle aliases: domains and allowed_domains are the same parameter
@@ -307,6 +316,18 @@ class Registry(Generic[Context]):
 			if func.__name__ in self.exclude_actions:
 				return func
 
+			# DOM mode is a superset — it has both DOM and vision, so it never filters by mode.
+			# Vision-only mode excludes tools that are exclusively DOM-only.
+			if self.active_mode == Mode.VISION and modes is not None and Mode.VISION not in modes:
+				logger.debug(f'Skipped action "{func.__name__}" — requires modes={modes}, active mode is {self.active_mode}')
+				return func
+			if self.active_platform is not None and platforms is not None and self.active_platform not in platforms:
+				logger.debug(f'Skipped action "{func.__name__}" — requires platforms={platforms}, active platform is {self.active_platform}')
+				return func
+			if self.active_backend is not None and backends is not None and self.active_backend not in backends:
+				logger.debug(f'Skipped action "{func.__name__}" — requires backends={backends}, active backend is {self.active_backend}')
+				return func
+
 			# Normalize the function signature
 			normalized_func, actual_param_model = self._normalize_action_function_signature(func, description, param_model)
 
@@ -317,6 +338,9 @@ class Registry(Generic[Context]):
 				param_model=actual_param_model,
 				domains=final_domains,
 				terminates_sequence=terminates_sequence,
+				modes=modes,
+				platforms=platforms,
+				backends=backends,
 			)
 			self.registry.actions[func.__name__] = action
 

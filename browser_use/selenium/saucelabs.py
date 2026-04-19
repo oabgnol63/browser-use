@@ -5,18 +5,17 @@ Provides helpers for creating and connecting to SauceLabs browser sessions
 with Firefox and Safari.
 """
 
+import base64
 import logging
 import os
 import tempfile
-import requests
-import base64
 import urllib.request
 from typing import Literal, Union
-from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
+
+import requests
 from selenium import webdriver
+from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
 from selenium.webdriver.remote.webdriver import WebDriver
-
-
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,9 @@
+import asyncio
 import os
 import sys
-import asyncio
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -18,10 +20,11 @@ PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
 GEMINI_API_KEY_2 = os.getenv('GOOGLE_API_KEY_2') if os.getenv('GOOGLE_API_KEY_2') else GEMINI_API_KEY
 
+from browser_use import ActionResult, Agent, BrowserSession, ChatGoogle, Tools
+from browser_use.browser import CloudBrowserProfile
 from browser_use.browser.profile import ViewportSize
-from browser_use.browser import ProxySettings, CloudBrowserProfile
-from browser_use import Agent, Tools, ActionResult, ChatGoogle, BrowserSession
-from browser_use.sauce_manager import saucelabs_session_creation, close_saucelabs_session, _do_login_cdp_async
+from browser_use.sauce_manager import close_saucelabs_session, saucelabs_session_creation
+
 
 async def main():
     tools = Tools()

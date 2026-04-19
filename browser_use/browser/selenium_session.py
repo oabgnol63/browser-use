@@ -1,30 +1,34 @@
 import asyncio
 import logging
-from typing import Any, Literal, cast
-from uuid_extensions import uuid7str
-from pydantic import PrivateAttr
+from typing import cast
 
-from browser_use.browser.session import BrowserSession
+from pydantic import PrivateAttr
+from uuid_extensions import uuid7str
+
 from browser_use.browser.events import (
     BrowserStartEvent,
-    NavigateToUrlEvent,
-    ClickElementEvent,
-    ClickCoordinateEvent,
-    TypeTextEvent,
-    ScrollEvent,
+    BrowserStateRequestEvent,
     BrowserStopEvent,
+    ClickCoordinateEvent,
+    ClickElementEvent,
+    CloseTabEvent,
+    DragAndDropCoordinateEvent,
     GoBackEvent,
     GoForwardEvent,
+    HoverCoordinateEvent,
     HoverElementEvent,
+    NavigateToUrlEvent,
     RefreshEvent,
-    SwitchTabEvent,
-    CloseTabEvent,
-    BrowserStateRequestEvent,
+    ScrollCoordinateEvent,
+    ScrollEvent,
     SendKeysEvent,
+    SwitchTabEvent,
+    TypeTextEvent,
 )
+from browser_use.browser.session import BrowserSession
 from browser_use.browser.views import BrowserStateSummary, TabInfo
-from browser_use.selenium.session import SeleniumSession
 from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
+from browser_use.selenium.session import SeleniumSession
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,12 @@ class SeleniumBrowserSession(BrowserSession):
     """
     
     _selenium_session: SeleniumSession = PrivateAttr()
+
+    @property
+    def backend(self):
+        from browser_use.tools.registry.views import Backend
+
+        return Backend.WEBDRIVER
 
     def __init__(self, selenium_session: SeleniumSession, **kwargs):
         # We initialize with a dummy ID if not provided
@@ -54,9 +64,9 @@ class SeleniumBrowserSession(BrowserSession):
         """Register Selenium-specific event handlers."""
         # Initialize connection lock needed by base class or handlers
         self._connection_lock = asyncio.Lock()
-        
+
         from browser_use.browser.watchdog_base import BaseWatchdog
-        
+
         # Register core handlers - override CDP-based ones with Selenium implementations
         BaseWatchdog.attach_handler_to_session(self, BrowserStartEvent, self.on_BrowserStartEvent)
         BaseWatchdog.attach_handler_to_session(self, BrowserStopEvent, self.on_BrowserStopEvent)
@@ -64,6 +74,9 @@ class SeleniumBrowserSession(BrowserSession):
         BaseWatchdog.attach_handler_to_session(self, ClickElementEvent, self.on_ClickElementEvent)
         BaseWatchdog.attach_handler_to_session(self, HoverElementEvent, self.on_HoverElementEvent)
         BaseWatchdog.attach_handler_to_session(self, ClickCoordinateEvent, self.on_ClickCoordinateEvent)
+        BaseWatchdog.attach_handler_to_session(self, DragAndDropCoordinateEvent, self.on_DragAndDropCoordinateEvent)
+        BaseWatchdog.attach_handler_to_session(self, HoverCoordinateEvent, self.on_HoverCoordinateEvent)
+        BaseWatchdog.attach_handler_to_session(self, ScrollCoordinateEvent, self.on_ScrollCoordinateEvent)
         BaseWatchdog.attach_handler_to_session(self, TypeTextEvent, self.on_TypeTextEvent)
         BaseWatchdog.attach_handler_to_session(self, SendKeysEvent, self.on_SendKeysEvent)
         BaseWatchdog.attach_handler_to_session(self, ScrollEvent, self.on_ScrollEvent)
@@ -103,6 +116,21 @@ class SeleniumBrowserSession(BrowserSession):
 
     async def on_ClickCoordinateEvent(self, event: ClickCoordinateEvent) -> dict:
         return await self._selenium_session.click_coordinates(event.coordinate_x, event.coordinate_y)
+
+    async def on_DragAndDropCoordinateEvent(self, event: DragAndDropCoordinateEvent) -> dict:
+        return await self._selenium_session.action_service.drag_and_drop(
+            event.start_x, event.start_y, event.end_x, event.end_y
+        )
+
+    async def on_HoverCoordinateEvent(self, event: HoverCoordinateEvent) -> dict:
+        return await self._selenium_session.action_service.hover_coordinate(
+            event.coordinate_x, event.coordinate_y
+        )
+
+    async def on_ScrollCoordinateEvent(self, event: ScrollCoordinateEvent) -> dict:
+        return await self._selenium_session.action_service.scroll_coordinate(
+            event.coordinate_x, event.coordinate_y, event.direction, event.amount
+        )
 
     async def on_TypeTextEvent(self, event: TypeTextEvent) -> dict:
         # type_text now handles iframe detection internally
@@ -270,6 +298,17 @@ class SeleniumBrowserSession(BrowserSession):
                 pixels_left=0,
                 pixels_right=0,
             )
+            
+        self._original_viewport_size = (page_info.viewport_width, page_info.viewport_height)
+        
+        self.logger.debug(
+            f"🔍 Selenium get_state: Got page info: "
+            f"viewport_width={page_info.viewport_width} viewport_height={page_info.viewport_height} "
+            f"page_width={page_info.page_width} page_height={page_info.page_height} "
+            f"scroll_x={page_info.scroll_x} scroll_y={page_info.scroll_y} "
+            f"pixels_above={page_info.pixels_above} pixels_below={page_info.pixels_below} "
+            f"pixels_left={page_info.pixels_left} pixels_right={page_info.pixels_right}"
+        )
         
         clean_screenshot_b64 = None
         if include_screenshot:

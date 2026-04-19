@@ -1,9 +1,10 @@
-import importlib.resources
 import base64
-from io import BytesIO
-from PIL import Image, ImageStat
+import importlib.resources
 from datetime import datetime
+from io import BytesIO
 from typing import TYPE_CHECKING, Literal, Optional
+
+from PIL import Image, ImageStat
 
 from browser_use.browser.views import PLACEHOLDER_4PX_SCREENSHOT
 from browser_use.dom.views import NodeType, SimplifiedNode

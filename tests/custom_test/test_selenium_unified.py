@@ -3,8 +3,8 @@ Verification test for unified Agent with SeleniumBrowserSession on Sauce Labs.
 """
 
 import asyncio
-import logging
 import os
+
 from dotenv import load_dotenv
 
 os.environ["BROWSER_USE_LOGGING_LEVEL"] = "debug"
@@ -16,10 +16,10 @@ os.environ["TIMEOUT_ScreenshotEvent"] = "120"
 os.environ["TIMEOUT_BrowserStateRequestEvent"] = "180"
 load_dotenv()
 
-from browser_use.selenium import SeleniumSession
-from browser_use.browser.selenium_session import SeleniumBrowserSession
-from browser_use.agent.service import Agent
 from browser_use import ChatOpenAI
+from browser_use.agent.service import Agent
+from browser_use.browser.selenium_session import SeleniumBrowserSession
+from browser_use.selenium import SeleniumSession
 
 
 async def main():

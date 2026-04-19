@@ -1,5 +1,6 @@
 import asyncio
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,10 +10,11 @@ os.environ['TIMEOUT_NavigationCompleteEvent'] = '60'
 os.environ['TIMEOUT_ScreenshotEvent'] = '30'
 os.environ['BROWSER_USE_PRINT_LLM_MESSAGES'] = 'true'  # print full LLM input each step
 
-from browser_use.agent.service import Agent
+
 from browser_use import Browser, BrowserProfile
+from browser_use.agent.service import Agent
 from browser_use.llm.google.chat import ChatGoogle
-from google.genai import types
+
 
 async def main():
     # Make sure you have your API key set

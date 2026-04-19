@@ -30,6 +30,7 @@ from browser_use.browser.events import (
 	ScrollToTextEvent,
 	SelectDropdownOptionEvent,
 	SendKeysEvent,
+	SwipeCoordinateEvent,
 	SwitchTabEvent,
 	TypeTextEvent,
 	UploadFileEvent,
@@ -41,6 +42,7 @@ from browser_use.llm.base import BaseChatModel
 from browser_use.llm.messages import SystemMessage, UserMessage
 from browser_use.observability import observe_debug
 from browser_use.tools.registry.service import Registry
+from browser_use.tools.registry.views import Backend, Mode, Platform
 from browser_use.tools.utils import get_click_description
 from browser_use.tools.views import (
 	ClickElementAction,
@@ -66,6 +68,7 @@ from browser_use.tools.views import (
 	SelectDropdownOptionAction,
 	SendKeysAction,
 	StructuredOutputAction,
+	SwipeCoordinateAction,
 	SwitchTabAction,
 	UploadFileAction,
 )
@@ -398,8 +401,14 @@ class Tools(Generic[Context]):
 		output_model: type[T] | None = None,
 		display_files_in_done_text: bool = True,
 		use_native_computer_use: bool = False,
+		active_mode: Mode | None = None,
+		active_platform: Platform | None = None,
+		active_backend: Backend | None = None,
 	):
 		self.registry = Registry[Context](exclude_actions if exclude_actions is not None else [])
+		self.registry.active_mode = active_mode
+		self.registry.active_platform = active_platform
+		self.registry.active_backend = active_backend
 		self.display_files_in_done_text = display_files_in_done_text
 		self._output_model: type[BaseModel] | None = output_model
 		self._use_native_computer_use = use_native_computer_use
@@ -581,6 +590,8 @@ class Tools(Generic[Context]):
 		# Helper function for coordinate conversion
 		def _convert_llm_coordinates_to_viewport(llm_x: int, llm_y: int, browser_session: BrowserSession) -> tuple[int, int]:
 			"""Convert coordinates from LLM screenshot size to original viewport size."""
+			actual_x, actual_y = llm_x, llm_y
+			
 			if browser_session.llm_screenshot_size and browser_session._original_viewport_size:
 				original_width, original_height = browser_session._original_viewport_size
 				llm_width, llm_height = browser_session.llm_screenshot_size
@@ -593,8 +604,15 @@ class Tools(Generic[Context]):
 					f'🔄 Converting coordinates: LLM ({llm_x}, {llm_y}) @ {llm_width}x{llm_height} '
 					f'→ Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height}'
 				)
-				return actual_x, actual_y
-			return llm_x, llm_y
+
+			# Clamp to viewport bounds to prevent out-of-bounds exceptions for all browsers
+			if browser_session._original_viewport_size:
+				max_x = browser_session._original_viewport_size[0] - 1
+				max_y = browser_session._original_viewport_size[1] - 1
+				actual_x = max(0, min(actual_x, max_x))
+				actual_y = max(0, min(actual_y, max_y))
+
+			return actual_x, actual_y
 
 		# Element Interaction Actions
 		async def _detect_new_tab_opened(
@@ -897,8 +915,34 @@ class Tools(Generic[Context]):
 				return ActionResult(error=error_msg)
 
 		@self.registry.action(
+			'Swipe between coordinates. Use this to simulate a swipe or flick gesture, such as scrolling a carousel, map, or mobile view.',
+			param_model=SwipeCoordinateAction,
+			platforms={Platform.IOS, Platform.ANDROID},
+		)
+		async def swipe_coordinate(params: SwipeCoordinateAction, browser_session: BrowserSession):
+			try:
+				start_x, start_y = _convert_llm_coordinates_to_viewport(params.start_x, params.start_y, browser_session)
+				end_x, end_y = _convert_llm_coordinates_to_viewport(params.end_x, params.end_y, browser_session)
+
+				asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
+				asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
+
+				event = browser_session.event_bus.dispatch(
+					SwipeCoordinateEvent(start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y)
+				)
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Swiped from ({params.start_x}, {params.start_y}) to ({params.end_x}, {params.end_y})'
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to swipe: {e}'
+				return ActionResult(error=error_msg)
+
+		@self.registry.action(
 			'Input text into element by index.',
 			param_model=InputTextAction,
+			modes={Mode.DOM},
 		)
 		async def input(
 			params: InputTextAction,
@@ -985,6 +1029,7 @@ class Tools(Generic[Context]):
 		@self.registry.action(
 			'',
 			param_model=UploadFileAction,
+			modes={Mode.DOM},
 		)
 		async def upload_file(
 			params: UploadFileAction, browser_session: BrowserSession, available_file_paths: list[str], file_system: FileSystem
@@ -1170,6 +1215,7 @@ class Tools(Generic[Context]):
 		@self.registry.action(
 			"""LLM extracts structured data from page markdown. Use when: on right page, know what to extract, haven't called before on same page+query. Can't get interactive elements. Set extract_links=True for URLs. Set extract_images=True for image src URLs. Use start_from_char if previous extraction was truncated to extract data further down the page. When paginating across pages, pass already_collected with item identifiers (names/URLs) from prior pages to avoid duplicates.""",
 			param_model=ExtractAction,
+			modes={Mode.DOM},
 		)
 		async def extract(
 			params: ExtractAction,
@@ -1413,6 +1459,8 @@ You will be given a query and the markdown of a webpage that has been filtered t
 		@self.registry.action(
 			"""Search page text for a pattern (like grep). Zero LLM cost, instant. Returns matches with surrounding context. Use to find specific text, verify content exists, or locate data on the page. Set regex=True for regex patterns. Use css_scope to search within a specific section.""",
 			param_model=SearchPageAction,
+			modes={Mode.DOM},
+			backends={Backend.CDP},
 		)
 		async def search_page(params: SearchPageAction, browser_session: BrowserSession):
 			js_code = _build_search_page_js(
@@ -1450,6 +1498,8 @@ You will be given a query and the markdown of a webpage that has been filtered t
 		@self.registry.action(
 			"""Query DOM elements by CSS selector. Zero LLM cost, instant. Returns matching elements with tag, text, and attributes. Use to explore page structure, count items, get links/attributes. IMPORTANT: Use standard CSS selectors only (querySelectorAll). Pseudo-classes like :contains are NOT supported. Use attributes=["href","src"] to extract specific attributes.""",
 			param_model=FindElementsAction,
+			modes={Mode.DOM},
+			backends={Backend.CDP},
 		)
 		async def find_elements(params: FindElementsAction, browser_session: BrowserSession):
 			js_code = _build_find_elements_js(
@@ -1606,7 +1656,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				error_msg = f'Failed to send keys: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
-		@self.registry.action('Scroll to text.')
+		@self.registry.action('Scroll to text.', modes={Mode.DOM})
 		async def find_text(text: str, browser_session: BrowserSession):  # type: ignore
 			# Dispatch scroll to text event
 			event = browser_session.event_bus.dispatch(ScrollToTextEvent(text=text))
@@ -1671,6 +1721,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 			'Save the current page as a PDF file. Returns the file path of the saved PDF. '
 			'Use this to capture the full page content (including content below the fold) as a printable document.',
 			param_model=SaveAsPdfAction,
+			backends={Backend.CDP},
 		)
 		async def save_as_pdf(
 			params: SaveAsPdfAction,
@@ -1760,6 +1811,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 		@self.registry.action(
 			'',
 			param_model=GetDropdownOptionsAction,
+			modes={Mode.DOM},
 		)
 		async def dropdown_options(params: GetDropdownOptionsAction, browser_session: BrowserSession):
 			"""Get all options from a native dropdown or ARIA menu"""
@@ -1788,6 +1840,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 		@self.registry.action(
 			'Set the option of a <select> element.',
 			param_model=SelectDropdownOptionAction,
+			modes={Mode.DOM},
 		)
 		async def select_dropdown(params: SelectDropdownOptionAction, browser_session: BrowserSession):
 			"""Select dropdown option by the text of the option you want to select"""
@@ -1911,6 +1964,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 		@self.registry.action(
 			"""Execute browser JavaScript. Best practice: wrap in IIFE (function(){...})() with try-catch for safety. Use ONLY browser APIs (document, window, DOM). NO Node.js APIs (fs, require, process). Example: (function(){try{const el=document.querySelector('#id');return el?el.value:'not found'}catch(e){return 'Error: '+e.message}})() Avoid comments. Use for hover, drag, zoom, custom selectors, extract/filter links, or analysing page structure. IMPORTANT: Shadow DOM elements with [index] markers can be clicked directly with click(index) — do NOT use evaluate() to click them. Only use evaluate for shadow DOM elements that are NOT indexed. Limit output size.""",
 			terminates_sequence=True,
+			backends={Backend.CDP},
 		)
 		async def evaluate(code: str, browser_session: BrowserSession):
 			# Execute JavaScript with proper error handling and promise support
@@ -2017,6 +2071,8 @@ Validated Code (after quote fixing):
 				error_msg = f'Failed to execute JavaScript: {type(e).__name__}: {e}'
 				logger.debug(f'JavaScript code that failed: {code[:200]}...')
 				return ActionResult(error=error_msg)
+
+		self._log_registered_tools()
 
 	def _validate_and_fix_javascript(self, code: str) -> str:
 		"""Validate and fix common JavaScript issues before execution"""
@@ -2167,6 +2223,13 @@ Validated Code (after quote fixing):
 					attachments=attachments,
 				)
 
+	def _log_registered_tools(self) -> None:
+		"""Log summary of registered tools with active mode/platform constraints."""
+		mode = self.registry.active_mode
+		platform = self.registry.active_platform
+		tool_names = sorted(self.registry.registry.actions.keys())
+		logger.info(f'📋 Registered {len(tool_names)} tools (mode={mode}, platform={platform}): {", ".join(tool_names)}')
+
 	def use_structured_output_action(self, output_model: type[T]):
 		self._output_model = output_model
 		self._register_done_action(output_model)
@@ -2223,6 +2286,7 @@ Validated Code (after quote fixing):
 			@self.registry.action(
 				'Click element by index.',
 				param_model=ClickElementActionIndexOnly,
+				modes={Mode.DOM},
 			)
 			async def click(params: ClickElementActionIndexOnly, browser_session: BrowserSession):
 				return await self._click_by_index(params, browser_session)
@@ -2248,6 +2312,7 @@ Validated Code (after quote fixing):
 			@self.registry.action(
 				'Hover over element by index.',
 				param_model=HoverElementActionIndexOnly,
+				modes={Mode.DOM},
 			)
 			async def hover(params: HoverElementActionIndexOnly, browser_session: BrowserSession):
 				return await self._hover_by_index(params, browser_session)

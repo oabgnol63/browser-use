@@ -21,16 +21,16 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Union
 
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
 	NoSuchFrameException,
 	StaleElementReferenceException,
 	TimeoutException,
 	WebDriverException,
 )
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 if TYPE_CHECKING:
 	from selenium.webdriver.remote.webdriver import WebDriver

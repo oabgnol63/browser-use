@@ -14,21 +14,20 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
-from browser_use.selenium.dom_service import SeleniumDomService
-from browser_use.selenium.action_service import SeleniumActionService
-from browser_use.selenium.iframe_handler import SeleniumIframeHandler, IframeInfo
-from browser_use.selenium.saucelabs import (
-    create_saucelabs_session,
-    connect_to_saucelabs_session,
-    get_saucelabs_credentials,
-)
-from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
 from browser_use.dom.serializer.serializer import DOMTreeSerializer
-from selenium import webdriver
-from browser_use.selenium.firefox_profile import apply_firefox_preferences
+from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
+from browser_use.selenium.action_service import SeleniumActionService
+from browser_use.selenium.dom_service import SeleniumDomService
+from browser_use.selenium.iframe_handler import IframeInfo, SeleniumIframeHandler
+from browser_use.selenium.saucelabs import (
+    connect_to_saucelabs_session,
+    create_saucelabs_session,
+)
 
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webdriver import WebDriver
+
+from selenium import webdriver
 
 
 class SeleniumSession:

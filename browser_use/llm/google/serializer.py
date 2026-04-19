@@ -2,13 +2,13 @@ import base64
 
 from google.genai.types import Content, ContentListUnion, Part
 
-from browser_use.utils import sanitize_surrogates
 from browser_use.llm.messages import (
 	AssistantMessage,
 	BaseMessage,
 	SystemMessage,
 	UserMessage,
 )
+from browser_use.utils import sanitize_surrogates
 
 
 class GoogleMessageSerializer:

@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import os
-from typing import Any, TypeVar
-from bubus import EventBus as BubusEventBus
-from bubus.service import BaseEvent, QueueShutDown, holds_global_lock
 from contextvars import ContextVar
+from typing import Any, TypeVar
+
+from bubus import EventBus as BubusEventBus
+from bubus.service import BaseEvent, holds_global_lock
 
 logger = logging.getLogger('bubus')
 
@@ -18,7 +19,6 @@ MEMORY_LIMIT_MB = int(os.getenv('BUBUS_MEMORY_LIMIT_MB', '64'))
 def _patched_check_total_memory_usage(self) -> None:
 	"""Patched version of bubus memory check with configurable limit."""
 	import sys
-	from collections import deque
 
 	total_bytes = 0
 	bus_details = []

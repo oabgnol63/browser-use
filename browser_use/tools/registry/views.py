@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
@@ -9,6 +10,26 @@ from browser_use.llm.base import BaseChatModel
 
 if TYPE_CHECKING:
 	pass
+
+
+class Mode(StrEnum):
+	# DOM is a superset of VISION: tools annotated modes={Mode.VISION} stay available in DOM mode,
+	# tools annotated modes={Mode.DOM} are filtered out in VISION mode.
+	DOM = "dom"
+	VISION = "vision"
+
+
+class Platform(StrEnum):
+	DESKTOP = "desktop"
+	IOS = "ios"
+	ANDROID = "android"
+
+
+class Backend(StrEnum):
+	# CDP: session speaks Chrome DevTools Protocol (desktop Chromium).
+	# WEBDRIVER: session speaks W3C WebDriver (Selenium Firefox/Safari, Appium mobile).
+	CDP = "cdp"
+	WEBDRIVER = "webdriver"
 
 
 class RegisteredAction(BaseModel):
@@ -25,6 +46,11 @@ class RegisteredAction(BaseModel):
 
 	# filters: provide specific domains to determine whether the action should be available on the given URL or not
 	domains: list[str] | None = None  # e.g. ['*.google.com', 'www.bing.com', 'yahoo.*]
+
+	# mode/platform/backend constraints — None means no constraint (available in all modes/platforms/backends)
+	modes: set[Mode] | None = None
+	platforms: set[Platform] | None = None
+	backends: set[Backend] | None = None
 
 	model_config = ConfigDict(arbitrary_types_allowed=True)
 
