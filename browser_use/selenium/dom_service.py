@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 from browser_use.selenium.iframe_handler import IframeInfo, SeleniumIframeHandler
 
 
+def _load_dom_tree_js() -> str:
+    """Load the shared DOM extraction script from its package resource."""
+    return resources.files('browser_use.dom.dom_tree_js').joinpath('index.js').read_text(encoding='utf-8')
+
+
 class SeleniumDomService:
     """
     DOM service for Firefox and Safari browsers using Selenium JavaScript evaluation.
@@ -69,7 +74,7 @@ class SeleniumDomService:
         self.iframe_handler = SeleniumIframeHandler(driver, logger=self.logger)
 
         # Load the JavaScript code for DOM extraction (same as PlaywrightDomService)
-        raw_js_code = resources.files('browser_use.dom').joinpath('dom_tree_js', 'index.js').read_text(encoding='utf-8').strip()
+        raw_js_code = _load_dom_tree_js().strip()
         if raw_js_code.startswith('﻿'):
             raw_js_code = raw_js_code[1:]  # Remove UTF-8 BOM if present
         if raw_js_code.endswith(';'):
