@@ -345,6 +345,7 @@ def process_element_highlight(
 	font,
 	filter_highlight_ids: bool,
 	image_size: tuple[int, int],
+	label_mode: str = 'backend_node_id',
 ) -> None:
 	"""Process a single element for highlighting."""
 	try:
@@ -380,20 +381,21 @@ def process_element_highlight(
 
 		color = get_element_color(tag_name, element_type)
 
-		# Get element index for overlay and apply filtering
-		backend_node_id = getattr(element, 'backend_node_id', None)
+		# Default to backend_node_id to preserve existing non-Selenium behavior.
+		# Selenium can opt into selector_map index labels so the overlay matches
+		# the browser_state indices visible to the agent.
 		index_text = None
+		display_id = element_id if label_mode == 'selector_index' else getattr(element, 'backend_node_id', None)
 
-		if backend_node_id is not None:
-			if filter_highlight_ids:
-				# Use the meaningful text that matches what the LLM sees
-				meaningful_text = element.get_meaningful_text_for_llm()
-				# Show ID only if meaningful text is less than 5 characters
-				if len(meaningful_text) < 3:
-					index_text = str(backend_node_id)
-			else:
-				# Always show ID when filter is disabled
-				index_text = str(backend_node_id)
+		if display_id is not None and filter_highlight_ids:
+			# Use the meaningful text that matches what the LLM sees
+			meaningful_text = element.get_meaningful_text_for_llm()
+			# Show index only if meaningful text is very short
+			if len(meaningful_text) < 3:
+				index_text = str(display_id)
+		elif display_id is not None:
+			# Always show the chosen ID when filter is disabled
+			index_text = str(display_id)
 
 		# Draw enhanced bounding box with bigger index
 		draw_enhanced_bounding_box_with_text(
@@ -413,6 +415,7 @@ async def create_highlighted_screenshot(
 	viewport_offset_x: int = 0,
 	viewport_offset_y: int = 0,
 	filter_highlight_ids: bool = True,
+	label_mode: str = 'backend_node_id',
 ) -> str:
 	"""Create a highlighted screenshot with bounding boxes around interactive elements.
 
@@ -441,7 +444,9 @@ async def create_highlighted_screenshot(
 		# Process elements sequentially to avoid ImageDraw thread safety issues
 		# PIL ImageDraw is not thread-safe, so we process elements one by one
 		for element_id, element in selector_map.items():
-			process_element_highlight(element_id, element, draw, device_pixel_ratio, font, filter_highlight_ids, image.size)
+			process_element_highlight(
+				element_id, element, draw, device_pixel_ratio, font, filter_highlight_ids, image.size, label_mode
+			)
 
 		# Convert back to base64
 		output_buffer = io.BytesIO()
@@ -500,7 +505,11 @@ async def get_viewport_info_from_cdp(cdp_session) -> tuple[float, int, int]:
 
 @time_execution_async('create_highlighted_screenshot_async')
 async def create_highlighted_screenshot_async(
-	screenshot_b64: str, selector_map: DOMSelectorMap, cdp_session=None, filter_highlight_ids: bool = True
+	screenshot_b64: str,
+	selector_map: DOMSelectorMap,
+	cdp_session=None,
+	filter_highlight_ids: bool = True,
+	label_mode: str = 'backend_node_id',
 ) -> str:
 	"""Async wrapper for creating highlighted screenshots.
 
@@ -526,7 +535,13 @@ async def create_highlighted_screenshot_async(
 
 	# Create highlighted screenshot with async processing
 	final_screenshot = await create_highlighted_screenshot(
-		screenshot_b64, selector_map, device_pixel_ratio, viewport_offset_x, viewport_offset_y, filter_highlight_ids
+		screenshot_b64,
+		selector_map,
+		device_pixel_ratio,
+		viewport_offset_x,
+		viewport_offset_y,
+		filter_highlight_ids,
+		label_mode,
 	)
 
 	filename = os.getenv('BROWSER_USE_SCREENSHOT_FILE')

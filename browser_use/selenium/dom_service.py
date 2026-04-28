@@ -83,10 +83,6 @@ class SeleniumDomService:
         self.js_code = raw_js_code
         self.logger.debug(f'JavaScript code loaded, length: {len(self.js_code)} chars')
 
-        # Track iframes that have highlights drawn in them
-        # This avoids expensive recursive iframe discovery during clearance
-        self._iframes_with_highlights: set[str] = set()
-
     async def __aenter__(self):
         return self
 
@@ -264,10 +260,6 @@ class SeleniumDomService:
         # This allows views.py to show correct indices in the serialized output
         serialized_dom_state._node_to_selector_index = {id(node): idx for idx, node in final_selector_map.items()}
 
-        # Draw highlights with the same indices that the agent will use
-        if highlight_elements:
-            await self.draw_highlights(final_selector_map, focus_element=-1)
-
         # Add serializer sub-timings
         for key, value in serializer_timing.items():
             timing_info[f'{key}_ms'] = value * 1000
@@ -278,218 +270,9 @@ class SeleniumDomService:
         # Return the serializer's selector_map (not js_selector_map) for consistency
         return serialized_dom_state, enhanced_dom_tree, final_selector_map, timing_info
 
-    async def draw_highlights(
-        self,
-        selector_map: dict[int, EnhancedDOMTreeNode],
-        focus_element: int = -1,
-    ) -> bool:
-        """
-        Draw highlight overlays on elements using live element positions.
-        
-        Uses xpaths to find elements at draw time rather than pre-computed coordinates,
-        preventing misalignment from layout shifts (lazy loading, ad insertion, etc.).
-        
-        Args:
-            selector_map: Map of selector indices to DOM nodes
-            focus_element: Index of element to focus highlight on (-1 for none)
-            
-        Returns:
-            True if highlights were drawn, False otherwise
-        """
-        if not selector_map:
-            return False
-
-        # Color scheme matching python_highlights.py
-        element_colors = {
-            'button': '#FF6B6B',
-            'input': '#4ECDC4',
-            'select': '#45B7D1',
-            'a': '#96CEB4',
-            'textarea': '#FF8C42',
-            'default': '#DDA0DD',
-        }
-
-        # Build highlight data with xpaths for live element lookup
-        highlights = []
-        for index, node in selector_map.items():
-            if not node:
-                continue
-            tag_name = node.tag_name.lower() if hasattr(node, 'tag_name') else 'div'
-            color = element_colors.get(tag_name, element_colors['default'])
-            
-            # Get xpath from node attributes for live element lookup
-            xpath = node.attributes.get('xpath', '') if hasattr(node, 'attributes') else ''
-            
-            # Fallback to pre-computed bounds if no xpath available
-            fallback_bounds = None
-            if node.snapshot_node and node.snapshot_node.bounds:
-                b = node.snapshot_node.bounds
-                fallback_bounds = {'x': b.x, 'y': b.y, 'width': b.width, 'height': b.height}
-            
-            if not xpath and not fallback_bounds:
-                continue
-                
-            highlights.append({
-                'index': index,
-                'xpath': xpath,
-                'fallback': fallback_bounds,
-                'isFocused': (focus_element == index),
-                'color': color,
-                'tagName': tag_name,
-            })
-
-        if not highlights:
-            return False
-
-        # Execute JavaScript to draw highlights using live element positions
-        try:
-            self.driver.execute_script('''
-                const containerId = 'browser-use-selenium-highlight-container';
-                let container = document.getElementById(containerId);
-                if (container) {
-                    container.remove();
-                }
-                
-                container = document.createElement('div');
-                container.id = containerId;
-                container.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2147483647;';
-                document.body.appendChild(container);
-                
-                const highlights = arguments[0];
-                
-                highlights.forEach(function(h) {
-                    // Try to find element by xpath for live positioning
-                    let rect = null;
-                    if (h.xpath) {
-                        try {
-                            const result = document.evaluate(h.xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                            const elem = result.singleNodeValue;
-                            if (elem) {
-                                rect = elem.getBoundingClientRect();
-                            }
-                        } catch (e) {
-                            // xpath evaluation failed, fall through to fallback
-                        }
-                    }
-                    
-                    // Fallback to pre-computed bounds
-                    if (!rect && h.fallback) {
-                        rect = h.fallback;
-                    }
-                    
-                    if (!rect || rect.width === 0 || rect.height === 0) return;
-                    
-                    const el = document.createElement('div');
-                    el.style.cssText = 'position:fixed;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;' +
-                        'border:2px dashed ' + h.color + ';' +
-                        'box-sizing:border-box;pointer-events:none;';
-                    
-                    // Create index label
-                    const label = document.createElement('span');
-                    const labelPadding = 2;
-                    const fontSize = 8;
-                    
-                    let labelStyle = 'position:absolute;background-color:' + h.color + ';color:white;' +
-                        'padding:' + labelPadding + 'px ' + (labelPadding + 2) + 'px;' +
-                        'font-size:' + fontSize + 'px;font-family:monospace;font-weight:bold;' +
-                        'border-radius:2px;white-space:nowrap;border:1px solid rgba(255,255,255,0.8);' +
-                        'line-height:1;min-width:14px;text-align:center;';
-                    
-                    const labelHeight = fontSize + labelPadding * 2 + 2;
-                    
-                    if (rect.y > labelHeight + 2) {
-                        labelStyle += 'top:-' + (labelHeight + 2) + 'px;left:-1px;';
-                    } else {
-                        labelStyle += 'top:2px;left:2px;';
-                    }
-                    
-                    label.style.cssText = labelStyle;
-                    label.textContent = String(h.index);
-                    el.appendChild(label);
-                    
-                    container.appendChild(el);
-                });
-            ''', highlights)
-            return True
-        except Exception as e:
-            self.logger.warning(f'Failed to draw highlights: {e}')
-            return False
-
-    async def draw_highlights_in_iframe(
-        self,
-        iframe_selector: str,
-        selector_map: dict[int, EnhancedDOMTreeNode],
-        focus_element: int = -1,
-    ) -> None:
-        """
-        Draw highlight overlays on elements inside an iframe.
-        
-        This method switches to the iframe context, draws highlights,
-        then restores the original context.
-        
-        Args:
-            iframe_selector: CSS selector for the iframe
-            selector_map: Map of selector indices to DOM nodes within the iframe
-            focus_element: Index of element to focus highlight on (-1 for none)
-        """
-        if not selector_map:
-            return
-        
-        # Save current context
-        saved_context = self.iframe_handler.get_current_context()
-        
-        try:
-            # Switch to default content first, then to the iframe
-            await self.iframe_handler.switch_to_default()
-            if not await self.iframe_handler.switch_to_frame(iframe_selector):
-                self.logger.warning(f'Could not switch to iframe for highlights: {iframe_selector}')
-                return
-            
-            # Draw highlights within the iframe context
-            if await self.draw_highlights(selector_map, focus_element):
-                # Track that this iframe has highlights
-                self._iframes_with_highlights.add(iframe_selector)
-            
-        except Exception as e:
-            self.logger.warning(f'Failed to draw highlights in iframe {iframe_selector}: {e}')
-        finally:
-            await self.iframe_handler.restore_context(saved_context)
-
-    async def clear_highlights_in_iframe(self, iframe_selector: str) -> None:
-        """Clear all highlight overlays from a specific iframe."""
-        saved_context = self.iframe_handler.get_current_context()
-        
-        try:
-            await self.iframe_handler.switch_to_default()
-            if not await self.iframe_handler.switch_to_frame(iframe_selector):
-                return
-            
-            await self.clear_highlights()
-            
-        except Exception as e:
-            self.logger.warning(f'Failed to clear highlights in iframe {iframe_selector}: {e}')
-        finally:
-            await self.iframe_handler.restore_context(saved_context)
-
     async def clear_all_highlights(self) -> None:
-        """Clear highlight overlays from main page and all iframes."""
-        # Clear main page
+        """Clear any legacy page-injected highlight overlays from the current page."""
         await self.clear_highlights()
-        
-        # Get all iframes and clear highlights in each
-        # Get all iframes and clear highlights in each
-        # FAST PATH: Only check iframes we know have highlights
-        if self._iframes_with_highlights:
-            self.logger.debug(f'Clearing highlights in {len(self._iframes_with_highlights)} tracked iframes')
-            iframe_selectors = list(self._iframes_with_highlights)
-            for selector in iframe_selectors:
-                await self.clear_highlights_in_iframe(selector)
-            
-            # Reset the set
-            self._iframes_with_highlights.clear()
-        
-        # SLOW PATH fallback (only if we suspect state drift, but for now we trust the set)
-        pass
 
     async def clear_highlights(self) -> None:
         """Clear all highlight overlays from the page."""
@@ -1007,9 +790,6 @@ class SeleniumDomService:
         # Skip iframe processing if requested
         if skip_processing_iframes:
             self.logger.debug('Skipping iframe processing as requested')
-            # Still draw highlights for main page
-            if highlight_elements:
-                await self.draw_highlights(main_selector_map, focus_element=-1)
             return main_root, merged_selector_map, iframe_info_map
         
         # Get iframe info using optimized batch collection
@@ -1143,17 +923,6 @@ class SeleniumDomService:
                 
             except Exception as e:
                 self.logger.debug(f'  -> ERROR: Could not merge iframe {iframe.selector}: {e}')
-        
-        # Now draw highlights with the CORRECT merged indices
-        if highlight_elements:
-            # Draw main page highlights
-            await self.iframe_handler.switch_to_default()
-            await self.draw_highlights(main_selector_map, focus_element=-1)
-            
-            # Draw iframe highlights with correct merged indices
-            for iframe_selector, elements in iframe_elements.items():
-                if elements:
-                    await self.draw_highlights_in_iframe(iframe_selector, elements, focus_element=-1)
         
         self.logger.info(
             f'Merged DOM: {len(main_selector_map)} main + '

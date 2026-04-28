@@ -1,10 +1,12 @@
 import asyncio
+import base64
 import logging
 from typing import cast
 
 from pydantic import PrivateAttr
 from uuid_extensions import uuid7str
 
+from browser_use.browser.python_highlights import create_highlighted_screenshot_async
 from browser_use.browser.events import (
     BrowserStartEvent,
     BrowserStateRequestEvent,
@@ -314,9 +316,9 @@ class SeleniumBrowserSession(BrowserSession):
         if include_screenshot:
             # Clear highlights first to ensure clean state
             await self._selenium_session.dom_service.clear_all_highlights()
-            import base64
             clean_screenshot_bytes = await self.take_screenshot()
             clean_screenshot_b64 = base64.b64encode(clean_screenshot_bytes).decode('utf-8')
+            self.logger.info('Selenium screenshot pipeline: captured clean screenshot via WebDriver')
 
         # We need a dummy DOM state if not included
         if include_dom:
@@ -327,10 +329,23 @@ class SeleniumBrowserSession(BrowserSession):
             dom_state = SerializedDOMState(_root=None, selector_map={})
 
         screenshot_b64 = None
-        if include_screenshot:
-            import base64
-            screenshot_bytes = await self.take_screenshot()
-            screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+        if include_screenshot and clean_screenshot_b64:
+            selector_map = dom_state.selector_map if dom_state else {}
+            if selector_map:
+                self.logger.info(
+                    f'Selenium screenshot pipeline: synthesizing highlighted screenshot from clean screenshot using selector_map with {len(selector_map)} elements'
+                )
+                screenshot_b64 = await create_highlighted_screenshot_async(
+                    clean_screenshot_b64,
+                    selector_map,
+                    cdp_session=None,
+                    label_mode='selector_index',
+                )
+            else:
+                self.logger.info(
+                    'Selenium screenshot pipeline: selector_map is empty, using clean screenshot as highlighted output'
+                )
+                screenshot_b64 = clean_screenshot_b64
 
         tab_info = TabInfo(
             url=page_info_dict['url'],

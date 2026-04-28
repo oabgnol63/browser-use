@@ -130,6 +130,20 @@ def create_saucelabs_session(
         'idleTimeout': 300,
         'maxDuration': 1800,
     }
+
+    # Force always-visible scrollbars before the browser launches.
+    # Keep the macOS entry as a placeholder; update the storage/URL target after upload.
+    platform_lower = platform.lower()
+    if browser == 'firefox' and 'windows' in platform_lower:
+        sauce_options['prerun'] = (
+            'https://raw.githubusercontent.com/oabgnol63/prer/'
+            'refs/heads/main/setup_policy_firefox.bat'
+        )
+    elif browser in ('firefox', 'safari') and 'mac' in platform_lower:
+        sauce_options['prerun'] = {
+            'executable': 'https://raw.githubusercontent.com/oabgnol63/prer/refs/heads/main/setup_policy_mac.sh',
+            'background': False,
+        }
     
     # Normalize extension_path to a list
     extension_paths = []
