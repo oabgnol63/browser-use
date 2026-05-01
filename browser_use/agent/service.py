@@ -34,7 +34,7 @@ load_dotenv()
 from pydantic import BaseModel, ValidationError
 from uuid_extensions import uuid7str
 
-from browser_use import Browser, BrowserProfile, BrowserSession, CloudBrowserProfile
+from browser_use import Browser, BrowserProfile, BrowserSession
 from browser_use.agent.judge import construct_judge_messages
 
 # Lazy import for gif to avoid heavy agent.views import at startup
@@ -135,7 +135,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		task: str,
 		llm: BaseChatModel | None = None,
 		# Optional parameters
-		browser_profile: BrowserProfile | CloudBrowserProfile | None = None,
+		browser_profile: BrowserProfile | None = None,
 		browser_session: BrowserSession | None = None,
 		browser: Browser | None = None,  # Alias for browser_session
 		tools: Tools[Context] | None = None,
@@ -661,7 +661,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		return logging.getLogger(f'browser_use.Agent🅰 {_task_id} ⇢ 🅑 {_browser_session_id} 🅣 {_current_target_id}')
 
 	@property
-	def browser_profile(self) -> BrowserProfile | CloudBrowserProfile:
+	def browser_profile(self) -> BrowserProfile:
 		assert self.browser_session is not None, 'BrowserSession is not set up'
 		return self.browser_session.browser_profile
 

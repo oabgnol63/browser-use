@@ -47,7 +47,7 @@ from browser_use.browser.events import (
 	TabClosedEvent,
 	TabCreatedEvent,
 )
-from browser_use.browser.profile import BrowserProfile, CloudBrowserProfile, ProxySettings
+from browser_use.browser.profile import BrowserProfile, ProxySettings
 from browser_use.browser.views import BrowserStateSummary, TabInfo
 from browser_use.dom.views import DOMRect, EnhancedDOMTreeNode
 from browser_use.event_bus import EventBus
@@ -270,7 +270,7 @@ class BrowserSession(BaseModel):
 		id: str | None = None,
 		cdp_url: str | None = None,
 		is_local: bool = True,
-		browser_profile: BrowserProfile | CloudBrowserProfile | None = None,
+		browser_profile: BrowserProfile | None = None,
 		# Cloud browser params (don't mix with local browser params)
 		cloud_profile_id: UUID | str | None = None,
 		cloud_proxy_country_code: ProxyCountryCode | None = None,
@@ -399,9 +399,7 @@ class BrowserSession(BaseModel):
 		if browser_profile is not None:
 			# Merge any direct kwargs into the provided browser_profile (direct kwargs take precedence)
 			merged_kwargs = {**browser_profile.model_dump(exclude_unset=True), **profile_kwargs}
-			# Preserve the specific profile class (Cloud vs Local)
-			profile_cls = CloudBrowserProfile if isinstance(browser_profile, CloudBrowserProfile) else BrowserProfile
-			resolved_browser_profile = profile_cls(**merged_kwargs)
+			resolved_browser_profile = BrowserProfile(**merged_kwargs)
 		else:
 			resolved_browser_profile = BrowserProfile(**profile_kwargs)
 
@@ -415,9 +413,9 @@ class BrowserSession(BaseModel):
 	id: str = Field(default_factory=lambda: str(uuid7str()), description='Unique identifier for this browser session')
 
 	# Browser configuration (reusable profile)
-	browser_profile: BrowserProfile | CloudBrowserProfile = Field(
+	browser_profile: BrowserProfile = Field(
 		default_factory=lambda: DEFAULT_BROWSER_PROFILE,
-		description='BrowserProfile() or CloudBrowserProfile() options to use for the session, otherwise a default profile will be used',
+		description='BrowserProfile() options to use for the session, otherwise a default profile will be used',
 	)
 
 	# LLM screenshot resizing configuration
@@ -4060,3 +4058,4 @@ class BrowserSession(BaseModel):
 			'width': max(content[0], content[2], content[4], content[6]) - min(content[0], content[2], content[4], content[6]),
 			'height': max(content[1], content[3], content[5], content[7]) - min(content[1], content[3], content[5], content[7]),
 		}
+

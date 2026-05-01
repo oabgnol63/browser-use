@@ -6,7 +6,6 @@ from typing import cast
 from pydantic import PrivateAttr
 from uuid_extensions import uuid7str
 
-from browser_use.browser.python_highlights import create_highlighted_screenshot_async
 from browser_use.browser.events import (
     BrowserStartEvent,
     BrowserStateRequestEvent,
@@ -27,6 +26,7 @@ from browser_use.browser.events import (
     SwitchTabEvent,
     TypeTextEvent,
 )
+from browser_use.browser.python_highlights import create_highlighted_screenshot_async
 from browser_use.browser.session import BrowserSession
 from browser_use.browser.views import BrowserStateSummary, TabInfo
 from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
