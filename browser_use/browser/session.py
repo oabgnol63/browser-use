@@ -11,7 +11,8 @@ from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
 import httpx
-from cdp_use import CDPClient
+import websockets
+from cdp_use import CDPClient as BaseCDPClient
 from cdp_use.cdp.fetch import AuthRequiredEvent, RequestPausedEvent
 from cdp_use.cdp.network import Cookie
 from cdp_use.cdp.target import SessionID, TargetID
@@ -63,6 +64,43 @@ DEFAULT_BROWSER_PROFILE = BrowserProfile()
 _LOGGED_UNIQUE_SESSION_IDS = set()  # track unique session IDs that have been logged to make sure we always assign a unique enough id to new sessions and avoid ambiguity in logs
 red = '\033[91m'
 reset = '\033[0m'
+CDP_WS_OPEN_TIMEOUT_S = 60.0
+CDP_CONNECT_TIMEOUT_S = 60.0
+
+
+class CDPClient(BaseCDPClient):
+	"""Local wrapper that allows browser-use to tune websocket handshake timeout."""
+
+	def __init__(
+		self,
+		url: str,
+		additional_headers: dict[str, str] | None = None,
+		max_ws_frame_size: int = 100 * 1024 * 1024,
+		open_timeout: float = CDP_WS_OPEN_TIMEOUT_S,
+	):
+		super().__init__(url, additional_headers=additional_headers, max_ws_frame_size=max_ws_frame_size)
+		self.open_timeout = open_timeout
+
+	async def start(self):
+		"""Start the WebSocket connection and message handler task."""
+		if self.ws is not None:
+			raise RuntimeError('Client is already started')
+
+		logger = logging.getLogger('cdp_use.client')
+		logger.info(
+			f'Connecting to {self.url} (max frame size: {self.max_ws_frame_size / 1024 / 1024:.0f}MB, '
+			f'open timeout: {self.open_timeout:.0f}s)'
+		)
+		connect_kwargs = {
+			'max_size': self.max_ws_frame_size,
+			'ping_interval': 1800,
+			'ping_timeout': None,
+			'open_timeout': self.open_timeout,
+		}
+		if self.additional_headers:
+			connect_kwargs['additional_headers'] = self.additional_headers
+		self.ws = await websockets.connect(self.url, **connect_kwargs)
+		self._message_handler_task = asyncio.create_task(self._handle_messages())
 
 
 class Target(BaseModel):
@@ -448,6 +486,14 @@ class BrowserSession(BaseModel):
 		"""CDP URL from browser profile."""
 		return self.browser_profile.cdp_url
 
+	def _cdp_ws_open_timeout(self) -> float:
+		"""WebSocket opening-handshake timeout for CDP attachment."""
+		return CDP_WS_OPEN_TIMEOUT_S
+
+	def _cdp_connect_timeout(self) -> float:
+		"""Outer deadline for the full CDP connect flow."""
+		return CDP_CONNECT_TIMEOUT_S
+
 	@property
 	def is_local(self) -> bool:
 		"""Whether this is a local browser instance from browser profile."""
@@ -790,7 +836,7 @@ class BrowserSession(BaseModel):
 					# Global timeout prevents connect() from hanging indefinitely on
 					# slow/broken WebSocket connections (common on Lambda → remote browser)
 					try:
-						await asyncio.wait_for(self.connect(cdp_url=self.cdp_url), timeout=15.0)
+						await asyncio.wait_for(self.connect(cdp_url=self.cdp_url), timeout=self._cdp_connect_timeout())
 					except TimeoutError:
 						# Timeout cancels connect() via CancelledError, which bypasses
 						# connect()'s `except Exception` cleanup (CancelledError is BaseException).
@@ -812,7 +858,8 @@ class BrowserSession(BaseModel):
 							self.session_manager = None
 						self.agent_focus_target_id = None
 						raise RuntimeError(
-							f'connect() timed out after 15s — CDP connection to {self.cdp_url} is too slow or unresponsive'
+							f'connect() timed out after {self._cdp_connect_timeout():.0f}s — CDP connection to '
+							f'{self.cdp_url} is too slow or unresponsive'
 						)
 					assert self.cdp_client is not None
 
@@ -1794,6 +1841,7 @@ class BrowserSession(BaseModel):
 				self.cdp_url,
 				additional_headers=headers or None,
 				max_ws_frame_size=200 * 1024 * 1024,  # Use 200MB limit to handle pages with very large DOMs
+				open_timeout=self._cdp_ws_open_timeout(),
 			)
 
 			assert self._cdp_client_root is not None
@@ -2094,6 +2142,7 @@ class BrowserSession(BaseModel):
 			self.cdp_url,
 			additional_headers=headers or None,
 			max_ws_frame_size=200 * 1024 * 1024,
+			open_timeout=self._cdp_ws_open_timeout(),
 		)
 		await self._cdp_client_root.start()
 
@@ -2166,7 +2215,7 @@ class BrowserSession(BaseModel):
 				self.logger.warning(f'🔄 WebSocket reconnection attempt {attempt}/{max_attempts}...')
 
 				try:
-					await asyncio.wait_for(self.reconnect(), timeout=15.0)
+					await asyncio.wait_for(self.reconnect(), timeout=self._cdp_connect_timeout())
 					# Success
 					downtime = time.time() - start_time
 					self.event_bus.dispatch(

@@ -122,7 +122,7 @@ class NavigateToUrlEvent(BaseEvent[None]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_NavigateToUrlEvent', 30.0))  # seconds
 
 
-class ClickElementEvent(ElementSelectedEvent[dict[str, Any] | None]):
+class ClickElementEvent(ElementSelectedEvent[dict]):
 	"""Click an element."""
 
 	node: 'EnhancedDOMTreeNode'
@@ -144,7 +144,7 @@ class ClickCoordinateEvent(BaseEvent[dict]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickCoordinateEvent', 15.0))  # seconds
 
 
-class HoverCoordinateEvent(BaseEvent[dict | None]):
+class HoverCoordinateEvent(BaseEvent[dict]):
 	"""Hover at specific coordinates."""
 
 	coordinate_x: int
@@ -153,7 +153,7 @@ class HoverCoordinateEvent(BaseEvent[dict | None]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_HoverCoordinateEvent', 10.0))  # seconds
 
 
-class DragAndDropCoordinateEvent(BaseEvent[dict | None]):
+class DragAndDropCoordinateEvent(BaseEvent[dict]):
 	"""Drag and drop between specific coordinates."""
 
 	start_x: int
@@ -186,7 +186,7 @@ class ScrollCoordinateEvent(BaseEvent[None]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ScrollCoordinateEvent', 8.0))  # seconds
 
 
-class HoverElementEvent(ElementSelectedEvent[dict[str, Any] | None]):
+class HoverElementEvent(ElementSelectedEvent[dict]):
 	"""Hover over an element."""
 
 	node: 'EnhancedDOMTreeNode'
@@ -194,7 +194,7 @@ class HoverElementEvent(ElementSelectedEvent[dict[str, Any] | None]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_HoverElementEvent', 10.0))  # seconds
 
 
-class TypeTextEvent(ElementSelectedEvent[dict | None]):
+class TypeTextEvent(ElementSelectedEvent[dict]):
 	"""Type text into an element."""
 
 	node: 'EnhancedDOMTreeNode'
