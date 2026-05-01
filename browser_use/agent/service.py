@@ -70,7 +70,7 @@ from browser_use.filesystem.file_system import FileSystem
 from browser_use.observability import observe, observe_debug
 from browser_use.telemetry.service import ProductTelemetry
 from browser_use.telemetry.views import AgentTelemetryEvent
-from browser_use.tools.registry.views import ActionModel
+from browser_use.tools.registry.views import ActionModel, Mode
 from browser_use.tools.service import Tools
 from browser_use.utils import (
 	URL_PATTERN,
@@ -240,18 +240,23 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if flash_mode:
 			enable_planning = False
 
+		model_name = getattr(llm, 'model', '')
+		model_name_lower = model_name.lower() if isinstance(model_name, str) else ''
+		supports_coordinate_clicking = any(
+			pattern in model_name_lower for pattern in ['claude-sonnet-4', 'claude-opus-4', 'gemini-3-flash-preview', 'browser-use/']
+		) or use_native_computer_use
+
 		# Auto-configure llm_screenshot_size for Claude Sonnet models
 		if llm_screenshot_size is None:
-			model_name = getattr(llm, 'model', '')
-			if isinstance(model_name, str) and model_name.startswith('claude-sonnet'):
+			if isinstance(model_name, str) and model_name_lower.startswith('claude-sonnet'):
 				llm_screenshot_size = (1400, 850)
 				logger.info('🖼️  Auto-configured LLM screenshot size for Claude Sonnet: 1400x850')
 
-		# Force 1000x1000 screenshot for Gemini native computer use since it returns 1000x1000 coords
-		# and tools/service.py denormalizes based on llm_screenshot_size
-		if use_native_computer_use:
+		# Force 1000x1000 screenshot for coordinate-capable models so coordinate tools
+		# always operate against a consistent image plane, then denormalize to viewport.
+		if supports_coordinate_clicking and llm_screenshot_size != (1000, 1000):
 			llm_screenshot_size = (1000, 1000)
-			logger.info('🖼️  Auto-configured LLM screenshot size for native computer-use: 1000x1000')
+			logger.info('🖼️  Auto-configured LLM screenshot size for coordinate-clicking: 1000x1000')
 
 		if page_extraction_llm is None:
 			page_extraction_llm = llm
@@ -312,6 +317,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# Initialize available file paths as direct attribute
 		self.available_file_paths = available_file_paths
 
+		active_mode = Mode.VISION if use_native_computer_use else Mode.DOM
+
 		# Set up tools first (needed to detect output_model_schema)
 		if tools is not None:
 			self.tools = tools
@@ -320,21 +327,24 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		else:
 			# Exclude screenshot tool when use_vision is not auto
 			exclude_actions = ['screenshot'] if use_vision != 'auto' else []
-			self.tools = Tools(exclude_actions=exclude_actions, display_files_in_done_text=display_files_in_done_text, use_native_computer_use=use_native_computer_use)
+			self.tools = Tools(
+				exclude_actions=exclude_actions,
+				display_files_in_done_text=display_files_in_done_text,
+				use_native_computer_use=use_native_computer_use,
+				active_mode=active_mode,
+			)
 
-		# Propagate native computer-use mode to caller-supplied tool registries too.
+		# Propagate runtime mode to caller-supplied tool registries too.
 		if hasattr(self.tools, '_use_native_computer_use'):
 			self.tools._use_native_computer_use = use_native_computer_use
+		if hasattr(self.tools, 'registry'):
+			self.tools.registry.active_mode = active_mode
 
 		# Enforce screenshot exclusion when use_vision != 'auto', even if user passed custom tools
 		if use_vision != 'auto':
 			self.tools.exclude_action('screenshot')
 
 		# Enable coordinate clicking for models that support it
-		model_name = getattr(llm, 'model', '').lower()
-		supports_coordinate_clicking = any(
-			pattern in model_name for pattern in ['claude-sonnet-4', 'claude-opus-4', 'gemini-3-pro', 'browser-use/']
-		) or use_native_computer_use
 		if supports_coordinate_clicking:
 			self.tools.set_coordinate_clicking(True)
 

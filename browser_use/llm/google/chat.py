@@ -218,6 +218,24 @@ class ChatGoogle(BaseChatModel):
 
 		return usage
 
+	def _prepare_request_config(
+		self, config: types.GenerateContentConfigDict, system_instruction: str | None
+	) -> types.GenerateContentConfigDict:
+		"""Build a Gemini-safe request config for generate_content calls."""
+		request_config = config.copy()
+
+		if request_config.get('cached_content') and any(
+			key in request_config for key in ('tools', 'tool_config', 'system_instruction')
+		):
+			cache_name = request_config.pop('cached_content', None)
+			if system_instruction and 'system_instruction' not in request_config:
+				request_config['system_instruction'] = system_instruction
+			self.logger.debug(
+				f'Disabled cached_content for request because Gemini forbids combining it with tools/tool_config/system_instruction: {cache_name}'
+			)
+
+		return request_config
+
 	@overload
 	async def ainvoke(
 		self, messages: list[BaseMessage], output_format: None = None, **kwargs: Any
@@ -375,10 +393,11 @@ class ChatGoogle(BaseChatModel):
 					# Return string response
 					self.logger.debug('📄 Requesting text response')
 
+					request_config = self._prepare_request_config(config, system_instruction)
 					response = await self.get_client().aio.models.generate_content(
 						model=self.model,
 						contents=contents,  # type: ignore
-						config=config,
+						config=request_config,
 					)
 
 					elapsed = time.time() - start_time
@@ -399,17 +418,16 @@ class ChatGoogle(BaseChatModel):
 
 				else:
 					# Handle structured output
-					if kwargs.get('use_native_computer_use'):
-						# Inject Gemini's built-in computer-use tool to enable spatial reasoning capabilities
-						# But do NOT bypass JSON structured output. We want the model to output JSON with coordinates.
-						self.logger.debug(f'🔧 Injecting native computer-use tools while maintaining {output_format.__name__} schema')
-						computer_use_tool = types.Tool(
-							computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER)
-						)
-						if 'tools' not in config:
-							config['tools'] = []
-						config['tools'].append(computer_use_tool)
-						
+					# Inject Gemini's built-in computer-use tool to enable spatial reasoning capabilities
+					# This is needed in both DOM mode and vision-only mode so the LLM can use coordinates.
+					self.logger.debug(f'🔧 Injecting native computer-use tools while maintaining {output_format.__name__} schema')
+					computer_use_tool = types.Tool(
+						computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER)
+					)
+					if 'tools' not in config:
+						config['tools'] = []
+					config['tools'].append(computer_use_tool)
+
 					if self.supports_structured_output:
 						# Use native JSON mode
 						self.logger.debug(f'🔧 Requesting structured output for {output_format.__name__}')
@@ -420,10 +438,11 @@ class ChatGoogle(BaseChatModel):
 						gemini_schema = self._fix_gemini_schema(optimized_schema)
 						config['response_schema'] = gemini_schema
 
+						request_config = self._prepare_request_config(config, system_instruction)
 						response = await self.get_client().aio.models.generate_content(
 							model=self.model,
 							contents=contents,
-							config=config,
+							config=request_config,
 						)
 
 						elapsed = time.time() - start_time
@@ -507,11 +526,12 @@ class ChatGoogle(BaseChatModel):
 						fallback_config = config.copy()
 						if fallback_system:
 							fallback_config['system_instruction'] = fallback_system
+						fallback_request_config = self._prepare_request_config(fallback_config, fallback_system)
 
 						response = await self.get_client().aio.models.generate_content(
 							model=self.model,
 							contents=fallback_contents,  # type: ignore
-							config=fallback_config,
+							config=fallback_request_config,
 						)
 
 						elapsed = time.time() - start_time

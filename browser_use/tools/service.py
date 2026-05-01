@@ -57,8 +57,10 @@ from browser_use.tools.views import (
 	HoverElementAction,
 	HoverElementActionIndexOnly,
 	InputTextAction,
+	MultipleClickCoordinateAction,
 	NavigateAction,
 	NoParamsAction,
+	PressAndHoldCoordinateAction,
 	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
@@ -80,10 +82,8 @@ logger = logging.getLogger(__name__)
 def _sanitize_error_message(error: Exception, max_length: int = 500) -> str:
 	"""
 	Sanitize error messages, especially from Selenium which includes embedded stacktraces.
-	
 	Selenium exceptions contain verbose stacktraces in the message itself, like:
 	"Message: ... \nStacktrace:\n... hundreds of lines..."
-	
 	This function extracts just the meaningful part of the error.
 	"""
 	error_str = str(error)
@@ -589,20 +589,26 @@ class Tools(Generic[Context]):
 
 		# Helper function for coordinate conversion
 		def _convert_llm_coordinates_to_viewport(llm_x: int, llm_y: int, browser_session: BrowserSession) -> tuple[int, int]:
-			"""Convert coordinates from LLM screenshot size to original viewport size."""
+			"""Convert coordinates from LLM screenshot space to original viewport size."""
 			actual_x, actual_y = llm_x, llm_y
 			
 			if browser_session.llm_screenshot_size and browser_session._original_viewport_size:
 				original_width, original_height = browser_session._original_viewport_size
 				llm_width, llm_height = browser_session.llm_screenshot_size
+				scale = min(llm_width / original_width, llm_height / original_height)
+				rendered_width = original_width * scale
+				rendered_height = original_height * scale
+				offset_x = (llm_width - rendered_width) / 2.0
+				offset_y = (llm_height - rendered_height) / 2.0
 
-				# Convert coordinates using fractions
-				actual_x = int((llm_x / llm_width) * original_width)
-				actual_y = int((llm_y / llm_height) * original_height)
+				# Reverse the letterbox transform used before sending screenshots to the model.
+				actual_x = int(round((llm_x - offset_x) / scale))
+				actual_y = int(round((llm_y - offset_y) / scale))
 
 				logger.info(
 					f'🔄 Converting coordinates: LLM ({llm_x}, {llm_y}) @ {llm_width}x{llm_height} '
-					f'→ Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height}'
+					f'→ Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height} '
+					f'(letterbox offsets {offset_x:.1f},{offset_y:.1f} scale {scale:.4f})'
 				)
 
 			# Clamp to viewport bounds to prevent out-of-bounds exceptions for all browsers
@@ -847,13 +853,133 @@ class Tools(Generic[Context]):
 					DragAndDropCoordinateEvent(start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y)
 				)
 				await event
-				await event.event_result(raise_if_any=True, raise_if_none=False)
+				drag_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
 
 				memory = f'Dragged from ({params.start_x}, {params.start_y}) to ({params.end_x}, {params.end_y})'
 				logger.info(f'🖱️ {memory}')
-				return ActionResult(extracted_content=memory, long_term_memory=memory)
+				return ActionResult(
+					extracted_content=memory,
+					long_term_memory=memory,
+					metadata={
+						'requested_start_x': params.start_x,
+						'requested_start_y': params.start_y,
+						'requested_end_x': params.end_x,
+						'requested_end_y': params.end_y,
+						'executed_start_x': start_x,
+						'executed_start_y': start_y,
+						'executed_end_x': end_x,
+						'executed_end_y': end_y,
+						'viewport_width': browser_session._original_viewport_size[0] if browser_session._original_viewport_size else None,
+						'viewport_height': browser_session._original_viewport_size[1] if browser_session._original_viewport_size else None,
+						'llm_screenshot_width': browser_session.llm_screenshot_size[0] if browser_session.llm_screenshot_size else None,
+						'llm_screenshot_height': browser_session.llm_screenshot_size[1] if browser_session.llm_screenshot_size else None,
+						'drag_result': drag_metadata,
+					},
+				)
 			except Exception as e:
 				error_msg = f'Failed to drag and drop: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
+
+		@self.registry.action(
+			'Click multiple coordinates in sequence. Use to bypass image captchas or click multiple specific points quickly.',
+			param_model=MultipleClickCoordinateAction,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP, Backend.WEBDRIVER},
+		)
+		async def multiple_click_coordinate(params: MultipleClickCoordinateAction, browser_session: BrowserSession):
+			try:
+				clicked_coords = []
+				for coord in params.coordinates:
+					if len(coord) != 2:
+						continue
+					raw_x, raw_y = coord
+					actual_x, actual_y = _convert_llm_coordinates_to_viewport(raw_x, raw_y, browser_session)
+
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+					event = browser_session.event_bus.dispatch(
+						ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
+					)
+					await event
+					await event.event_result(raise_if_any=True, raise_if_none=False)
+					clicked_coords.append(f'({raw_x}, {raw_y})')
+					await asyncio.sleep(0.3)  # small delay between clicks
+
+				memory = f'Clicked multiple coordinates: {", ".join(clicked_coords)}'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to execute multiple clicks: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
+
+		@self.registry.action(
+			'Press and hold left mouse button at coordinates for 2 seconds, then release. Use to bypass press-and-hold captchas.',
+			param_model=PressAndHoldCoordinateAction,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP},
+		)
+		async def press_and_hold_coordinate(params: PressAndHoldCoordinateAction, browser_session: BrowserSession):
+			try:
+				actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
+				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+
+				cdp_session = await browser_session.get_or_create_cdp_session()
+				session_id = cdp_session.session_id
+
+				# Move mouse to target
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={'type': 'mouseMoved', 'x': actual_x, 'y': actual_y}, session_id=session_id
+				)
+				# Press down
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={
+						'type': 'mousePressed',
+						'x': actual_x,
+						'y': actual_y,
+						'button': 'left',
+						'buttons': 1,
+						'clickCount': 1,
+					},
+					session_id=session_id,
+				)
+
+				# Hold with periodic move-heartbeats while button is down so sites
+				# that inspect continuous pressed-state events treat this as a real hold.
+				logger.info(f'⏱️ Holding mouse at ({params.x}, {params.y}) for 2.0s...')
+				hold_duration = 10.0
+				heartbeat_interval = 0.2
+				remaining = hold_duration
+				while remaining > 0:
+					await asyncio.sleep(min(heartbeat_interval, remaining))
+					remaining -= heartbeat_interval
+					await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+						params={
+							'type': 'mouseMoved',
+							'x': actual_x,
+							'y': actual_y,
+							'button': 'left',
+							'buttons': 1,
+						},
+						session_id=session_id,
+					)
+
+				# Release
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={
+						'type': 'mouseReleased',
+						'x': actual_x,
+						'y': actual_y,
+						'button': 'left',
+						'buttons': 0,
+						'clickCount': 1,
+					},
+					session_id=session_id,
+				)
+
+				memory = f'Pressed and held at ({params.x}, {params.y}) for 2.0 seconds'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to press and hold at coordinates: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 		@self.registry.action(
@@ -2297,6 +2423,7 @@ Validated Code (after quote fixing):
 			del self.registry.registry.actions['hover']
 
 		if self._coordinate_clicking_enabled:
+
 			@self.registry.action(
 				'Hover over element by index or coordinates. Either provide coordinates or index.',
 				param_model=HoverElementAction,

@@ -142,7 +142,10 @@ class CloseTabAction(BaseModel):
 class ScrollAction(BaseModel):
 	down: bool = Field(default=True, description='down=True=scroll down, down=False scroll up')
 	pages: float = Field(default=1.0, description='0.5=half page, 1=full page, 10=to bottom/top')
-	index: int | None = Field(default=None, description='Optional element index to scroll within specific container. Leave empty to scroll the main page.')
+	index: int | None = Field(
+		default=None,
+		description='Optional element index to scroll within specific container. Leave empty to scroll the main page.',
+	)
 
 
 class HoverCoordinateAction(BaseModel):
@@ -155,6 +158,17 @@ class DragAndDropCoordinateAction(BaseModel):
 	start_y: int = Field(description='Start vertical coordinate relative to viewport top edge')
 	end_x: int = Field(description='End horizontal coordinate relative to viewport left edge')
 	end_y: int = Field(description='End vertical coordinate relative to viewport top edge')
+
+
+class MultipleClickCoordinateAction(BaseModel):
+	coordinates: list[list[int]] = Field(
+		description='List of [x, y] coordinates to click in sequence. Each sublist MUST contain exactly 2 integers: x and y.'
+	)
+
+
+class PressAndHoldCoordinateAction(BaseModel):
+	x: int = Field(description='Horizontal coordinate relative to viewport left edge')
+	y: int = Field(description='Vertical coordinate relative to viewport top edge')
 
 
 class SwipeCoordinateAction(BaseModel):

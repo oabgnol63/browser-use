@@ -281,7 +281,7 @@ class TestBuiltinCdpBackendAnnotations:
 	def test_cdp_only_tools_have_backend_constraint(self):
 		tools = Tools()
 		cdp_only = [
-			"evaluate", "save_as_pdf", "search_page", "find_elements",
+			"evaluate", "save_as_pdf", "search_page", "find_elements", "press_and_hold_coordinate",
 		]
 		for name in cdp_only:
 			action = tools.registry.registry.actions.get(name)
@@ -304,6 +304,12 @@ class TestBuiltinCdpBackendAnnotations:
 			assert action.backends is None, (
 				f"Tool '{name}' should be backends=None, got {action.backends}"
 			)
+
+	def test_multiple_click_coordinate_declares_supported_backends(self):
+		tools = Tools()
+		action = tools.registry.registry.actions.get("multiple_click_coordinate")
+		assert action is not None
+		assert action.backends == {Backend.CDP, Backend.WEBDRIVER}
 
 
 class TestBuiltinToolAnnotations:
@@ -333,6 +339,16 @@ class TestBuiltinToolAnnotations:
 			action = tools.registry.registry.actions.get(name)
 			assert action is not None, f"Tool '{name}' not found in registry"
 			assert action.modes is None, f"Tool '{name}' should be modes=None, got {action.modes}"
+
+	def test_explicit_cross_mode_coordinate_tools(self):
+		"""New coordinate tools should declare DOM+VISION explicitly."""
+		tools = Tools()
+		for name in ["multiple_click_coordinate", "press_and_hold_coordinate"]:
+			action = tools.registry.registry.actions.get(name)
+			assert action is not None, f"Tool '{name}' not found in registry"
+			assert action.modes == {Mode.DOM, Mode.VISION}, (
+				f"Tool '{name}' should be modes={{Mode.DOM, Mode.VISION}}, got {action.modes}"
+			)
 
 
 class TestCoordinateClickingModesPropagation:

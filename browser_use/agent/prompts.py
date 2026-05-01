@@ -486,12 +486,20 @@ Available tabs:
 				return screenshot_b64
 
 			logging.getLogger(__name__).info(
-				f'🔄 Resizing screenshot from {img.size[0]}x{img.size[1]} to {self.llm_screenshot_size[0]}x{self.llm_screenshot_size[1]} for LLM'
+				f'🔄 Resizing screenshot from {img.size[0]}x{img.size[1]} into {self.llm_screenshot_size[0]}x{self.llm_screenshot_size[1]} letterbox for LLM'
 			)
 
-			img_resized = img.resize(self.llm_screenshot_size, Image.Resampling.LANCZOS)
+			target_width, target_height = self.llm_screenshot_size
+			scale = min(target_width / img.size[0], target_height / img.size[1])
+			resized_width = max(1, int(round(img.size[0] * scale)))
+			resized_height = max(1, int(round(img.size[1] * scale)))
+			img_resized = img.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+			canvas = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+			offset_x = (target_width - resized_width) // 2
+			offset_y = (target_height - resized_height) // 2
+			canvas.paste(img_resized, (offset_x, offset_y))
 			buffer = BytesIO()
-			img_resized.save(buffer, format='PNG')
+			canvas.save(buffer, format='PNG')
 			return base64.b64encode(buffer.getvalue()).decode('utf-8')
 		except Exception as e:
 			logging.getLogger(__name__).warning(f'Failed to resize screenshot: {e}, using original')
