@@ -1,5 +1,8 @@
 """Screenshot watchdog for handling screenshot requests using CDP."""
 
+import base64
+from io import BytesIO
+from PIL import Image
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from bubus import BaseEvent
@@ -79,7 +82,13 @@ class ScreenshotWatchdog(BaseWatchdog):
 
 			# Return base64-encoded screenshot data
 			if result and 'data' in result:
-				self.logger.debug('[ScreenshotWatchdog] Screenshot captured successfully')
+				# Extract actual screenshot dimensions for coordinate conversion
+				try:
+					img = Image.open(BytesIO(base64.b64decode(result['data'])))
+					self.browser_session._actual_screenshot_size = (img.width, img.height)
+					self.logger.debug(f'[ScreenshotWatchdog] Screenshot captured: {img.width}x{img.height}')
+				except Exception as e:
+					self.logger.warning(f'[ScreenshotWatchdog] Failed to extract screenshot dimensions: {e}')
 				return result['data']
 
 			raise BrowserError('[ScreenshotWatchdog] Screenshot result missing data')

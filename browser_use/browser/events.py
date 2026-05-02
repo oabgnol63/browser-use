@@ -153,6 +153,15 @@ class HoverCoordinateEvent(BaseEvent[dict]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_HoverCoordinateEvent', 10.0))  # seconds
 
 
+class DragAndDropElementEvent(BaseEvent[dict]):
+	"""Drag and drop between elements via indices."""
+
+	start_index: int
+	end_index: int
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropElementEvent', 15.0))  # seconds
+
+
 class DragAndDropCoordinateEvent(BaseEvent[dict]):
 	"""Drag and drop between specific coordinates."""
 
@@ -162,6 +171,37 @@ class DragAndDropCoordinateEvent(BaseEvent[dict]):
 	end_y: int
 
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropCoordinateEvent', 15.0))  # seconds
+
+
+class ClickMultipleElementsEvent(BaseEvent[dict]):
+	"""Multiple clicks on elements via indices."""
+
+	indices: list[int]
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleElementsEvent', 15.0))  # seconds
+
+
+class ClickMultipleCoordinatesEvent(BaseEvent[dict]):
+	"""Multiple clicks on specific coordinates."""
+
+	coordinates: list[tuple[int, int]]
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleCoordinatesEvent', 15.0))  # seconds
+
+
+class PressAndHoldElementEvent(ElementSelectedEvent[dict]):
+	"""Press and hold on an element."""
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_PressAndHoldElementEvent', 20.0))  # seconds
+
+
+class PressAndHoldCoordinateEvent(BaseEvent[dict]):
+	"""Press and hold at specific coordinates."""
+
+	coordinate_x: int
+	coordinate_y: int
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_PressAndHoldCoordinateEvent', 20.0))  # seconds
 
 
 class SwipeCoordinateEvent(BaseEvent[dict]):

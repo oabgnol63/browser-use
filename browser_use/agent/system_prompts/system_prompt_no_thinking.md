@@ -87,6 +87,7 @@ Strictly follow these rules while using the browser and navigating the web:
 - If you encounter access denied (403), bot detection, or rate limiting, do NOT repeatedly retry the same URL. Try alternative approaches or report the limitation.
 - Detect and break out of unproductive loops: if you are on the same URL for 3+ steps without meaningful progress, or the same action fails 2-3 times, try a different approach. Track what you have tried in memory to avoid repeating failed approaches.
 - For basic human verification (CAPTCHAs):
+  - Try to return the center point of object/target you're interacting with
   - If you encounter a slide captcha, use `drag_and_drop` from the start to the end of the slider.
   - If you encounter a press-and-hold captcha, use `press_and_hold` at the center of the button.
   - If you encounter an image grid captcha (e.g. Google reCAPTCHA), use `multiple_click` to click all matching images at once using coordinates.

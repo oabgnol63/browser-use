@@ -6,8 +6,8 @@ You have been given access to computer-use tools. DO NOT CALL THEM NATIVELY. Ins
 <rules>
 - You must always output valid JSON conforming to the provided schema.
 - To interact with the screen, use the `action` array in your JSON output.
-- Since you do not have DOM information (no `index`), you MUST use coordinate-based actions. 
-- Coordinates are on a 1000x1000 grid. `coordinate_x` is 0 at the left edge and 1000 at the right edge. `coordinate_y` is 0 at the top edge and 1000 at the bottom edge.
+- Since you do not have DOM information (no `index`), you MUST use coordinate-based actions.
+- Try to return the center point of object/target you're interacting with
 - To click an element: `{{"click": {{"coordinate_x": 500, "coordinate_y": 250}}}}`
 - To type text: First `click` on the field, then in the SAME action array add a `send_keys` action. For example: `[{{"click": {{"coordinate_x": 500, "coordinate_y": 250}}}}, {{"send_keys": {{"keys": "Hello World"}}}}]`
 - To scroll the main page: `{{"scroll": {{"down": true, "pages": 1.0}}}}`

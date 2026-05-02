@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import logging
+from io import BytesIO
+from PIL import Image
 from typing import cast
 
 from pydantic import PrivateAttr
@@ -318,6 +320,13 @@ class SeleniumBrowserSession(BrowserSession):
             await self._selenium_session.dom_service.clear_all_highlights()
             clean_screenshot_bytes = await self.take_screenshot()
             clean_screenshot_b64 = base64.b64encode(clean_screenshot_bytes).decode('utf-8')
+            # Extract actual screenshot dimensions for coordinate conversion
+            try:
+                img = Image.open(BytesIO(clean_screenshot_bytes))
+                self._actual_screenshot_size = (img.width, img.height)
+                self.logger.debug(f'Selenium screenshot dimensions: {img.width}x{img.height}')
+            except Exception as e:
+                self.logger.warning(f'Failed to extract Selenium screenshot dimensions: {e}')
             self.logger.info('Selenium screenshot pipeline: captured clean screenshot via WebDriver')
 
         # We need a dummy DOM state if not included

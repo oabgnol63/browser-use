@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import math
 import os
+import random
 
 from cdp_use.cdp.input.commands import DispatchKeyEventParameters
 
@@ -11,11 +13,16 @@ from browser_use.browser.events import (
 	ClickCoordinateEvent,
 	ClickElementEvent,
 	DragAndDropCoordinateEvent,
+	DragAndDropElementEvent,
 	GetDropdownOptionsEvent,
 	GoBackEvent,
 	GoForwardEvent,
 	HoverCoordinateEvent,
 	HoverElementEvent,
+	ClickMultipleCoordinatesEvent,
+	ClickMultipleElementsEvent,
+	PressAndHoldCoordinateEvent,
+	PressAndHoldElementEvent,
 	RefreshEvent,
 	ScrollCoordinateEvent,
 	ScrollEvent,
@@ -45,6 +52,65 @@ UploadFileEvent.model_rebuild()
 
 class DefaultActionWatchdog(BaseWatchdog):
 	"""Handles default browser actions like click, type, and scroll using CDP."""
+
+	async def _human_mouse_move(self, cdp_session, start_x: int, start_y: int, end_x: int, end_y: int):
+		"""Move mouse from start to end with human-like bezier curve trajectory.
+
+		Uses quadratic bezier curve with slight randomization for natural movement.
+		"""
+		session_id = cdp_session.session_id
+
+		# Calculate distance and steps
+		distance = math.hypot(end_x - start_x, end_y - start_y)
+		if distance < 5:
+			# Very short distance, just move directly
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': end_x, 'y': end_y},
+				session_id=session_id,
+			)
+			return
+
+		# More steps for longer distances, but cap it
+		steps = int(max(8, min(25, distance / 15)))
+
+		# Control point for bezier curve - slight curve perpendicular to line
+		mid_x = (start_x + end_x) / 2 + random.uniform(-distance * 0.1, distance * 0.1)
+		mid_y = (start_y + end_y) / 2 + random.uniform(-distance * 0.1, distance * 0.1)
+
+		last_point = (start_x, start_y)
+
+		for i in range(1, steps + 1):
+			t = i / steps
+			# Ease-out cubic for natural deceleration
+			eased_t = 1 - math.pow(1 - t, 3)
+
+			# Quadratic bezier
+			x = (1 - eased_t)**2 * start_x + 2 * (1 - eased_t) * eased_t * mid_x + eased_t**2 * end_x
+			y = (1 - eased_t)**2 * start_y + 2 * (1 - eased_t) * eased_t * mid_y + eased_t**2 * end_y
+
+			# Add slight jitter that decreases as we approach target
+			jitter = (1 - eased_t) * random.uniform(-1.5, 1.5)
+			x += jitter
+			y += jitter
+
+			point = (int(x), int(y))
+			if point == last_point:
+				continue
+
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': point[0], 'y': point[1]},
+				session_id=session_id,
+			)
+			last_point = point
+
+			# Variable sleep for human-like timing
+			await asyncio.sleep(random.uniform(0.003, 0.012))
+
+		# Final move to exact target
+		await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+			params={'type': 'mouseMoved', 'x': end_x, 'y': end_y},
+			session_id=session_id,
+		)
 
 	async def _execute_click_with_download_detection(
 		self,
@@ -568,15 +634,17 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			self.logger.debug(f'👆 Hovering mouse at ({event.coordinate_x}, {event.coordinate_y})...')
 
-			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
-				params={
-					'type': 'mouseMoved',
-					'x': event.coordinate_x,
-					'y': event.coordinate_y,
-				},
-				session_id=session_id,
-			)
-			await asyncio.sleep(0.5)
+			# Move mouse with human-like trajectory
+			last_pos = getattr(self.browser_session, '_last_mouse_pos', None)
+			if last_pos:
+				start_x, start_y = last_pos
+			else:
+				start_x = random.randint(0, 100)
+				start_y = random.randint(0, 100)
+
+			await self._human_mouse_move(cdp_session, start_x, start_y, event.coordinate_x, event.coordinate_y)
+			self.browser_session._last_mouse_pos = (event.coordinate_x, event.coordinate_y)
+			await asyncio.sleep(random.uniform(0.1, 0.3))
 
 			self.logger.debug(f'🖱️ Hovered successfully at ({event.coordinate_x}, {event.coordinate_y})')
 			return {'hover_x': event.coordinate_x, 'hover_y': event.coordinate_y}
@@ -601,37 +669,72 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			self.logger.debug(f'👆 Dragging from ({event.start_x}, {event.start_y}) to ({event.end_x}, {event.end_y})...')
 
-			# Move to start
-			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
-				params={'type': 'mouseMoved', 'x': event.start_x, 'y': event.start_y},
-				session_id=session_id,
-			)
-			await asyncio.sleep(0.1)
+			# Move to start with human-like trajectory
+			last_pos = getattr(self.browser_session, '_last_mouse_pos', None)
+			if last_pos:
+				from_x, from_y = last_pos
+			else:
+				from_x, from_y = random.randint(0, 100), random.randint(0, 100)
+
+			await self._human_mouse_move(cdp_session, from_x, from_y, event.start_x, event.start_y)
+			await asyncio.sleep(random.uniform(0.08, 0.15))
 
 			# Mouse down at start
 			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 				params={'type': 'mousePressed', 'x': event.start_x, 'y': event.start_y, 'button': 'left', 'clickCount': 1},
 				session_id=session_id,
 			)
-			await asyncio.sleep(0.1)
+			await asyncio.sleep(random.uniform(0.08, 0.15))
 
-			# Move to end (with intermediate steps for realism)
-			steps = 5
+			# Human-like drag trajectory with bezier curve
+			distance = math.hypot(event.end_x - event.start_x, event.end_y - event.start_y)
+			steps = int(max(12, min(35, distance / 12)))
+
+			# Control point for slight curve
+			mid_x = (event.start_x + event.end_x) / 2 + random.uniform(-distance * 0.12, distance * 0.12)
+			mid_y = (event.start_y + event.end_y) / 2 + random.uniform(-distance * 0.12, distance * 0.12)
+
+			last_point = (event.start_x, event.start_y)
 			for i in range(1, steps + 1):
-				x = event.start_x + (event.end_x - event.start_x) * (i / steps)
-				y = event.start_y + (event.end_y - event.start_y) * (i / steps)
+				t = i / steps
+				# Ease-out cubic
+				eased_t = 1 - math.pow(1 - t, 3)
+
+				# Quadratic bezier
+				x = (1 - eased_t)**2 * event.start_x + 2 * (1 - eased_t) * eased_t * mid_x + eased_t**2 * event.end_x
+				y = (1 - eased_t)**2 * event.start_y + 2 * (1 - eased_t) * eased_t * mid_y + eased_t**2 * event.end_y
+
+				# Decreasing jitter
+				jitter = (1 - eased_t) * random.uniform(-2, 2)
+				x += jitter
+				y += jitter
+
+				point = (int(x), int(y))
+				if point == last_point:
+					continue
+
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
-					params={'type': 'mouseMoved', 'x': int(x), 'y': int(y), 'button': 'left'},
+					params={'type': 'mouseMoved', 'x': point[0], 'y': point[1]},
 					session_id=session_id,
 				)
-				await asyncio.sleep(0.05)
+				last_point = point
+				await asyncio.sleep(random.uniform(0.004, 0.015))
+
+			# Settle on final destination
+			for _ in range(2):
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={'type': 'mouseMoved', 'x': event.end_x, 'y': event.end_y},
+					session_id=session_id,
+				)
+				await asyncio.sleep(random.uniform(0.03, 0.06))
 
 			# Mouse up at end
 			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 				params={'type': 'mouseReleased', 'x': event.end_x, 'y': event.end_y, 'button': 'left', 'clickCount': 1},
 				session_id=session_id,
 			)
-			await asyncio.sleep(0.1)
+			self.browser_session._last_mouse_pos = (event.end_x, event.end_y)
+			await asyncio.sleep(random.uniform(0.05, 0.1))
 
 			return {'start_x': event.start_x, 'start_y': event.start_y, 'end_x': event.end_x, 'end_y': event.end_y}
 
@@ -1303,16 +1406,18 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			self.logger.debug(f'👆 Moving mouse to ({coordinate_x}, {coordinate_y})...')
 
-			# Move mouse to coordinates
-			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
-				params={
-					'type': 'mouseMoved',
-					'x': coordinate_x,
-					'y': coordinate_y,
-				},
-				session_id=session_id,
-			)
-			await asyncio.sleep(0.05)
+			# Move mouse with human-like trajectory from last known position or viewport center
+			last_pos = getattr(self.browser_session, '_last_mouse_pos', None)
+			if last_pos:
+				start_x, start_y = last_pos
+			else:
+				# Start from a random edge position for first move
+				start_x = random.randint(0, 100)
+				start_y = random.randint(0, 100)
+
+			await self._human_mouse_move(cdp_session, start_x, start_y, coordinate_x, coordinate_y)
+			self.browser_session._last_mouse_pos = (coordinate_x, coordinate_y)
+			await asyncio.sleep(random.uniform(0.02, 0.05))
 
 			# Mouse down
 			self.logger.debug(f'👆🏾 Clicking at ({coordinate_x}, {coordinate_y})...')
@@ -3951,3 +4056,175 @@ class DefaultActionWatchdog(BaseWatchdog):
 			error_msg = f'Failed to select dropdown option "{target_text}" for element {index_for_logging}: {str(e)}'
 			self.logger.error(error_msg)
 			raise ValueError(error_msg) from e
+
+
+	async def on_DragAndDropElementEvent(self, event: DragAndDropElementEvent) -> dict | None:
+		"""Handle drag and drop between elements."""
+		try:
+			if not self.browser_session.agent_focus_target_id:
+				raise BrowserError('Cannot execute drag and drop: browser session is corrupted.')
+
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			
+			start_node = await self.browser_session.get_element_by_index(event.start_index)
+			end_node = await self.browser_session.get_element_by_index(event.end_index)
+
+			if not start_node or not end_node:
+				raise BrowserError(f'Could not find elements for start index {event.start_index} or end index {event.end_index}')
+
+			start_coords = await self.browser_session.get_element_coordinates(start_node.backend_node_id, cdp_session)
+			end_coords = await self.browser_session.get_element_coordinates(end_node.backend_node_id, cdp_session)
+			
+			if not start_coords or not end_coords:
+				raise BrowserError('Could not get element coordinates')
+
+			start_x = int(start_coords.x + start_coords.width / 2)
+			start_y = int(start_coords.y + start_coords.height / 2)
+			end_x = int(end_coords.x + end_coords.width / 2)
+			end_y = int(end_coords.y + end_coords.height / 2)
+
+			# Perform drag and drop using CDP
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mousePressed', 'x': start_x, 'y': start_y, 'button': 'left', 'clickCount': 1},
+				session_id=cdp_session.session_id,
+			)
+			await asyncio.sleep(0.1)
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': end_x, 'y': end_y},
+				session_id=cdp_session.session_id,
+			)
+			await asyncio.sleep(0.1)
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseReleased', 'x': end_x, 'y': end_y, 'button': 'left', 'clickCount': 1},
+				session_id=cdp_session.session_id,
+			)
+			self.logger.debug(f'🖱️ Drag and drop from element {event.start_index} to {event.end_index}')
+			return {'start_x': start_x, 'start_y': start_y, 'end_x': end_x, 'end_y': end_y}
+		except Exception as e:
+			self.logger.error(f'Failed drag and drop: {e}')
+			raise BrowserError(message=f'Failed drag and drop: {e}')
+
+	async def on_ClickMultipleElementsEvent(self, event: ClickMultipleElementsEvent) -> dict | None:
+		"""Handle multiple clicks on elements via indices."""
+		try:
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+
+			for idx in event.indices:
+				node = await self.browser_session.get_element_by_index(idx)
+				if not node:
+					self.logger.warning(f'Could not find element for index {idx}')
+					continue
+				
+				coords = await self.browser_session.get_element_coordinates(node.backend_node_id, cdp_session)
+				if not coords:
+					self.logger.warning(f'Could not get coordinates for element index {idx}')
+					continue
+
+				x = int(coords.x + coords.width / 2)
+				y = int(coords.y + coords.height / 2)
+
+				asyncio.create_task(self.browser_session.highlight_coordinate_click(x, y))
+				await self._click_on_coordinate(x, y)
+				await asyncio.sleep(0.3)
+
+			self.logger.debug('🖱️ Multiple clicks on elements completed')
+			return {'indices': event.indices}
+		except Exception as e:
+			self.logger.error(f'Failed multiple clicks on elements: {e}')
+			raise BrowserError(message=f'Failed multiple clicks on elements: {e}')
+
+	async def on_ClickMultipleCoordinatesEvent(self, event: ClickMultipleCoordinatesEvent) -> dict | None:
+		"""Handle multiple clicks on specific coordinates."""
+		try:
+			for (x, y) in event.coordinates:
+				asyncio.create_task(self.browser_session.highlight_coordinate_click(x, y))
+				await self._click_on_coordinate(x, y)
+				await asyncio.sleep(0.3)
+
+			self.logger.debug('🖱️ Multiple clicks on coordinates completed')
+			return {'coordinates': event.coordinates}
+		except Exception as e:
+			self.logger.error(f'Failed multiple clicks on coordinates: {e}')
+			raise BrowserError(message=f'Failed multiple clicks on coordinates: {e}')
+
+	async def on_PressAndHoldElementEvent(self, event: PressAndHoldElementEvent) -> dict | None:
+		"""Handle press and hold on an element."""
+		try:
+			node = event.node
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			coords = await self.browser_session.get_element_coordinates(node.backend_node_id, cdp_session)
+			if not coords:
+				raise BrowserError('Could not get coordinates for press and hold')
+			
+			x = int(coords.x + coords.width / 2)
+			y = int(coords.y + coords.height / 2)
+
+			session_id = cdp_session.session_id
+
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': x, 'y': y}, session_id=session_id
+			)
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'buttons': 1, 'clickCount': 1},
+				session_id=session_id,
+			)
+
+			hold_duration = 3.0
+			heartbeat_interval = 0.2
+			remaining = hold_duration
+			while remaining > 0:
+				await asyncio.sleep(min(heartbeat_interval, remaining))
+				remaining -= heartbeat_interval
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={'type': 'mouseMoved', 'x': x, 'y': y, 'button': 'left', 'buttons': 1},
+					session_id=session_id,
+				)
+
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'buttons': 0, 'clickCount': 1},
+				session_id=session_id,
+			)
+
+			self.logger.debug('🖱️ Press and hold on element completed')
+			return {'success': True}
+		except Exception as e:
+			self.logger.error(f'Failed press and hold on element: {e}')
+			raise BrowserError(message=f'Failed press and hold on element: {e}')
+
+	async def on_PressAndHoldCoordinateEvent(self, event: PressAndHoldCoordinateEvent) -> dict | None:
+		"""Handle press and hold on specific coordinates."""
+		try:
+			x, y = event.coordinate_x, event.coordinate_y
+
+			cdp_session = await self.browser_session.get_or_create_cdp_session()
+			session_id = cdp_session.session_id
+
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseMoved', 'x': x, 'y': y}, session_id=session_id
+			)
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'buttons': 1, 'clickCount': 1},
+				session_id=session_id,
+			)
+
+			hold_duration = 3.0
+			heartbeat_interval = 0.2
+			remaining = hold_duration
+			while remaining > 0:
+				await asyncio.sleep(min(heartbeat_interval, remaining))
+				remaining -= heartbeat_interval
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={'type': 'mouseMoved', 'x': x, 'y': y, 'button': 'left', 'buttons': 1},
+					session_id=session_id,
+				)
+
+			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+				params={'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'buttons': 0, 'clickCount': 1},
+				session_id=session_id,
+			)
+
+			self.logger.debug('🖱️ Press and hold on coordinates completed')
+			return {'success': True}
+		except Exception as e:
+			self.logger.error(f'Failed press and hold on coordinates: {e}')
+			raise BrowserError(message=f'Failed press and hold on coordinates: {e}')

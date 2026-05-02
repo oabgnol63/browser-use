@@ -437,6 +437,12 @@ class BrowserSession(BaseModel):
 	# Cache of original viewport size for coordinate conversion (set when browser state is captured)
 	_original_viewport_size: tuple[int, int] | None = PrivateAttr(default=None)
 
+	# Actual screenshot dimensions (may differ from viewport due to scrollbar, DPI, etc.)
+	_actual_screenshot_size: tuple[int, int] | None = PrivateAttr(default=None)
+
+	# Last known mouse position for human-like movement
+	_last_mouse_pos: tuple[int, int] | None = PrivateAttr(default=None)
+
 	@classmethod
 	def from_system_chrome(cls, profile_directory: str | None = None, **kwargs: Any) -> Self:
 		"""Create a BrowserSession using system's Chrome installation and profile"""

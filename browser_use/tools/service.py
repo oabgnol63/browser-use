@@ -19,12 +19,17 @@ from browser_use.browser.events import (
 	ClickElementEvent,
 	CloseTabEvent,
 	DragAndDropCoordinateEvent,
+	DragAndDropElementEvent,
 	GetDropdownOptionsEvent,
 	GoBackEvent,
 	GoForwardEvent,
 	HoverCoordinateEvent,
 	HoverElementEvent,
+	ClickMultipleCoordinatesEvent,
+	ClickMultipleElementsEvent,
 	NavigateToUrlEvent,
+	PressAndHoldCoordinateEvent,
+	PressAndHoldElementEvent,
 	ScrollCoordinateEvent,
 	ScrollEvent,
 	ScrollToTextEvent,
@@ -50,8 +55,8 @@ from browser_use.tools.views import (
 	ClickTarget,
 	CloseTabAction,
 	DoneAction,
-	DragAndDropCoordinateAction,
-	DragAndDropCoordinateActionIndexOnly,
+	DragAndDropElementAction,
+	DragAndDropElementActionIndexOnly,
 	ExtractAction,
 	FindElementsAction,
 	GetDropdownOptionsAction,
@@ -59,12 +64,12 @@ from browser_use.tools.views import (
 	HoverElementAction,
 	HoverElementActionIndexOnly,
 	InputTextAction,
-	MultipleClickCoordinateAction,
-	MultipleClickCoordinateActionIndexOnly,
+	MultipleClickElementAction,
+	MultipleClickElementActionIndexOnly,
 	NavigateAction,
 	NoParamsAction,
-	PressAndHoldCoordinateAction,
-	PressAndHoldCoordinateActionIndexOnly,
+	PressAndHoldElementAction,
+	PressAndHoldElementActionIndexOnly,
 	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
@@ -604,14 +609,22 @@ class Tools(Generic[Context]):
 			actual_x, actual_y = llm_x, llm_y
 
 			# Gemini uses normalized 0-999 coordinates regardless of image size
-			if browser_session.llm_coordinate_system == 'normalized_1000' and browser_session._original_viewport_size:
-				original_width, original_height = browser_session._original_viewport_size
-				actual_x = int(llm_x / 1000 * original_width)
-				actual_y = int(llm_y / 1000 * original_height)
+			# Use actual screenshot dimensions (not viewport) since LLM sees the screenshot which may include scrollbar
+			if browser_session.llm_coordinate_system == 'normalized_1000':
+				# Prefer actual screenshot size, fall back to viewport size
+				if browser_session._actual_screenshot_size:
+					screenshot_width, screenshot_height = browser_session._actual_screenshot_size
+				elif browser_session._original_viewport_size:
+					screenshot_width, screenshot_height = browser_session._original_viewport_size
+				else:
+					return actual_x, actual_y  # No size info available
+
+				actual_x = int(llm_x / 1000 * screenshot_width)
+				actual_y = int(llm_y / 1000 * screenshot_height)
 
 				logger.info(
 					f'🔄 Converting normalized coordinates: LLM ({llm_x}, {llm_y}) / 1000 '
-					f'→ Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height}'
+					f'→ Screen ({actual_x}, {actual_y}) @ {screenshot_width}x{screenshot_height}'
 				)
 
 			# Claude/others use pixel coordinates in letterboxed screenshot space
@@ -892,7 +905,7 @@ class Tools(Generic[Context]):
 
 		# --- drag_and_drop ---------------------------------------------------
 		def _build_drag_base_metadata(
-			params: DragAndDropCoordinateAction,
+			params: DragAndDropElementAction,
 			start_x: int, start_y: int, end_x: int, end_y: int,
 			browser_session: BrowserSession,
 		) -> dict[str, Any]:
@@ -915,7 +928,7 @@ class Tools(Generic[Context]):
 			}
 
 		async def _drag_and_drop_dispatch(
-			params: DragAndDropCoordinateAction,
+			params: DragAndDropElementAction,
 			start_x: int, start_y: int, end_x: int, end_y: int,
 			browser_session: BrowserSession,
 		) -> ActionResult:
@@ -943,7 +956,7 @@ class Tools(Generic[Context]):
 				return ActionResult(error=error_msg, metadata=base_metadata)
 
 		async def _drag_and_drop_by_coordinate(
-			params: DragAndDropCoordinateAction, browser_session: BrowserSession
+			params: DragAndDropElementAction, browser_session: BrowserSession
 		) -> ActionResult:
 			if params.start_x is None or params.start_y is None or params.end_x is None or params.end_y is None:
 				return ActionResult(error='Coordinate drag requires start_x, start_y, end_x, end_y')
@@ -952,17 +965,25 @@ class Tools(Generic[Context]):
 			return await _drag_and_drop_dispatch(params, start_x, start_y, end_x, end_y, browser_session)
 
 		async def _drag_and_drop_by_index(
-			params: DragAndDropCoordinateAction, browser_session: BrowserSession
+			params: DragAndDropElementAction, browser_session: BrowserSession
 		) -> ActionResult:
 			if params.start_index is None or params.end_index is None:
 				return ActionResult(error='Index drag requires both start_index and end_index')
-			start = await _get_element_center(params.start_index, browser_session)
-			if start is None:
-				return ActionResult(error=f'start_index {params.start_index} not available')
-			end = await _get_element_center(params.end_index, browser_session)
-			if end is None:
-				return ActionResult(error=f'end_index {params.end_index} not available')
-			return await _drag_and_drop_dispatch(params, start[0], start[1], end[0], end[1], browser_session)
+			
+			# Dispatch DragAndDropElementEvent instead of resolving to coordinates here
+			try:
+				event = browser_session.event_bus.dispatch(
+					DragAndDropElementEvent(start_index=params.start_index, end_index=params.end_index)
+				)
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Dragged from element {params.start_index} to element {params.end_index}'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to drag and drop elements: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
 
 		self._drag_and_drop_dispatch = _drag_and_drop_dispatch
 		self._build_drag_base_metadata = _build_drag_base_metadata
@@ -1049,22 +1070,53 @@ class Tools(Generic[Context]):
 				return ActionResult(error=error_msg, metadata={'executed_x': actual_x, 'executed_y': actual_y})
 
 		async def _press_and_hold_by_coordinate(
-			params: PressAndHoldCoordinateAction, browser_session: BrowserSession
+			params: PressAndHoldElementAction, browser_session: BrowserSession
 		) -> ActionResult:
 			if params.x is None or params.y is None:
 				return ActionResult(error='Coordinate press_and_hold requires both x and y')
 			actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
-			return await _press_and_hold_at(actual_x, actual_y, f'({params.x}, {params.y})', browser_session)
+			
+			try:
+				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+				event = browser_session.event_bus.dispatch(
+					PressAndHoldCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y)
+				)
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Pressed and held at ({params.x}, {params.y})'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to press and hold at ({params.x}, {params.y}): {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
 
 		async def _press_and_hold_by_index(
-			params: PressAndHoldCoordinateAction, browser_session: BrowserSession
+			params: PressAndHoldElementAction, browser_session: BrowserSession
 		) -> ActionResult:
 			if params.index is None:
 				return ActionResult(error='Index press_and_hold requires index')
-			center = await _get_element_center(params.index, browser_session)
-			if center is None:
+			
+			node = await browser_session.get_element_by_index(params.index)
+			if node is None:
 				return ActionResult(error=f'index {params.index} not available')
-			return await _press_and_hold_at(center[0], center[1], f'index={params.index}', browser_session)
+				
+			try:
+				create_task_with_error_handling(
+					browser_session.highlight_interaction_element(node), name='highlight_press_element', suppress_exceptions=True
+				)
+				event = browser_session.event_bus.dispatch(
+					PressAndHoldElementEvent(node=node)
+				)
+				await event
+				await event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f'Pressed and held on element {params.index}'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to press and hold on element {params.index}: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
 
 		self._press_and_hold_at = _press_and_hold_at
 		self._press_and_hold_by_index = _press_and_hold_by_index
@@ -2560,12 +2612,12 @@ Validated Code (after quote fixing):
 		if not self._coordinate_clicking_enabled:
 			@self.registry.action(
 				'Drag an element by index to a destination element by index.',
-				param_model=DragAndDropCoordinateActionIndexOnly,
+				param_model=DragAndDropElementActionIndexOnly,
 				modes={Mode.DOM},
 				backends={Backend.CDP, Backend.WEBDRIVER}
 			)
-			async def drag_and_drop(params: DragAndDropCoordinateActionIndexOnly, browser_session: BrowserSession):
-				hybrid_params = DragAndDropCoordinateAction(
+			async def drag_and_drop(params: DragAndDropElementActionIndexOnly, browser_session: BrowserSession):
+				hybrid_params = DragAndDropElementAction(
 					start_index=params.start_index, end_index=params.end_index
 				)
 				return await self._drag_and_drop_by_index(hybrid_params, browser_session)
@@ -2578,11 +2630,11 @@ Validated Code (after quote fixing):
 				'`*_x` and `*_y` coordinates. Endpoints can mix index and coordinates freely '
 				'(e.g. drag a button by index to an empty area by coordinates).'
 			),
-			param_model=DragAndDropCoordinateAction,
+			param_model=DragAndDropElementAction,
 			modes={Mode.DOM, Mode.VISION},
 			backends={Backend.CDP, Backend.WEBDRIVER}
 		)
-		async def drag_and_drop(params: DragAndDropCoordinateAction, browser_session: BrowserSession):
+		async def drag_and_drop(params: DragAndDropElementAction, browser_session: BrowserSession):
 			start_has_idx = params.start_index is not None
 			end_has_idx = params.end_index is not None
 			start_has_coord = params.start_x is not None and params.start_y is not None
@@ -2628,31 +2680,21 @@ Validated Code (after quote fixing):
 		if not self._coordinate_clicking_enabled:
 			@self.registry.action(
 				'Click multiple elements by index in sequence.',
-				param_model=MultipleClickCoordinateActionIndexOnly,
+				param_model=MultipleClickElementActionIndexOnly,
 				modes={Mode.DOM},
 				backends={Backend.CDP, Backend.WEBDRIVER},
 			)
 			async def multiple_click(
-				params: MultipleClickCoordinateActionIndexOnly, browser_session: BrowserSession
+				params: MultipleClickElementActionIndexOnly, browser_session: BrowserSession
 			):
 				try:
-					clicked_labels: list[str] = []
-					for idx in params.indices:
-						target = ClickTarget(index=idx)
-						resolved = await self._multiple_click_resolve_point(target, browser_session)
-						if resolved is None:
-							clicked_labels.append(f'(skipped: index {idx} unavailable)')
-							continue
-						actual_x, actual_y = resolved
-						asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
-						event = browser_session.event_bus.dispatch(
-							ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
-						)
-						await event
-						await event.event_result(raise_if_any=True, raise_if_none=False)
-						clicked_labels.append(f'index={idx}→({actual_x},{actual_y})')
-						await asyncio.sleep(0.3)
-					memory = f'Clicked multiple targets: {", ".join(clicked_labels)}'
+					event = browser_session.event_bus.dispatch(
+						ClickMultipleElementsEvent(indices=params.indices)
+					)
+					await event
+					await event.event_result(raise_if_any=True, raise_if_none=False)
+
+					memory = f'Clicked multiple targets by indices: {", ".join(map(str, params.indices))}'
 					logger.info(f'🖱️ {memory}')
 					return ActionResult(extracted_content=memory, long_term_memory=memory)
 				except Exception as e:
@@ -2666,31 +2708,33 @@ Validated Code (after quote fixing):
 				'Use to bypass image captchas, click multiple specific points, or click a '
 				'mix of indexed elements and empty-space coordinates.'
 			),
-			param_model=MultipleClickCoordinateAction,
+			param_model=MultipleClickElementAction,
 			modes={Mode.DOM, Mode.VISION},
 			backends={Backend.CDP, Backend.WEBDRIVER},
 		)
-		async def multiple_click(params: MultipleClickCoordinateAction, browser_session: BrowserSession):
+		async def multiple_click(params: MultipleClickElementAction, browser_session: BrowserSession):
 			try:
 				clicked_labels: list[str] = []
+				coordinates: list[tuple[int, int]] = []
+				
 				for point in params.points:
 					resolved = await self._multiple_click_resolve_point(point, browser_session)
 					if resolved is None:
 						clicked_labels.append(f'(skipped: invalid target {point.model_dump(exclude_none=True)})')
 						continue
 					actual_x, actual_y = resolved
-
-					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
-					event = browser_session.event_bus.dispatch(
-						ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
-					)
-					await event
-					await event.event_result(raise_if_any=True, raise_if_none=False)
+					coordinates.append((actual_x, actual_y))
 					if point.index is not None:
 						clicked_labels.append(f'index={point.index}→({actual_x},{actual_y})')
 					else:
 						clicked_labels.append(f'({actual_x},{actual_y})')
-					await asyncio.sleep(0.3)
+
+				if coordinates:
+					event = browser_session.event_bus.dispatch(
+						ClickMultipleCoordinatesEvent(coordinates=coordinates)
+					)
+					await event
+					await event.event_result(raise_if_any=True, raise_if_none=False)
 
 				memory = f'Clicked multiple targets: {", ".join(clicked_labels)}'
 				logger.info(f'🖱️ {memory}')
@@ -2708,14 +2752,14 @@ Validated Code (after quote fixing):
 		if not self._coordinate_clicking_enabled:
 			@self.registry.action(
 				'Press and hold left mouse button on an element by index for several seconds, then release.',
-				param_model=PressAndHoldCoordinateActionIndexOnly,
+				param_model=PressAndHoldElementActionIndexOnly,
 				modes={Mode.DOM},
 				backends={Backend.CDP},
 			)
 			async def press_and_hold(
-				params: PressAndHoldCoordinateActionIndexOnly, browser_session: BrowserSession
+				params: PressAndHoldElementActionIndexOnly, browser_session: BrowserSession
 			):
-				hybrid_params = PressAndHoldCoordinateAction(index=params.index)
+				hybrid_params = PressAndHoldElementAction(index=params.index)
 				return await self._press_and_hold_by_index(hybrid_params, browser_session)
 			return
 
@@ -2725,11 +2769,11 @@ Validated Code (after quote fixing):
 				'Provide either `index` (preferred when element covers target) or `x`+`y` coordinates. '
 				'Use to bypass press-and-hold captchas.'
 			),
-			param_model=PressAndHoldCoordinateAction,
+			param_model=PressAndHoldElementAction,
 			modes={Mode.DOM, Mode.VISION},
 			backends={Backend.CDP},
 		)
-		async def press_and_hold(params: PressAndHoldCoordinateAction, browser_session: BrowserSession):
+		async def press_and_hold(params: PressAndHoldElementAction, browser_session: BrowserSession):
 			if params.index is not None:
 				return await self._press_and_hold_by_index(params, browser_session)
 			if params.x is not None and params.y is not None:

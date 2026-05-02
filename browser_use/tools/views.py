@@ -153,7 +153,7 @@ class HoverCoordinateAction(BaseModel):
 	coordinate_y: int = Field(description='Vertical coordinate relative to viewport top edge')
 
 
-class DragAndDropCoordinateAction(BaseModel):
+class DragAndDropElementAction(BaseModel):
 	"""Hybrid: provide either index OR (x, y) for each endpoint. Index takes priority."""
 
 	start_index: int | None = Field(default=None, ge=1, description='Element index for drag start (preferred when available)')
@@ -164,8 +164,8 @@ class DragAndDropCoordinateAction(BaseModel):
 	end_y: int | None = Field(default=None, description='End vertical coordinate relative to viewport top edge')
 
 
-class DragAndDropCoordinateActionIndexOnly(BaseModel):
-	model_config = ConfigDict(title='DragAndDropCoordinateAction')
+class DragAndDropElementActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='DragAndDropElementAction')
 
 	start_index: int = Field(ge=1, description='Element index for drag start')
 	end_index: int = Field(ge=1, description='Element index for drag end')
@@ -179,7 +179,7 @@ class ClickTarget(BaseModel):
 	y: int | None = Field(default=None, description='Vertical coordinate relative to viewport top edge')
 
 
-class MultipleClickCoordinateAction(BaseModel):
+class MultipleClickElementAction(BaseModel):
 	"""List of click targets. Each item is either {index: N} or {x: X, y: Y}."""
 
 	points: list[ClickTarget] = Field(
@@ -191,13 +191,13 @@ class MultipleClickCoordinateAction(BaseModel):
 	)
 
 
-class MultipleClickCoordinateActionIndexOnly(BaseModel):
-	model_config = ConfigDict(title='MultipleClickCoordinateAction')
+class MultipleClickElementActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='MultipleClickElementAction')
 
 	indices: list[int] = Field(description='List of element indices to click in sequence')
 
 
-class PressAndHoldCoordinateAction(BaseModel):
+class PressAndHoldElementAction(BaseModel):
 	"""Hybrid: provide either index OR (x, y). Index takes priority."""
 
 	index: int | None = Field(default=None, ge=1, description='Element index (preferred when available)')
@@ -205,8 +205,8 @@ class PressAndHoldCoordinateAction(BaseModel):
 	y: int | None = Field(default=None, description='Vertical coordinate relative to viewport top edge')
 
 
-class PressAndHoldCoordinateActionIndexOnly(BaseModel):
-	model_config = ConfigDict(title='PressAndHoldCoordinateAction')
+class PressAndHoldElementActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='PressAndHoldElementAction')
 
 	index: int = Field(ge=1, description='Element index')
 
