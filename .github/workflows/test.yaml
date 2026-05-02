@@ -85,6 +85,7 @@ jobs:
     env:
       IN_DOCKER: 'True'
       ANONYMIZED_TELEMETRY: 'false'
+      BROWSER_USE_DEV_ENV: '1'
       BROWSER_USE_LOGGING_LEVEL: 'DEBUG'
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}

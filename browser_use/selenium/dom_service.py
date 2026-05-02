@@ -13,7 +13,8 @@ Enhanced iframe support:
 import asyncio
 import logging
 import time
-from importlib import resources
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from browser_use.dom.serializer.serializer import DOMTreeSerializer
@@ -33,9 +34,30 @@ if TYPE_CHECKING:
 from browser_use.selenium.iframe_handler import IframeInfo, SeleniumIframeHandler
 
 
+DOM_TREE_JS_PATH = Path(__file__).resolve().parents[1] / 'dom' / 'dom_tree_js' / 'index.js'
+
+
+def _read_dom_tree_js_from_disk() -> str:
+    return DOM_TREE_JS_PATH.read_text(encoding='utf-8')
+
+
 def _load_dom_tree_js() -> str:
-    """Load the shared DOM extraction script from its package resource."""
-    return resources.files('browser_use.dom.dom_tree_js').joinpath('index.js').read_text(encoding='utf-8')
+    """Load the shared DOM extraction script from embedded code or source checkout."""
+    if os.environ.get('BROWSER_USE_DEV_ENV') == '1' and DOM_TREE_JS_PATH.exists():
+        return _read_dom_tree_js_from_disk()
+
+    if not INDEX_JS:
+        raise RuntimeError(
+            'INDEX_JS is empty. This usually means the embedding script '
+            '(scripts/embed_external.py) was not run before building or the development '
+            'environment is not configured correctly.'
+        )
+    return INDEX_JS
+
+
+# BEGIN GENERATED DOM TREE JS
+INDEX_JS = ''
+# END GENERATED DOM TREE JS
 
 
 class SeleniumDomService:

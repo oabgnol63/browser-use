@@ -1,7 +1,8 @@
 import base64
-import importlib.resources
+import os
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
 from PIL import Image, ImageStat
@@ -16,6 +17,34 @@ if TYPE_CHECKING:
 	from browser_use.agent.views import AgentStepInfo
 	from browser_use.browser.views import BrowserStateSummary
 	from browser_use.filesystem.file_system import FileSystem
+
+
+SYSTEM_PROMPTS_DIR = Path(__file__).resolve().with_name('system_prompts')
+
+
+def _read_prompt_templates_from_disk() -> dict[str, str]:
+	return {
+		path.name: path.read_text(encoding='utf-8')
+		for path in sorted(SYSTEM_PROMPTS_DIR.glob('*.md'))
+	}
+
+
+def _get_prompt_templates() -> dict[str, str]:
+	if os.environ.get('BROWSER_USE_DEV_ENV') == '1' and SYSTEM_PROMPTS_DIR.exists():
+		return _read_prompt_templates_from_disk()
+
+	if not PROMPT_TEMPLATES:
+		raise RuntimeError(
+			'PROMPT_TEMPLATES is empty. This usually means the embedding script '
+			' (scripts/embed_external.py) was not run before building or the development '
+			' environment is not configured correctly.'
+		)
+	return PROMPT_TEMPLATES
+
+
+# BEGIN GENERATED PROMPT TEMPLATES
+PROMPT_TEMPLATES = {}
+# END GENERATED PROMPT TEMPLATES
 
 
 def _is_anthropic_4_5_model(model_name: str | None) -> bool:
@@ -64,7 +93,7 @@ class SystemPrompt:
 		self.system_message = SystemMessage(content=prompt, cache=True)
 
 	def _load_prompt_template(self) -> None:
-		"""Load the prompt template from the markdown file."""
+		"""Load the prompt template from the embedded template map."""
 		try:
 			# Choose the appropriate template based on model type and mode
 			if self.use_native_computer_use:
@@ -89,13 +118,7 @@ class SystemPrompt:
 			else:
 				template_filename = 'system_prompt_no_thinking.md'
 
-			# This works both in development and when installed as a package
-			with (
-				importlib.resources.files('browser_use.agent.system_prompts')
-				.joinpath(template_filename)
-				.open('r', encoding='utf-8') as f
-			):
-				self.prompt_template = f.read()
+			self.prompt_template = _get_prompt_templates()[template_filename]
 		except Exception as e:
 			raise RuntimeError(f'Failed to load system prompt template: {e}')
 
@@ -370,7 +393,7 @@ class AgentMessagePrompt:
 			page_info_text = '<page_info>'
 			page_info_text += f'{pages_above:.1f} pages above, {pages_below:.1f} pages below'
 			if pages_below > 0.2:
-				page_info_text += ' — scroll down to reveal more content'
+				page_info_text += ' - scroll down to reveal more content'
 			page_info_text += '</page_info>\n'
 		if elements_text != '':
 			if not has_content_above:
@@ -486,7 +509,7 @@ Available tabs:
 				return screenshot_b64
 
 			logging.getLogger(__name__).info(
-				f'🔄 Resizing screenshot from {img.size[0]}x{img.size[1]} into {self.llm_screenshot_size[0]}x{self.llm_screenshot_size[1]} letterbox for LLM'
+				f'Resizing screenshot from {img.size[0]}x{img.size[1]} into {self.llm_screenshot_size[0]}x{self.llm_screenshot_size[1]} letterbox for LLM'
 			)
 
 			target_width, target_height = self.llm_screenshot_size

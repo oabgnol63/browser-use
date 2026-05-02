@@ -82,7 +82,7 @@ jobs:
       - run: uv sync
 
       - run: uv run --no-sync ruff check --no-fix --select PLE # quick check for syntax errors to avoid waiting time doing the rest of the build
-      - run: uv build
+      - run: python scripts/build_package.py
 
       # - name: Detect installed Playwright version
       #   run: echo "PLAYWRIGHT_VERSION=$(uv pip list --format json | jq -r '.[] | select(.name == "playwright") | .version')" >> $GITHUB_ENV

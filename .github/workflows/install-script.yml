@@ -210,7 +210,7 @@ jobs:
           uv venv .venv --python 3.11
           source .venv/bin/activate
           uv pip install build
-          python -m build --wheel
+          python scripts/build_package.py --wheel
 
       - name: Test uvx with local wheel
         run: |

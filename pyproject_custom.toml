@@ -150,13 +150,12 @@ reportMissingTypeStubs = false
 [tool.hatch.build]
 include = [
     "browser_use/**/*.py",
-    "browser_use/agent/system_prompts/*.md",
     "browser_use/code_use/system_prompt.md",
     "browser_use/cli_templates/*.py",
     "browser_use/py.typed",
-    "browser_use/dom/**/*.js",
 ]
 exclude = [
+    "browser_use/dom/**/*.js",
     "browser_use/**/tests/*.py",
     "browser_use/**/tests.py",
     "tests/**/*.py",
