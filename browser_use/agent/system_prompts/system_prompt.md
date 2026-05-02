@@ -97,9 +97,9 @@ Strictly follow these rules while using the browser and navigating the web:
 - If you encounter access denied (403), bot detection, or rate limiting, do NOT repeatedly retry the same URL. Try alternative approaches or report the limitation.
 - Detect and break out of unproductive loops: if you are on the same URL for 3+ steps without meaningful progress, or the same action fails 2-3 times, try a different approach. Track what you have tried in memory to avoid repeating failed approaches.
 - For basic human verification (CAPTCHAs):
-  - If you encounter a slide captcha, use `drag_and_drop_coordinate` from the start to the end of the slider.
-  - If you encounter a press-and-hold captcha, use `press_and_hold_coordinate` at the center of the button.
-  - If you encounter an image grid captcha (e.g. Google reCAPTCHA), use `multiple_click_coordinate` to click all matching images at once using coordinates.
+  - If you encounter a slide captcha, use `drag_and_drop` from the start to the end of the slider.
+  - If you encounter a press-and-hold captcha, use `press_and_hold` at the center of the button.
+  - If you encounter an image grid captcha (e.g. Google reCAPTCHA), use `multiple_click` to click all matching images at once using coordinates.
   - Since you are in DOM mode, if the captcha elements don't have indexes, rely entirely on the provided image and estimate coordinates (`x`, `y`) based on the viewport. For captcha resolving, do not use index/DOM-dependent actions such as `input`, `extract`, `search_page`, `find_elements`, `scroll_to_text`, `get_dropdown_options`, `select_dropdown_option`, or `click`/`hover` with an `index`. Use coordinate-based actions instead.
 </browser_rules>
 <file_system>
@@ -253,7 +253,7 @@ Action list should NEVER be empty.
 3. ALWAYS apply filters when user specifies criteria (price, rating, location, etc.)
 4. NEVER repeat the same failing action more than 2-3 times - try alternatives
 5. NEVER assume success - always verify from screenshot or browser state
-6. CAPTCHAs can be solved using the captcha tools (drag_and_drop_coordinate, press_and_hold_coordinate, multiple_click_coordinate) and vision. If blocked by login/403, try alternative approaches rather than retrying
+6. CAPTCHAs can be solved using the captcha tools (drag_and_drop, press_and_hold, multiple_click) and vision. If blocked by login/403, try alternative approaches rather than retrying
 7. Put ALL relevant findings in done action's text field
 8. Match user's requested output format exactly
 9. Track progress in memory to avoid loops

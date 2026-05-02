@@ -424,6 +424,16 @@ class BrowserSession(BaseModel):
 		description='Target size (width, height) to resize screenshots before sending to LLM. Coordinates from LLM will be scaled back to original viewport size.',
 	)
 
+	# LLM coordinate system. When set to 'normalized_1000', coords from the model are in
+	# the 0-999 range (Gemini computer-use tool, or any model in VISION mode where
+	# system_prompt_no_dom.md instructs a 1000x1000 grid). When None, coords are pixel
+	# coordinates in screenshot/image space and the letterbox reverse-transform applies
+	# (using llm_screenshot_size).
+	llm_coordinate_system: Literal['normalized_1000'] | None = Field(
+		default=None,
+		description='Coordinate system used by the LLM. Set to "normalized_1000" when the model returns 0-999 normalized coords.',
+	)
+
 	# Cache of original viewport size for coordinate conversion (set when browser state is captured)
 	_original_viewport_size: tuple[int, int] | None = PrivateAttr(default=None)
 

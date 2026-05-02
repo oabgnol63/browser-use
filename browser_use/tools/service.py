@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 import anyio
 
@@ -47,9 +47,11 @@ from browser_use.tools.utils import get_click_description
 from browser_use.tools.views import (
 	ClickElementAction,
 	ClickElementActionIndexOnly,
+	ClickTarget,
 	CloseTabAction,
 	DoneAction,
 	DragAndDropCoordinateAction,
+	DragAndDropCoordinateActionIndexOnly,
 	ExtractAction,
 	FindElementsAction,
 	GetDropdownOptionsAction,
@@ -58,13 +60,16 @@ from browser_use.tools.views import (
 	HoverElementActionIndexOnly,
 	InputTextAction,
 	MultipleClickCoordinateAction,
+	MultipleClickCoordinateActionIndexOnly,
 	NavigateAction,
 	NoParamsAction,
 	PressAndHoldCoordinateAction,
+	PressAndHoldCoordinateActionIndexOnly,
 	SaveAsPdfAction,
 	ScreenshotAction,
 	ScrollAction,
 	ScrollCoordinateAction,
+	ScrollCoordinateActionIndexOnly,
 	SearchAction,
 	SearchPageAction,
 	SelectDropdownOptionAction,
@@ -77,7 +82,6 @@ from browser_use.tools.views import (
 from browser_use.utils import create_task_with_error_handling, sanitize_surrogates, time_execution_sync
 
 logger = logging.getLogger(__name__)
-
 
 def _sanitize_error_message(error: Exception, max_length: int = 500) -> str:
 	"""
@@ -589,10 +593,29 @@ class Tools(Generic[Context]):
 
 		# Helper function for coordinate conversion
 		def _convert_llm_coordinates_to_viewport(llm_x: int, llm_y: int, browser_session: BrowserSession) -> tuple[int, int]:
-			"""Convert coordinates from LLM screenshot space to original viewport size."""
+			"""Convert coordinates from LLM coordinate space to original viewport size.
+
+			Handles two coordinate systems:
+			- llm_coordinate_system='normalized_1000': model returns 0-999 normalized coords
+			  (Gemini computer-use, or any model in VISION mode). Denormalize directly to viewport.
+			- Default (llm_screenshot_size set): model returns pixel coords in letterboxed
+			  screenshot space (e.g. Claude at 1400x850). Reverse the letterbox transform.
+			"""
 			actual_x, actual_y = llm_x, llm_y
-			
-			if browser_session.llm_screenshot_size and browser_session._original_viewport_size:
+
+			# Gemini uses normalized 0-999 coordinates regardless of image size
+			if browser_session.llm_coordinate_system == 'normalized_1000' and browser_session._original_viewport_size:
+				original_width, original_height = browser_session._original_viewport_size
+				actual_x = int(llm_x / 1000 * original_width)
+				actual_y = int(llm_y / 1000 * original_height)
+
+				logger.info(
+					f'🔄 Converting normalized coordinates: LLM ({llm_x}, {llm_y}) / 1000 '
+					f'→ Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height}'
+				)
+
+			# Claude/others use pixel coordinates in letterboxed screenshot space
+			elif browser_session.llm_screenshot_size and browser_session._original_viewport_size:
 				original_width, original_height = browser_session._original_viewport_size
 				llm_width, llm_height = browser_session.llm_screenshot_size
 				scale = min(llm_width / original_width, llm_height / original_height)
@@ -837,15 +860,68 @@ class Tools(Generic[Context]):
 		self._register_click_action()
 		self._register_hover_action()
 
-		@self.registry.action(
-			'Drag and drop between coordinates.',
-			param_model=DragAndDropCoordinateAction,
-		)
-		async def drag_and_drop_coordinate(params: DragAndDropCoordinateAction, browser_session: BrowserSession):
-			try:
-				start_x, start_y = _convert_llm_coordinates_to_viewport(params.start_x, params.start_y, browser_session)
-				end_x, end_y = _convert_llm_coordinates_to_viewport(params.end_x, params.end_y, browser_session)
+		# ---------------------------------------------------------------------
+		# Hybrid coord-or-index handlers (mirror the click pattern).
+		#
+		# Each tool gets `_X_by_index` and `_X_by_coordinate` helpers stored on `self`,
+		# plus a `_register_X_action()` class method that registers the merged action
+		# only when `_coordinate_clicking_enabled` is True. The merged docstring tells
+		# the LLM to prefer `index` when an interactive element covers the target and
+		# fall back to coordinates for empty space, captcha tiles, or VISION mode.
+		#
+		# Helpers are stored on `self` so the class methods can access them:
+		# - self._get_element_center
+		# - self._convert_llm_coordinates_to_viewport
+		# - self._drag_and_drop_dispatch / _press_and_hold_at / _scroll_at_dispatch
+		# - self._compute_scroll_pixels
+		# - self._build_drag_base_metadata
+		# - self._{drag_and_drop,press_and_hold,scroll_at}_by_{index,coordinate}
+		# - self._multiple_click_resolve_point
+		# ---------------------------------------------------------------------
 
+		async def _get_element_center(index: int, browser_session: BrowserSession) -> tuple[int, int] | None:
+			"""Look up an element by index and return its viewport-space center, or None if missing."""
+			node = await browser_session.get_element_by_index(index)
+			if node is None or node.absolute_position is None:
+				return None
+			rect = node.absolute_position
+			return (int(rect.x + rect.width / 2), int(rect.y + rect.height / 2))
+
+		self._get_element_center = _get_element_center
+		self._convert_llm_coordinates_to_viewport = _convert_llm_coordinates_to_viewport
+
+		# --- drag_and_drop ---------------------------------------------------
+		def _build_drag_base_metadata(
+			params: DragAndDropCoordinateAction,
+			start_x: int, start_y: int, end_x: int, end_y: int,
+			browser_session: BrowserSession,
+		) -> dict[str, Any]:
+			"""Always-populated metadata so the caller can debug failures."""
+			return {
+				'requested_start_index': params.start_index,
+				'requested_start_x': params.start_x,
+				'requested_start_y': params.start_y,
+				'requested_end_index': params.end_index,
+				'requested_end_x': params.end_x,
+				'requested_end_y': params.end_y,
+				'executed_start_x': start_x,
+				'executed_start_y': start_y,
+				'executed_end_x': end_x,
+				'executed_end_y': end_y,
+				'viewport_width': browser_session._original_viewport_size[0] if browser_session._original_viewport_size else None,
+				'viewport_height': browser_session._original_viewport_size[1] if browser_session._original_viewport_size else None,
+				'llm_screenshot_width': browser_session.llm_screenshot_size[0] if browser_session.llm_screenshot_size else None,
+				'llm_screenshot_height': browser_session.llm_screenshot_size[1] if browser_session.llm_screenshot_size else None,
+			}
+
+		async def _drag_and_drop_dispatch(
+			params: DragAndDropCoordinateAction,
+			start_x: int, start_y: int, end_x: int, end_y: int,
+			browser_session: BrowserSession,
+		) -> ActionResult:
+			"""Dispatch the drag event with full metadata on both success and failure paths."""
+			base_metadata = _build_drag_base_metadata(params, start_x, start_y, end_x, end_y, browser_session)
+			try:
 				asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
 				asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
 
@@ -855,81 +931,70 @@ class Tools(Generic[Context]):
 				await event
 				drag_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
 
-				memory = f'Dragged from ({params.start_x}, {params.start_y}) to ({params.end_x}, {params.end_y})'
+				memory = f'Dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})'
 				logger.info(f'🖱️ {memory}')
 				return ActionResult(
 					extracted_content=memory,
 					long_term_memory=memory,
-					metadata={
-						'requested_start_x': params.start_x,
-						'requested_start_y': params.start_y,
-						'requested_end_x': params.end_x,
-						'requested_end_y': params.end_y,
-						'executed_start_x': start_x,
-						'executed_start_y': start_y,
-						'executed_end_x': end_x,
-						'executed_end_y': end_y,
-						'viewport_width': browser_session._original_viewport_size[0] if browser_session._original_viewport_size else None,
-						'viewport_height': browser_session._original_viewport_size[1] if browser_session._original_viewport_size else None,
-						'llm_screenshot_width': browser_session.llm_screenshot_size[0] if browser_session.llm_screenshot_size else None,
-						'llm_screenshot_height': browser_session.llm_screenshot_size[1] if browser_session.llm_screenshot_size else None,
-						'drag_result': drag_metadata,
-					},
+					metadata={**base_metadata, 'drag_result': drag_metadata},
 				)
 			except Exception as e:
 				error_msg = f'Failed to drag and drop: {_sanitize_error_message(e)}'
-				return ActionResult(error=error_msg)
+				return ActionResult(error=error_msg, metadata=base_metadata)
 
-		@self.registry.action(
-			'Click multiple coordinates in sequence. Use to bypass image captchas or click multiple specific points quickly.',
-			param_model=MultipleClickCoordinateAction,
-			modes={Mode.DOM, Mode.VISION},
-			backends={Backend.CDP, Backend.WEBDRIVER},
-		)
-		async def multiple_click_coordinate(params: MultipleClickCoordinateAction, browser_session: BrowserSession):
+		async def _drag_and_drop_by_coordinate(
+			params: DragAndDropCoordinateAction, browser_session: BrowserSession
+		) -> ActionResult:
+			if params.start_x is None or params.start_y is None or params.end_x is None or params.end_y is None:
+				return ActionResult(error='Coordinate drag requires start_x, start_y, end_x, end_y')
+			start_x, start_y = _convert_llm_coordinates_to_viewport(params.start_x, params.start_y, browser_session)
+			end_x, end_y = _convert_llm_coordinates_to_viewport(params.end_x, params.end_y, browser_session)
+			return await _drag_and_drop_dispatch(params, start_x, start_y, end_x, end_y, browser_session)
+
+		async def _drag_and_drop_by_index(
+			params: DragAndDropCoordinateAction, browser_session: BrowserSession
+		) -> ActionResult:
+			if params.start_index is None or params.end_index is None:
+				return ActionResult(error='Index drag requires both start_index and end_index')
+			start = await _get_element_center(params.start_index, browser_session)
+			if start is None:
+				return ActionResult(error=f'start_index {params.start_index} not available')
+			end = await _get_element_center(params.end_index, browser_session)
+			if end is None:
+				return ActionResult(error=f'end_index {params.end_index} not available')
+			return await _drag_and_drop_dispatch(params, start[0], start[1], end[0], end[1], browser_session)
+
+		self._drag_and_drop_dispatch = _drag_and_drop_dispatch
+		self._build_drag_base_metadata = _build_drag_base_metadata
+		self._drag_and_drop_by_index = _drag_and_drop_by_index
+		self._drag_and_drop_by_coordinate = _drag_and_drop_by_coordinate
+
+		# --- multiple_click --------------------------------------------------
+		async def _multiple_click_resolve_point(
+			point: ClickTarget, browser_session: BrowserSession
+		) -> tuple[int, int] | None:
+			"""Resolve a single ClickTarget to viewport coords. Returns None on failure."""
+			if point.index is not None:
+				return await _get_element_center(point.index, browser_session)
+			if point.x is not None and point.y is not None:
+				return _convert_llm_coordinates_to_viewport(point.x, point.y, browser_session)
+			return None
+
+		self._multiple_click_resolve_point = _multiple_click_resolve_point
+
+		# --- press_and_hold --------------------------------------------------
+		async def _press_and_hold_at(
+			actual_x: int, actual_y: int, label: str, browser_session: BrowserSession
+		) -> ActionResult:
 			try:
-				clicked_coords = []
-				for coord in params.coordinates:
-					if len(coord) != 2:
-						continue
-					raw_x, raw_y = coord
-					actual_x, actual_y = _convert_llm_coordinates_to_viewport(raw_x, raw_y, browser_session)
-
-					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
-					event = browser_session.event_bus.dispatch(
-						ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
-					)
-					await event
-					await event.event_result(raise_if_any=True, raise_if_none=False)
-					clicked_coords.append(f'({raw_x}, {raw_y})')
-					await asyncio.sleep(0.3)  # small delay between clicks
-
-				memory = f'Clicked multiple coordinates: {", ".join(clicked_coords)}'
-				logger.info(f'🖱️ {memory}')
-				return ActionResult(extracted_content=memory, long_term_memory=memory)
-			except Exception as e:
-				error_msg = f'Failed to execute multiple clicks: {_sanitize_error_message(e)}'
-				return ActionResult(error=error_msg)
-
-		@self.registry.action(
-			'Press and hold left mouse button at coordinates for 2 seconds, then release. Use to bypass press-and-hold captchas.',
-			param_model=PressAndHoldCoordinateAction,
-			modes={Mode.DOM, Mode.VISION},
-			backends={Backend.CDP},
-		)
-		async def press_and_hold_coordinate(params: PressAndHoldCoordinateAction, browser_session: BrowserSession):
-			try:
-				actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
 				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
 				cdp_session = await browser_session.get_or_create_cdp_session()
 				session_id = cdp_session.session_id
 
-				# Move mouse to target
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 					params={'type': 'mouseMoved', 'x': actual_x, 'y': actual_y}, session_id=session_id
 				)
-				# Press down
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 					params={
 						'type': 'mousePressed',
@@ -942,11 +1007,9 @@ class Tools(Generic[Context]):
 					session_id=session_id,
 				)
 
-				# Hold with periodic move-heartbeats while button is down so sites
-				# that inspect continuous pressed-state events treat this as a real hold.
-				logger.info(f'⏱️ Holding mouse at ({params.x}, {params.y}) for 2.0s...')
 				hold_duration = 10.0
 				heartbeat_interval = 0.2
+				logger.info(f'⏱️ Holding mouse at {label} for {hold_duration:.1f}s...')
 				remaining = hold_duration
 				while remaining > 0:
 					await asyncio.sleep(min(heartbeat_interval, remaining))
@@ -962,7 +1025,6 @@ class Tools(Generic[Context]):
 						session_id=session_id,
 					)
 
-				# Release
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 					params={
 						'type': 'mouseReleased',
@@ -975,70 +1037,115 @@ class Tools(Generic[Context]):
 					session_id=session_id,
 				)
 
-				memory = f'Pressed and held at ({params.x}, {params.y}) for 2.0 seconds'
+				memory = f'Pressed and held at {label} for {hold_duration:.1f} seconds'
 				logger.info(f'🖱️ {memory}')
-				return ActionResult(extracted_content=memory, long_term_memory=memory)
+				return ActionResult(
+					extracted_content=memory,
+					long_term_memory=memory,
+					metadata={'executed_x': actual_x, 'executed_y': actual_y},
+				)
 			except Exception as e:
-				error_msg = f'Failed to press and hold at coordinates: {_sanitize_error_message(e)}'
-				return ActionResult(error=error_msg)
+				error_msg = f'Failed to press and hold at {label}: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg, metadata={'executed_x': actual_x, 'executed_y': actual_y})
 
-		@self.registry.action(
-			'Scroll at specific coordinates.',
-			param_model=ScrollCoordinateAction,
-		)
-		async def scroll_coordinate(params: ScrollCoordinateAction, browser_session: BrowserSession):
+		async def _press_and_hold_by_coordinate(
+			params: PressAndHoldCoordinateAction, browser_session: BrowserSession
+		) -> ActionResult:
+			if params.x is None or params.y is None:
+				return ActionResult(error='Coordinate press_and_hold requires both x and y')
+			actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
+			return await _press_and_hold_at(actual_x, actual_y, f'({params.x}, {params.y})', browser_session)
+
+		async def _press_and_hold_by_index(
+			params: PressAndHoldCoordinateAction, browser_session: BrowserSession
+		) -> ActionResult:
+			if params.index is None:
+				return ActionResult(error='Index press_and_hold requires index')
+			center = await _get_element_center(params.index, browser_session)
+			if center is None:
+				return ActionResult(error=f'index {params.index} not available')
+			return await _press_and_hold_at(center[0], center[1], f'index={params.index}', browser_session)
+
+		self._press_and_hold_at = _press_and_hold_at
+		self._press_and_hold_by_index = _press_and_hold_by_index
+		self._press_and_hold_by_coordinate = _press_and_hold_by_coordinate
+
+		# --- scroll_at -------------------------------------------------------
+		async def _scroll_at_dispatch(
+			actual_x: int, actual_y: int, direction: Literal['up', 'down', 'left', 'right'], pixels: int, label: str, pages: float,
+			browser_session: BrowserSession,
+		) -> ActionResult:
+			base_metadata = {
+				'executed_x': actual_x,
+				'executed_y': actual_y,
+				'direction': direction,
+				'pixels': pixels,
+				'pages': pages,
+			}
 			try:
-				actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
-
-				# Calculate viewport height for pixels
-				try:
-					cdp_session = await browser_session.get_or_create_cdp_session()
-					metrics = await cdp_session.cdp_client.send.Page.getLayoutMetrics(session_id=cdp_session.session_id)
-					viewport_height = int(
-						metrics.get('cssVisualViewport', {}).get('clientHeight')
-						or metrics.get('cssLayoutViewport', {}).get('clientHeight', 1000)
-					)
-				except Exception:
-					viewport_height = 1000
-
-				pixels = int(params.pages * viewport_height)
-				direction = 'down' if params.down else 'up'
-
 				event = browser_session.event_bus.dispatch(
 					ScrollCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, direction=direction, amount=pixels)
 				)
 				await event
 				await event.event_result(raise_if_any=True, raise_if_none=False)
 
-				memory = f'Scrolled {direction} {params.pages} pages at ({params.x}, {params.y})'
+				memory = f'Scrolled {direction} {pages} pages at {label}'
 				logger.info(f'📜 {memory}')
-				return ActionResult(extracted_content=memory, long_term_memory=memory)
+				return ActionResult(extracted_content=memory, long_term_memory=memory, metadata=base_metadata)
 			except Exception as e:
-				error_msg = f'Failed to scroll at coordinates: {_sanitize_error_message(e)}'
-				return ActionResult(error=error_msg)
+				error_msg = f'Failed to scroll at {label}: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg, metadata=base_metadata)
 
-		@self.registry.action(
-			'Hover at specific coordinates.',
-			param_model=HoverCoordinateAction,
-		)
-		async def hover_coordinate(params: HoverCoordinateAction, browser_session: BrowserSession):
+		async def _compute_scroll_pixels(pages: float, browser_session: BrowserSession) -> int:
 			try:
-				actual_x, actual_y = _convert_llm_coordinates_to_viewport(
-					params.coordinate_x, params.coordinate_y, browser_session
+				cdp_session = await browser_session.get_or_create_cdp_session()
+				metrics = await cdp_session.cdp_client.send.Page.getLayoutMetrics(session_id=cdp_session.session_id)
+				viewport_height = int(
+					metrics.get('cssVisualViewport', {}).get('clientHeight')
+					or metrics.get('cssLayoutViewport', {}).get('clientHeight', 1000)
 				)
+			except Exception:
+				viewport_height = 1000
+			return int(pages * viewport_height)
 
-				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+		async def _scroll_at_by_coordinate(
+			params: ScrollCoordinateAction, browser_session: BrowserSession
+		) -> ActionResult:
+			if params.x is None or params.y is None:
+				return ActionResult(error='Coordinate scroll requires both x and y')
+			actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
+			pixels = await _compute_scroll_pixels(params.pages, browser_session)
+			direction: Literal['up', 'down', 'left', 'right'] = 'down' if params.down else 'up'
+			return await _scroll_at_dispatch(
+				actual_x, actual_y, direction, pixels, f'({params.x}, {params.y})', params.pages, browser_session
+			)
 
-				event = browser_session.event_bus.dispatch(HoverCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y))
-				await event
-				await event.event_result(raise_if_any=True, raise_if_none=False)
+		async def _scroll_at_by_index(
+			params: ScrollCoordinateAction, browser_session: BrowserSession
+		) -> ActionResult:
+			if params.index is None:
+				return ActionResult(error='Index scroll requires index')
+			center = await _get_element_center(params.index, browser_session)
+			if center is None:
+				return ActionResult(error=f'index {params.index} not available')
+			pixels = await _compute_scroll_pixels(params.pages, browser_session)
+			direction: Literal['up', 'down', 'left', 'right'] = 'down' if params.down else 'up'
+			return await _scroll_at_dispatch(
+				center[0], center[1], direction, pixels, f'index={params.index}', params.pages, browser_session
+			)
 
-				memory = f'Hovered at ({params.coordinate_x}, {params.coordinate_y})'
-				logger.info(f'🖱️ {memory}')
-				return ActionResult(extracted_content=memory, long_term_memory=memory)
-			except Exception as e:
-				error_msg = f'Failed to hover at coordinates: {_sanitize_error_message(e)}'
-				return ActionResult(error=error_msg)
+		self._scroll_at_dispatch = _scroll_at_dispatch
+		self._compute_scroll_pixels = _compute_scroll_pixels
+		self._scroll_at_by_index = _scroll_at_by_index
+		self._scroll_at_by_coordinate = _scroll_at_by_coordinate
+
+		# Register the four hybrid coord-capable actions. Like _register_click_action,
+		# these methods register an index-only variant when _coordinate_clicking_enabled
+		# is False, and the full hybrid schema when set_coordinate_clicking(True) re-runs them.
+		self._register_drag_and_drop_action()
+		self._register_multiple_click_action()
+		self._register_press_and_hold_action()
+		self._register_scroll_at_action()
 
 		@self.registry.action(
 			'Swipe between coordinates. Use this to simulate a swipe or flick gesture, such as scrolling a carousel, map, or mobile view.',
@@ -2444,17 +2551,232 @@ Validated Code (after quote fixing):
 			async def hover(params: HoverElementActionIndexOnly, browser_session: BrowserSession):
 				return await self._hover_by_index(params, browser_session)
 
+	def _register_drag_and_drop_action(self) -> None:
+		"""Register the drag_and_drop action — hybrid when coord-clicking on, index-only otherwise."""
+		name = 'drag_and_drop'
+		if name in self.registry.registry.actions:
+			del self.registry.registry.actions[name]
+
+		if not self._coordinate_clicking_enabled:
+			@self.registry.action(
+				'Drag an element by index to a destination element by index.',
+				param_model=DragAndDropCoordinateActionIndexOnly,
+				modes={Mode.DOM},
+				backends={Backend.CDP, Backend.WEBDRIVER}
+			)
+			async def drag_and_drop(params: DragAndDropCoordinateActionIndexOnly, browser_session: BrowserSession):
+				hybrid_params = DragAndDropCoordinateAction(
+					start_index=params.start_index, end_index=params.end_index
+				)
+				return await self._drag_and_drop_by_index(hybrid_params, browser_session)
+			return
+
+		@self.registry.action(
+			(
+				'Drag from a start point to an end point. For each endpoint, provide either '
+				'`*_index` (preferred when an interactive element covers the point) or '
+				'`*_x` and `*_y` coordinates. Endpoints can mix index and coordinates freely '
+				'(e.g. drag a button by index to an empty area by coordinates).'
+			),
+			param_model=DragAndDropCoordinateAction,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP, Backend.WEBDRIVER}
+		)
+		async def drag_and_drop(params: DragAndDropCoordinateAction, browser_session: BrowserSession):
+			start_has_idx = params.start_index is not None
+			end_has_idx = params.end_index is not None
+			start_has_coord = params.start_x is not None and params.start_y is not None
+			end_has_coord = params.end_x is not None and params.end_y is not None
+
+			if not (start_has_idx or start_has_coord):
+				return ActionResult(error='Provide either start_index or (start_x, start_y)')
+			if not (end_has_idx or end_has_coord):
+				return ActionResult(error='Provide either end_index or (end_x, end_y)')
+
+			if start_has_idx and end_has_idx:
+				return await self._drag_and_drop_by_index(params, browser_session)
+			if start_has_coord and end_has_coord and not start_has_idx and not end_has_idx:
+				return await self._drag_and_drop_by_coordinate(params, browser_session)
+
+			# Mixed: resolve any index endpoint to viewport coords, then dispatch.
+			if start_has_idx:
+				start = await self._get_element_center(params.start_index, browser_session)  # type: ignore[arg-type]
+				if start is None:
+					return ActionResult(error=f'start_index {params.start_index} not available')
+				start_x, start_y = start
+			else:
+				start_x, start_y = self._convert_llm_coordinates_to_viewport(
+					params.start_x, params.start_y, browser_session  # type: ignore[arg-type]
+				)
+			if end_has_idx:
+				end = await self._get_element_center(params.end_index, browser_session)  # type: ignore[arg-type]
+				if end is None:
+					return ActionResult(error=f'end_index {params.end_index} not available')
+				end_x, end_y = end
+			else:
+				end_x, end_y = self._convert_llm_coordinates_to_viewport(
+					params.end_x, params.end_y, browser_session  # type: ignore[arg-type]
+				)
+			return await self._drag_and_drop_dispatch(params, start_x, start_y, end_x, end_y, browser_session)
+
+	def _register_multiple_click_action(self) -> None:
+		"""Register the multiple_click action — hybrid when coord-clicking on, index-only otherwise."""
+		name = 'multiple_click'
+		if name in self.registry.registry.actions:
+			del self.registry.registry.actions[name]
+
+		if not self._coordinate_clicking_enabled:
+			@self.registry.action(
+				'Click multiple elements by index in sequence.',
+				param_model=MultipleClickCoordinateActionIndexOnly,
+				modes={Mode.DOM},
+				backends={Backend.CDP, Backend.WEBDRIVER},
+			)
+			async def multiple_click(
+				params: MultipleClickCoordinateActionIndexOnly, browser_session: BrowserSession
+			):
+				try:
+					clicked_labels: list[str] = []
+					for idx in params.indices:
+						target = ClickTarget(index=idx)
+						resolved = await self._multiple_click_resolve_point(target, browser_session)
+						if resolved is None:
+							clicked_labels.append(f'(skipped: index {idx} unavailable)')
+							continue
+						actual_x, actual_y = resolved
+						asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+						event = browser_session.event_bus.dispatch(
+							ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
+						)
+						await event
+						await event.event_result(raise_if_any=True, raise_if_none=False)
+						clicked_labels.append(f'index={idx}→({actual_x},{actual_y})')
+						await asyncio.sleep(0.3)
+					memory = f'Clicked multiple targets: {", ".join(clicked_labels)}'
+					logger.info(f'🖱️ {memory}')
+					return ActionResult(extracted_content=memory, long_term_memory=memory)
+				except Exception as e:
+					return ActionResult(error=f'Failed to execute multiple clicks: {_sanitize_error_message(e)}')
+			return
+
+		@self.registry.action(
+			(
+				'Click multiple targets in sequence. Each target is either {"index": N} '
+				'(preferred when an element covers the point) or {"x": X, "y": Y}. '
+				'Use to bypass image captchas, click multiple specific points, or click a '
+				'mix of indexed elements and empty-space coordinates.'
+			),
+			param_model=MultipleClickCoordinateAction,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP, Backend.WEBDRIVER},
+		)
+		async def multiple_click(params: MultipleClickCoordinateAction, browser_session: BrowserSession):
+			try:
+				clicked_labels: list[str] = []
+				for point in params.points:
+					resolved = await self._multiple_click_resolve_point(point, browser_session)
+					if resolved is None:
+						clicked_labels.append(f'(skipped: invalid target {point.model_dump(exclude_none=True)})')
+						continue
+					actual_x, actual_y = resolved
+
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+					event = browser_session.event_bus.dispatch(
+						ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
+					)
+					await event
+					await event.event_result(raise_if_any=True, raise_if_none=False)
+					if point.index is not None:
+						clicked_labels.append(f'index={point.index}→({actual_x},{actual_y})')
+					else:
+						clicked_labels.append(f'({actual_x},{actual_y})')
+					await asyncio.sleep(0.3)
+
+				memory = f'Clicked multiple targets: {", ".join(clicked_labels)}'
+				logger.info(f'🖱️ {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				error_msg = f'Failed to execute multiple clicks: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
+
+	def _register_press_and_hold_action(self) -> None:
+		"""Register the press_and_hold action — hybrid when coord-clicking on, index-only otherwise."""
+		name = 'press_and_hold'
+		if name in self.registry.registry.actions:
+			del self.registry.registry.actions[name]
+
+		if not self._coordinate_clicking_enabled:
+			@self.registry.action(
+				'Press and hold left mouse button on an element by index for several seconds, then release.',
+				param_model=PressAndHoldCoordinateActionIndexOnly,
+				modes={Mode.DOM},
+				backends={Backend.CDP},
+			)
+			async def press_and_hold(
+				params: PressAndHoldCoordinateActionIndexOnly, browser_session: BrowserSession
+			):
+				hybrid_params = PressAndHoldCoordinateAction(index=params.index)
+				return await self._press_and_hold_by_index(hybrid_params, browser_session)
+			return
+
+		@self.registry.action(
+			(
+				'Press and hold left mouse button at a target for several seconds, then release. '
+				'Provide either `index` (preferred when element covers target) or `x`+`y` coordinates. '
+				'Use to bypass press-and-hold captchas.'
+			),
+			param_model=PressAndHoldCoordinateAction,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP},
+		)
+		async def press_and_hold(params: PressAndHoldCoordinateAction, browser_session: BrowserSession):
+			if params.index is not None:
+				return await self._press_and_hold_by_index(params, browser_session)
+			if params.x is not None and params.y is not None:
+				return await self._press_and_hold_by_coordinate(params, browser_session)
+			return ActionResult(error='Provide either index or (x, y)')
+
+	def _register_scroll_at_action(self) -> None:
+		"""Register the scroll_at action — hybrid when coord-clicking on, index-only otherwise."""
+		name = 'scroll_at'
+		if name in self.registry.registry.actions:
+			del self.registry.registry.actions[name]
+
+		if not self._coordinate_clicking_enabled:
+			@self.registry.action(
+				'Scroll at a specific element by index. Use when scroll location matters (e.g. inside a specific scrollable region).',
+				param_model=ScrollCoordinateActionIndexOnly,
+				modes={Mode.DOM},
+			)
+			async def scroll_at(params: ScrollCoordinateActionIndexOnly, browser_session: BrowserSession):
+				hybrid_params = ScrollCoordinateAction(index=params.index, down=params.down, pages=params.pages)
+				return await self._scroll_at_by_index(hybrid_params, browser_session)
+			return
+
+		@self.registry.action(
+			(
+				'Scroll at a specific target. Provide either `index` (preferred when an element '
+				'covers the point) or `x`+`y` coordinates. Use this when scroll location matters '
+				'(e.g. inside a specific scrollable region or hovering a particular widget).'
+			),
+			param_model=ScrollCoordinateAction,
+			modes={Mode.DOM, Mode.VISION},
+		)
+		async def scroll_at(params: ScrollCoordinateAction, browser_session: BrowserSession):
+			if params.index is not None:
+				return await self._scroll_at_by_index(params, browser_session)
+			if params.x is not None and params.y is not None:
+				return await self._scroll_at_by_coordinate(params, browser_session)
+			return ActionResult(error='Provide either index or (x, y)')
+
 	def set_coordinate_clicking(self, enabled: bool) -> None:
 		"""Enable or disable coordinate-based clicking.
 
 		When enabled, the click action accepts both index and coordinate parameters.
 		When disabled (default), only index-based clicking is available.
 
-		This is automatically enabled for models that support coordinate clicking:
-		- claude-sonnet-4-5
-		- claude-opus-4-5
-		- gemini-3-pro
-		- browser-use/* models
+		Auto-detection of coord-capable models lives in Agent.__init__ — see
+		`supports_coordinate_clicking` there for the current model list.
 
 		Args:
 			enabled: True to enable coordinate clicking, False to disable
@@ -2465,6 +2787,14 @@ Validated Code (after quote fixing):
 		self._coordinate_clicking_enabled = enabled
 		self._register_click_action()
 		self._register_hover_action()
+		# Hybrid coord-or-index actions: when coord clicking is enabled, register the full
+		# hybrid schema (index + coordinates). Otherwise register an index-only variant so
+		# models without coord output (e.g. gemini-2.5-flash) can still use them via index.
+		self._register_drag_and_drop_action()
+		self._register_multiple_click_action()
+		self._register_press_and_hold_action()
+		self._register_scroll_at_action()
+
 		logger.debug(f'Coordinate clicking {"enabled" if enabled else "disabled"}')
 
 	# Act --------------------------------------------------------------------

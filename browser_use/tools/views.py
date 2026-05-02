@@ -154,21 +154,61 @@ class HoverCoordinateAction(BaseModel):
 
 
 class DragAndDropCoordinateAction(BaseModel):
-	start_x: int = Field(description='Start horizontal coordinate relative to viewport left edge')
-	start_y: int = Field(description='Start vertical coordinate relative to viewport top edge')
-	end_x: int = Field(description='End horizontal coordinate relative to viewport left edge')
-	end_y: int = Field(description='End vertical coordinate relative to viewport top edge')
+	"""Hybrid: provide either index OR (x, y) for each endpoint. Index takes priority."""
+
+	start_index: int | None = Field(default=None, ge=1, description='Element index for drag start (preferred when available)')
+	start_x: int | None = Field(default=None, description='Start horizontal coordinate relative to viewport left edge')
+	start_y: int | None = Field(default=None, description='Start vertical coordinate relative to viewport top edge')
+	end_index: int | None = Field(default=None, ge=1, description='Element index for drag end (preferred when available)')
+	end_x: int | None = Field(default=None, description='End horizontal coordinate relative to viewport left edge')
+	end_y: int | None = Field(default=None, description='End vertical coordinate relative to viewport top edge')
+
+
+class DragAndDropCoordinateActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='DragAndDropCoordinateAction')
+
+	start_index: int = Field(ge=1, description='Element index for drag start')
+	end_index: int = Field(ge=1, description='Element index for drag end')
+
+
+class ClickTarget(BaseModel):
+	"""A single click target — either an element index OR an (x, y) coordinate."""
+
+	index: int | None = Field(default=None, ge=1, description='Element index (preferred when available)')
+	x: int | None = Field(default=None, description='Horizontal coordinate relative to viewport left edge')
+	y: int | None = Field(default=None, description='Vertical coordinate relative to viewport top edge')
 
 
 class MultipleClickCoordinateAction(BaseModel):
-	coordinates: list[list[int]] = Field(
-		description='List of [x, y] coordinates to click in sequence. Each sublist MUST contain exactly 2 integers: x and y.'
+	"""List of click targets. Each item is either {index: N} or {x: X, y: Y}."""
+
+	points: list[ClickTarget] = Field(
+		description=(
+			'List of click targets in sequence. Each item is either {"index": N} or {"x": X, "y": Y}. '
+			'Prefer index when an interactive element covers the target. Use coordinates for empty space '
+			'or captcha tiles where no DOM element exists.'
+		)
 	)
 
 
+class MultipleClickCoordinateActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='MultipleClickCoordinateAction')
+
+	indices: list[int] = Field(description='List of element indices to click in sequence')
+
+
 class PressAndHoldCoordinateAction(BaseModel):
-	x: int = Field(description='Horizontal coordinate relative to viewport left edge')
-	y: int = Field(description='Vertical coordinate relative to viewport top edge')
+	"""Hybrid: provide either index OR (x, y). Index takes priority."""
+
+	index: int | None = Field(default=None, ge=1, description='Element index (preferred when available)')
+	x: int | None = Field(default=None, description='Horizontal coordinate relative to viewport left edge')
+	y: int | None = Field(default=None, description='Vertical coordinate relative to viewport top edge')
+
+
+class PressAndHoldCoordinateActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='PressAndHoldCoordinateAction')
+
+	index: int = Field(ge=1, description='Element index')
 
 
 class SwipeCoordinateAction(BaseModel):
@@ -179,8 +219,19 @@ class SwipeCoordinateAction(BaseModel):
 
 
 class ScrollCoordinateAction(BaseModel):
-	x: int = Field(description='Horizontal coordinate to scroll at relative to viewport left edge')
-	y: int = Field(description='Vertical coordinate to scroll at relative to viewport top edge')
+	"""Hybrid: provide either index OR (x, y) to scroll at a specific element/point. Index takes priority."""
+
+	index: int | None = Field(default=None, ge=1, description='Element index to scroll at (preferred when available)')
+	x: int | None = Field(default=None, description='Horizontal coordinate to scroll at relative to viewport left edge')
+	y: int | None = Field(default=None, description='Vertical coordinate to scroll at relative to viewport top edge')
+	down: bool = Field(default=True, description='Scroll down (True) or up (False)')
+	pages: float = Field(default=1.0, description='Number of pages to scroll.')
+
+
+class ScrollCoordinateActionIndexOnly(BaseModel):
+	model_config = ConfigDict(title='ScrollCoordinateAction')
+
+	index: int = Field(ge=1, description='Element index to scroll at')
 	down: bool = Field(default=True, description='Scroll down (True) or up (False)')
 	pages: float = Field(default=1.0, description='Number of pages to scroll.')
 

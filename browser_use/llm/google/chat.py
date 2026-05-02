@@ -45,6 +45,12 @@ def _remove_placeholders(data: Any) -> Any:
 	return data
 
 
+GEMINI_COMPUTER_USE_MODELS: tuple[str, ...] = (
+	'gemini-3-flash-preview',
+	'gemini-2.5-computer-use-preview-10-2025',
+)
+
+
 VerifiedGeminiModels = Literal[
 	'gemini-2.0-flash',
 	'gemini-2.0-flash-exp',
@@ -152,6 +158,12 @@ class ChatGoogle(BaseChatModel):
 	def logger(self) -> logging.Logger:
 		"""Get logger for this chat instance"""
 		return logging.getLogger(f'browser_use.llm.google.{self.model}')
+
+	@property
+	def _supports_computer_use_tool(self) -> bool:
+		"""True for Gemini models that accept the native computer-use tool (per Gemini docs)."""
+		model_lower = str(self.model).lower()
+		return any(m in model_lower for m in GEMINI_COMPUTER_USE_MODELS)
 
 	def _get_client_params(self) -> dict[str, Any]:
 		"""Prepare client parameters dictionary."""
@@ -418,15 +430,16 @@ class ChatGoogle(BaseChatModel):
 
 				else:
 					# Handle structured output
-					# Inject Gemini's built-in computer-use tool to enable spatial reasoning capabilities
-					# This is needed in both DOM mode and vision-only mode so the LLM can use coordinates.
-					self.logger.debug(f'🔧 Injecting native computer-use tools while maintaining {output_format.__name__} schema')
-					computer_use_tool = types.Tool(
-						computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER)
-					)
-					if 'tools' not in config:
-						config['tools'] = []
-					config['tools'].append(computer_use_tool)
+					if self._supports_computer_use_tool:
+						self.logger.debug(
+							f'🔧 Injecting native computer-use tool while maintaining {output_format.__name__} schema'
+						)
+						computer_use_tool = types.Tool(
+							computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER)
+						)
+						if 'tools' not in config:
+							config['tools'] = []
+						config['tools'].append(computer_use_tool)
 
 					if self.supports_structured_output:
 						# Use native JSON mode

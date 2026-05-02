@@ -342,7 +342,17 @@ class Registry(Generic[Context]):
 				platforms=platforms,
 				backends=backends,
 			)
+			existing = self.registry.actions.get(func.__name__)
 			self.registry.actions[func.__name__] = action
+			if existing is not None:
+				logger.debug(
+					f'Re-registered action "{func.__name__}" — modes={modes}, platforms={platforms}, backends={backends} '
+					f'(replaced modes={existing.modes}, backends={existing.backends})'
+				)
+			else:
+				logger.debug(
+					f'Registered action "{func.__name__}" — modes={modes}, platforms={platforms}, backends={backends}'
+				)
 
 			# Return the normalized function so it can be called with kwargs
 			return normalized_func

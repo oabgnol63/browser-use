@@ -12,7 +12,7 @@ You have been given access to computer-use tools. DO NOT CALL THEM NATIVELY. Ins
 - To type text: First `click` on the field, then in the SAME action array add a `send_keys` action. For example: `[{{"click": {{"coordinate_x": 500, "coordinate_y": 250}}}}, {{"send_keys": {{"keys": "Hello World"}}}}]`
 - To scroll the main page: `{{"scroll": {{"down": true, "pages": 1.0}}}}`
 - To scroll up: `{{"scroll": {{"down": false, "pages": 1.0}}}}`
-- To scroll at coordinates: `{{"scroll_coordinate": {{"x": 500, "y": 500, "down": true, "pages": 1.0}}}}`
+- To scroll at coordinates: `{{"scroll_at": {{"x": 500, "y": 500, "down": true, "pages": 1.0}}}}`
 - `pages` is viewport-relative. `1.0` means about one screenful; `0.5` means half a screenful.
 - Call `done` when the task is fully completed or impossible to continue. `{{"done": {{"text": "Task finished."}}}}`
 - Keep `done` as a seperated action. Never call it with other actions together

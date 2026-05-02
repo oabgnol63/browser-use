@@ -242,21 +242,28 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		model_name = getattr(llm, 'model', '')
 		model_name_lower = model_name.lower() if isinstance(model_name, str) else ''
-		supports_coordinate_clicking = any(
-			pattern in model_name_lower for pattern in ['claude-sonnet-4', 'claude-opus-4', 'gemini-3-flash-preview', 'browser-use/']
-		) or use_native_computer_use
 
-		# Auto-configure llm_screenshot_size for Claude Sonnet models
+		# Gemini models that support the native computer-use tool (per Gemini docs).
+		# Coordinate clicking on Gemini REQUIRES the computer-use tool to be enabled.
+		from browser_use.llm.google.chat import GEMINI_COMPUTER_USE_MODELS
+
+		is_gemini_coord_model = any(m in model_name_lower for m in GEMINI_COMPUTER_USE_MODELS)
+		is_claude_coord_model = any(m in model_name_lower for m in ('claude-sonnet-4', 'claude-opus-4'))
+
+		supports_coordinate_clicking = (
+			is_gemini_coord_model
+			or is_claude_coord_model
+			or 'browser-use/' in model_name_lower
+			or use_native_computer_use
+		)
+
+		# Auto-configure llm_screenshot_size for Claude Sonnet models (letterbox math expects this).
+		# Gemini intentionally NOT auto-resized — per docs Gemini works at any resolution and returns
+		# normalized 0-999 coords regardless of input image size.
 		if llm_screenshot_size is None:
 			if isinstance(model_name, str) and model_name_lower.startswith('claude-sonnet'):
 				llm_screenshot_size = (1400, 850)
 				logger.info('🖼️  Auto-configured LLM screenshot size for Claude Sonnet: 1400x850')
-
-		# Force 1000x1000 screenshot for coordinate-capable models so coordinate tools
-		# always operate against a consistent image plane, then denormalize to viewport.
-		if supports_coordinate_clicking and llm_screenshot_size != (1000, 1000):
-			llm_screenshot_size = (1000, 1000)
-			logger.info('🖼️  Auto-configured LLM screenshot size for coordinate-clicking: 1000x1000')
 
 		if page_extraction_llm is None:
 			page_extraction_llm = llm
@@ -307,6 +314,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			browser_profile=browser_profile,
 			id=uuid7str()[:-4] + self.id[-4:],  # re-use the same 4-char suffix so they show up together in logs
 		)
+
+		# Coordinate system handling:
+		# - Gemini coord-clicking models: ChatGoogle auto-injects computer-use tool by model name;
+		#   Gemini returns 0-999 normalized coords → denormalize to viewport
+		# - VISION mode (use_native_computer_use): always use normalized 0-999, regardless of model.
+		#   Enforced in code so we don't depend on the system prompt to instruct 1000x1000 grid.
+		# - Claude coord-clicking (DOM): returns image-space coords; existing letterbox math handles it
+		if is_gemini_coord_model or use_native_computer_use:
+			self.browser_session.llm_coordinate_system = 'normalized_1000'
+			logger.info('🎯 Using normalized 0-999 coordinate system')
 
 		self._demo_mode_enabled: bool = bool(self.browser_profile.demo_mode) if self.browser_session else False
 		if self._demo_mode_enabled and getattr(self.browser_profile, 'headless', False):
