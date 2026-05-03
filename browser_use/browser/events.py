@@ -178,7 +178,7 @@ class ClickMultipleElementsEvent(BaseEvent[dict]):
 
 	indices: list[int]
 
-	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleElementsEvent', 15.0))  # seconds
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleElementsEvent', 60.0))  # seconds
 
 
 class ClickMultipleCoordinatesEvent(BaseEvent[dict]):
@@ -186,7 +186,7 @@ class ClickMultipleCoordinatesEvent(BaseEvent[dict]):
 
 	coordinates: list[tuple[int, int]]
 
-	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleCoordinatesEvent', 15.0))  # seconds
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleCoordinatesEvent', 60.0))  # seconds
 
 
 class PressAndHoldElementEvent(ElementSelectedEvent[dict]):

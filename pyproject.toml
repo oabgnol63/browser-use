@@ -46,7 +46,6 @@ dependencies = [
     "markdownify==1.2.2",
     "python-docx==1.2.0",
     "browser-use-sdk==2.0.15",
-    "litellm>=1.82.2",
     "selenium==4.41.0",
     "opencv-python==4.13.0.92",
 ]

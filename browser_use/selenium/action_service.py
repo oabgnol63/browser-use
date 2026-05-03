@@ -495,7 +495,7 @@ class SeleniumActionService:
 
     async def drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int) -> dict:
         """
-        Drag from one viewport coordinate to another using desktop pointer actions.
+        Drag from one viewport coordinate to another using ActionChains w3c_actions.
 
         Args:
             start_x: Start X coordinate
@@ -510,22 +510,35 @@ class SeleniumActionService:
 
         try:
             def do_drag():
-                action_builder = ActionBuilder(self.driver)
-                action_builder.pointer_action.move_to_location(start_x, start_y)
-                action_builder.pointer_action.pause(random.uniform(0.05, 0.15))
-                action_builder.pointer_action.pointer_down()
-                action_builder.pointer_action.pause(random.uniform(0.2, 0.35))
-
-                steps = 6
+                actions = ActionChains(self.driver)
+                pointer = actions.w3c_actions.pointer_action
+                
+                pointer.move_to_location(start_x, start_y)
+                pointer.pointer_down()
+                pointer.pause(0.5)
+                
+                # Move in smaller increments with jitter
+                steps = 15
                 for step in range(1, steps + 1):
                     x = int(start_x + (end_x - start_x) * (step / steps))
                     y = int(start_y + (end_y - start_y) * (step / steps))
-                    action_builder.pointer_action.move_to_location(x, y)
-                    action_builder.pointer_action.pause(random.uniform(0.02, 0.05))
+                    
+                    # Add tiny jitter to bypass bot detection
+                    jitter_x = random.randint(-2, 2) if step < steps else 0
+                    jitter_y = random.randint(-2, 2) if step < steps else 0
+                    
+                    pointer.move_to_location(x + jitter_x, y + jitter_y)
+                    pointer.pause(random.uniform(0.02, 0.08))
+                
+                pointer.pause(0.5)
+                pointer.pointer_up()
+                
+                actions.perform()
 
-                action_builder.pointer_action.pause(random.uniform(0.08, 0.15))
-                action_builder.pointer_action.pointer_up()
-                action_builder.perform()
+                try:
+                    ActionChains(self.driver).reset_actions()
+                except Exception:
+                    pass
 
             await asyncio.get_event_loop().run_in_executor(None, do_drag)
 
@@ -535,11 +548,34 @@ class SeleniumActionService:
                 'start_y': start_y,
                 'end_x': end_x,
                 'end_y': end_y,
-                'method': 'selenium-pointer-drag',
+                'method': 'selenium-w3c-drag',
             }
         except Exception as e:
             self.logger.error(f'Drag and drop failed: {e}')
             raise
+
+    async def press_and_hold_coordinate(self, x: int, y: int) -> dict:
+        """Press and hold at specific coordinates."""
+        self.logger.debug(f'Press and hold at coordinates: ({x}, {y})')
+        try:
+            def do_press_and_hold():
+                action_builder = ActionBuilder(self.driver)
+                action_builder.pointer_action.move_to_location(x, y)
+                action_builder.pointer_action.pointer_down()
+                action_builder.pointer_action.pause(10.0)
+                action_builder.pointer_action.pointer_up()
+                action_builder.perform()
+
+            await asyncio.get_event_loop().run_in_executor(None, do_press_and_hold)
+            return {'success': True, 'x': x, 'y': y}
+        except Exception as e:
+            self.logger.error(f'Coordinate press and hold failed: {e}')
+            raise
+
+    async def swipe_coordinate(self, start_x: int, start_y: int, end_x: int, end_y: int) -> dict:
+        """Swipe between coordinates."""
+        self.logger.debug(f'Swiping from ({start_x}, {start_y}) to ({end_x}, {end_y})')
+        return await self.drag_and_drop(start_x, start_y, end_x, end_y)
 
     async def type_text(
         self,

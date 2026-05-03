@@ -14,23 +14,30 @@ from browser_use.browser.events import (
     BrowserStopEvent,
     ClickCoordinateEvent,
     ClickElementEvent,
+    ClickMultipleElementsEvent,
+    ClickMultipleCoordinatesEvent,
     CloseTabEvent,
     DragAndDropCoordinateEvent,
+    DragAndDropElementEvent,
     GoBackEvent,
     GoForwardEvent,
     HoverCoordinateEvent,
     HoverElementEvent,
     NavigateToUrlEvent,
+    PressAndHoldCoordinateEvent,
+    PressAndHoldElementEvent,
     RefreshEvent,
     ScrollCoordinateEvent,
     ScrollEvent,
     SendKeysEvent,
+    SwipeCoordinateEvent,
     SwitchTabEvent,
     TypeTextEvent,
+    _get_timeout,
 )
 from browser_use.browser.python_highlights import create_highlighted_screenshot_async
 from browser_use.browser.session import BrowserSession
-from browser_use.browser.views import BrowserStateSummary, TabInfo
+from browser_use.browser.views import BrowserStateSummary, TabInfo, BrowserError
 from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
 from browser_use.selenium.session import SeleniumSession
 
@@ -76,9 +83,12 @@ class SeleniumBrowserSession(BrowserSession):
         BaseWatchdog.attach_handler_to_session(self, BrowserStopEvent, self.on_BrowserStopEvent)
         BaseWatchdog.attach_handler_to_session(self, NavigateToUrlEvent, self.on_NavigateToUrlEvent)
         BaseWatchdog.attach_handler_to_session(self, ClickElementEvent, self.on_ClickElementEvent)
+        BaseWatchdog.attach_handler_to_session(self, ClickMultipleElementsEvent, self.on_ClickMultipleElementsEvent)
         BaseWatchdog.attach_handler_to_session(self, HoverElementEvent, self.on_HoverElementEvent)
         BaseWatchdog.attach_handler_to_session(self, ClickCoordinateEvent, self.on_ClickCoordinateEvent)
+        BaseWatchdog.attach_handler_to_session(self, ClickMultipleCoordinatesEvent, self.on_ClickMultipleCoordinatesEvent)
         BaseWatchdog.attach_handler_to_session(self, DragAndDropCoordinateEvent, self.on_DragAndDropCoordinateEvent)
+        BaseWatchdog.attach_handler_to_session(self, DragAndDropElementEvent, self.on_DragAndDropElementEvent)
         BaseWatchdog.attach_handler_to_session(self, HoverCoordinateEvent, self.on_HoverCoordinateEvent)
         BaseWatchdog.attach_handler_to_session(self, ScrollCoordinateEvent, self.on_ScrollCoordinateEvent)
         BaseWatchdog.attach_handler_to_session(self, TypeTextEvent, self.on_TypeTextEvent)
@@ -121,8 +131,80 @@ class SeleniumBrowserSession(BrowserSession):
     async def on_ClickCoordinateEvent(self, event: ClickCoordinateEvent) -> dict:
         return await self._selenium_session.click_coordinates(event.coordinate_x, event.coordinate_y)
 
+    async def on_ClickMultipleElementsEvent(self, event: ClickMultipleElementsEvent) -> dict | None:
+        # Override timeout dynamically since Selenium takes longer due to human-like curves
+        event.event_timeout = _get_timeout('TIMEOUT_SELENIUM_ClickMultipleElementsEvent', 90.0)
+        try:
+            for idx in event.indices:
+                node = await self.get_element_by_index(idx)
+                if not node:
+                    self.logger.warning(f'Could not find element for index {idx}')
+                    continue
+                await self._selenium_session.action_service.click_element(node, self._cached_selector_map)
+                await asyncio.sleep(0.3)
+            self.logger.debug('🖱️ Multiple clicks on elements completed')
+            return {'indices': event.indices}
+        except Exception as e:
+            self.logger.error(f'Failed multiple clicks on elements: {e}')
+            raise BrowserError(message=f'Failed multiple clicks on elements: {e}')
+
+    async def on_ClickMultipleCoordinatesEvent(self, event: ClickMultipleCoordinatesEvent) -> dict | None:
+        # Override timeout dynamically since Selenium takes longer due to human-like curves
+        event.event_timeout = _get_timeout('TIMEOUT_SELENIUM_ClickMultipleCoordinatesEvent', 60.0)
+        try:
+            for (x, y) in event.coordinates:
+                await self._selenium_session.click_coordinates(x, y)
+                await asyncio.sleep(0.3)
+            self.logger.debug('🖱️ Multiple clicks on coordinates completed')
+            return {'coordinates': event.coordinates}
+        except Exception as e:
+            self.logger.error(f'Failed multiple clicks on coordinates: {e}')
+            raise BrowserError(message=f'Failed multiple clicks on coordinates: {e}')
+
     async def on_DragAndDropCoordinateEvent(self, event: DragAndDropCoordinateEvent) -> dict:
         return await self._selenium_session.action_service.drag_and_drop(
+            event.start_x, event.start_y, event.end_x, event.end_y
+        )
+
+    async def on_DragAndDropElementEvent(self, event: DragAndDropElementEvent) -> dict:
+        start_node = await self.get_element_by_index(event.start_index)
+        end_node = await self.get_element_by_index(event.end_index)
+        if not start_node or not end_node:
+            raise BrowserError(f'Could not find elements for start index {event.start_index} or end index {event.end_index}')
+        
+        start_coords = start_node.absolute_position
+        end_coords = end_node.absolute_position
+        if not start_coords or not end_coords:
+            raise BrowserError('Could not get element coordinates')
+            
+        start_x = int(start_coords.x + start_coords.width / 2)
+        start_y = int(start_coords.y + start_coords.height / 2)
+        end_x = int(end_coords.x + end_coords.width / 2)
+        end_y = int(end_coords.y + end_coords.height / 2)
+        
+        return await self._selenium_session.action_service.drag_and_drop(
+            start_x, start_y, end_x, end_y
+        )
+
+    async def on_PressAndHoldCoordinateEvent(self, event: PressAndHoldCoordinateEvent) -> dict:
+        return await self._selenium_session.action_service.press_and_hold_coordinate(
+            event.coordinate_x, event.coordinate_y
+        )
+
+    async def on_PressAndHoldElementEvent(self, event: PressAndHoldElementEvent) -> dict:
+        node = event.node
+        if not node:
+            raise BrowserError('No element node provided')
+        coords = node.absolute_position
+        if not coords:
+            raise BrowserError('Could not get element coordinates')
+            
+        x = int(coords.x + coords.width / 2)
+        y = int(coords.y + coords.height / 2)
+        return await self._selenium_session.action_service.press_and_hold_coordinate(x, y)
+
+    async def on_SwipeCoordinateEvent(self, event: SwipeCoordinateEvent) -> dict:
+        return await self._selenium_session.action_service.swipe_coordinate(
             event.start_x, event.start_y, event.end_x, event.end_y
         )
 
