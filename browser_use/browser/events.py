@@ -159,7 +159,7 @@ class DragAndDropElementEvent(BaseEvent[dict]):
 	start_index: int
 	end_index: int
 
-	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropElementEvent', 15.0))  # seconds
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropElementEvent', 30.0))  # seconds
 
 
 class DragAndDropCoordinateEvent(BaseEvent[dict]):
@@ -170,7 +170,7 @@ class DragAndDropCoordinateEvent(BaseEvent[dict]):
 	end_x: int
 	end_y: int
 
-	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropCoordinateEvent', 15.0))  # seconds
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_DragAndDropCoordinateEvent', 30.0))  # seconds
 
 
 class ClickMultipleElementsEvent(BaseEvent[dict]):
