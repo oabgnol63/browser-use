@@ -1,4 +1,4 @@
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
@@ -195,6 +195,72 @@ class MultipleClickElementActionIndexOnly(BaseModel):
 	model_config = ConfigDict(title='MultipleClickElementAction')
 
 	indices: list[int] = Field(description='List of element indices to click in sequence')
+
+
+class VisionClickLoopAction(BaseModel):
+	"""Run a bounded screenshot-guided coordinate click loop for dynamic visual flows."""
+
+	instruction: str = Field(
+		description='Visual instruction for the loop, e.g. "click all images matching motorcycle".'
+	)
+	max_rounds: int = Field(default=5, ge=1, le=10, description='Maximum number of LLM decision rounds.')
+	llm_timeout_seconds: float = Field(
+		default=90.0,
+		ge=5.0,
+		le=300.0,
+		description='Timeout for each internal LLM decision call.',
+	)
+	screenshot_detail: Literal['auto', 'low', 'high'] = Field(
+		default='auto',
+		description='Vision detail hint passed to the internal screenshot message.',
+	)
+	click_finish_when_ready: bool = Field(
+		default=True,
+		description='If true, the loop should click the final Submit/Verify/Next control itself once the image-selection task is complete.',
+	)
+	inter_click_delay_seconds: float = Field(
+		default=0.08,
+		ge=0.0,
+		le=2.0,
+		description='Delay between clicks within the same round. Lower values make expiring visual challenges faster.',
+	)
+
+
+class VisionClickPoint(BaseModel):
+	x: int = Field(ge=0, description='Horizontal click coordinate in the instructed screenshot plane.')
+	y: int = Field(ge=0, description='Vertical click coordinate in the instructed screenshot plane.')
+
+
+class VisionClickLoopDecision(BaseModel):
+	status: Literal['click_more', 'click_finish', 'ready_to_submit'] = Field(
+		description='Whether to click more image coordinates, click the final Submit/Verify control, or stop because the page is only ready to submit.'
+	)
+	clicks: list[VisionClickPoint] = Field(
+		default_factory=list,
+		description='Coordinates to click when status is click_more. Keep this list empty for other statuses.',
+	)
+	finish_click: VisionClickPoint | None = Field(
+		default=None,
+		description='Coordinate for the final Submit/Verify/Next/Skip control. Use with status=click_finish, or optionally alongside status=click_more for 4x4 grids where the button should be clicked immediately after the tile batch.',
+	)
+	final_round: bool = Field(
+		default=False,
+		description='Set true on a click_more decision when this batch is likely the FINAL selection step (e.g. all matches in a 3x3 grid clicked and no further replacement rounds expected). Triggers a single lightweight find-and-click of the Submit/Verify control instead of another full LLM round.',
+	)
+	reasoning: str = Field(description='Short explanation of the current visual judgment.')
+
+
+class VisionFinishDecision(BaseModel):
+	"""Lightweight decision used after a final_round=True click_more batch to find and click the Submit/Verify control."""
+
+	status: Literal['click_finish', 'no_finish_visible', 'needs_more_clicks'] = Field(
+		description='click_finish: the final control is visible; no_finish_visible: not yet visible (caller will fall through to a full round); needs_more_clicks: more selection clicks still required.'
+	)
+	finish_click: VisionClickPoint | None = Field(
+		default=None,
+		description='Coordinate of the Submit/Verify/Next control when status is click_finish.',
+	)
+	reasoning: str = Field(description='Short rationale.')
 
 
 class PressAndHoldElementAction(BaseModel):

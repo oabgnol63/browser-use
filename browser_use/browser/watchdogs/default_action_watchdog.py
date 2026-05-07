@@ -1387,7 +1387,13 @@ class DefaultActionWatchdog(BaseWatchdog):
 				long_term_memory=error_detail,
 			)
 
-	async def _click_on_coordinate(self, coordinate_x: int, coordinate_y: int, force: bool = False) -> dict | None:
+	async def _click_on_coordinate(
+		self,
+		coordinate_x: int,
+		coordinate_y: int,
+		force: bool = False,
+		human_like: bool = True,
+	) -> dict | None:
 		"""
 		Click directly at coordinates using CDP Input.dispatchMouseEvent.
 
@@ -1406,18 +1412,25 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			self.logger.debug(f'👆 Moving mouse to ({coordinate_x}, {coordinate_y})...')
 
-			# Move mouse with human-like trajectory from last known position or viewport center
-			last_pos = getattr(self.browser_session, '_last_mouse_pos', None)
-			if last_pos:
-				start_x, start_y = last_pos
-			else:
-				# Start from a random edge position for first move
-				start_x = random.randint(0, 100)
-				start_y = random.randint(0, 100)
+			if human_like:
+				# Move mouse with human-like trajectory from last known position or viewport center
+				last_pos = getattr(self.browser_session, '_last_mouse_pos', None)
+				if last_pos:
+					start_x, start_y = last_pos
+				else:
+					# Start from a random edge position for first move
+					start_x = random.randint(0, 100)
+					start_y = random.randint(0, 100)
 
-			await self._human_mouse_move(cdp_session, start_x, start_y, coordinate_x, coordinate_y)
+				await self._human_mouse_move(cdp_session, start_x, start_y, coordinate_x, coordinate_y)
+				await asyncio.sleep(random.uniform(0.02, 0.05))
+			else:
+				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
+					params={'type': 'mouseMoved', 'x': coordinate_x, 'y': coordinate_y},
+					session_id=session_id,
+				)
+
 			self.browser_session._last_mouse_pos = (coordinate_x, coordinate_y)
-			await asyncio.sleep(random.uniform(0.02, 0.05))
 
 			# Mouse down
 			self.logger.debug(f'👆🏾 Clicking at ({coordinate_x}, {coordinate_y})...')
@@ -1435,7 +1448,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 					),
 					timeout=3.0,
 				)
-				await asyncio.sleep(0.05)
+				if human_like:
+					await asyncio.sleep(0.05)
+				else:
+					await asyncio.sleep(0.01)
 			except TimeoutError:
 				self.logger.debug('⏱️ Mouse down timed out (likely due to dialog), continuing...')
 
@@ -4124,7 +4140,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				y = int(coords.y + coords.height / 2)
 
 				asyncio.create_task(self.browser_session.highlight_coordinate_click(x, y))
-				await self._click_on_coordinate(x, y)
+				await self._click_on_coordinate(x, y, human_like=event.human_like)
 				await asyncio.sleep(0.3)
 
 			self.logger.debug('🖱️ Multiple clicks on elements completed')
@@ -4137,9 +4153,11 @@ class DefaultActionWatchdog(BaseWatchdog):
 		"""Handle multiple clicks on specific coordinates."""
 		try:
 			for (x, y) in event.coordinates:
-				asyncio.create_task(self.browser_session.highlight_coordinate_click(x, y))
-				await self._click_on_coordinate(x, y)
-				await asyncio.sleep(0.3)
+				if event.highlight:
+					asyncio.create_task(self.browser_session.highlight_coordinate_click(x, y))
+				await self._click_on_coordinate(x, y, human_like=event.human_like)
+				if event.post_click_delay_seconds > 0:
+					await asyncio.sleep(event.post_click_delay_seconds)
 
 			self.logger.debug('🖱️ Multiple clicks on coordinates completed')
 			return {'coordinates': event.coordinates}

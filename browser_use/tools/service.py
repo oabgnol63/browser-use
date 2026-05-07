@@ -1,7 +1,11 @@
 import asyncio
+import base64
 import json
 import logging
 import os
+from dataclasses import replace
+from io import BytesIO
+from collections.abc import Sequence
 from typing import Any, Generic, Literal, TypeVar
 
 import anyio
@@ -41,10 +45,11 @@ from browser_use.browser.events import (
 	UploadFileEvent,
 )
 from browser_use.browser.views import BrowserError
+from browser_use.config import CONFIG
 from browser_use.dom.service import EnhancedDOMTreeNode
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.messages import SystemMessage, UserMessage
+from browser_use.llm.messages import BaseMessage, ContentPartImageParam, ContentPartTextParam, ImageURL, SystemMessage, UserMessage
 from browser_use.observability import observe_debug
 from browser_use.tools.registry.service import Registry
 from browser_use.tools.registry.views import Backend, Mode, Platform
@@ -83,6 +88,9 @@ from browser_use.tools.views import (
 	SwipeCoordinateAction,
 	SwitchTabAction,
 	UploadFileAction,
+	VisionClickLoopAction,
+	VisionClickLoopDecision,
+	VisionFinishDecision,
 )
 from browser_use.utils import create_task_with_error_handling, sanitize_surrogates, time_execution_sync
 
@@ -621,10 +629,10 @@ class Tools(Generic[Context]):
 
 				actual_x = int(llm_x / 1000 * screenshot_width)
 				actual_y = int(llm_y / 1000 * screenshot_height)
-
 				logger.info(
-					f'🔄 Converting normalized coordinates: LLM ({llm_x}, {llm_y}) / 1000 '
-					f'→ Screen ({actual_x}, {actual_y}) @ {screenshot_width}x{screenshot_height}'
+
+					f'Converting normalized coordinates: LLM ({llm_x}, {llm_y}) / 1000 '
+					f'Screen ({actual_x}, {actual_y}) @ {screenshot_width}x{screenshot_height}'
 				)
 
 			# Claude/others use pixel coordinates in letterboxed screenshot space
@@ -640,10 +648,10 @@ class Tools(Generic[Context]):
 				# Reverse the letterbox transform used before sending screenshots to the model.
 				actual_x = int(round((llm_x - offset_x) / scale))
 				actual_y = int(round((llm_y - offset_y) / scale))
-
 				logger.info(
-					f'🔄 Converting coordinates: LLM ({llm_x}, {llm_y}) @ {llm_width}x{llm_height} '
-					f'→ Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height} '
+
+					f'Converting coordinates: LLM ({llm_x}, {llm_y}) @ {llm_width}x{llm_height} '
+					f'Viewport ({actual_x}, {actual_y}) @ {original_width}x{original_height} '
 					f'(letterbox offsets {offset_x:.1f},{offset_y:.1f} scale {scale:.4f})'
 				)
 
@@ -1003,6 +1011,342 @@ class Tools(Generic[Context]):
 
 		self._multiple_click_resolve_point = _multiple_click_resolve_point
 
+		def _resize_screenshot_for_action_llm(screenshot_b64: str, browser_session: BrowserSession) -> str:
+			"""Match the agent screenshot plane when the model expects pixel coordinates."""
+			if browser_session.llm_coordinate_system == 'normalized_1000':
+				return screenshot_b64
+
+			if not browser_session.llm_screenshot_size:
+				return screenshot_b64
+
+			try:
+				from PIL import Image
+
+				img = Image.open(BytesIO(base64.b64decode(screenshot_b64)))
+				if img.size == browser_session.llm_screenshot_size:
+					return screenshot_b64
+
+				target_width, target_height = browser_session.llm_screenshot_size
+				scale = min(target_width / img.size[0], target_height / img.size[1])
+				resized_width = max(1, int(round(img.size[0] * scale)))
+				resized_height = max(1, int(round(img.size[1] * scale)))
+				img_resized = img.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+				canvas = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+				offset_x = (target_width - resized_width) // 2
+				offset_y = (target_height - resized_height) // 2
+				canvas.paste(img_resized, (offset_x, offset_y))
+				buffer = BytesIO()
+				canvas.save(buffer, format='PNG')
+				return base64.b64encode(buffer.getvalue()).decode('utf-8')
+			except Exception as e:
+				logger.warning(f'Failed to resize screenshot for action LLM: {e}')
+				return screenshot_b64
+
+		async def _take_action_llm_screenshot(browser_session: BrowserSession) -> tuple[str, str]:
+			"""Capture current screenshot and return both raw and model-plane variants."""
+			screenshot_bytes = await browser_session.take_screenshot(full_page=False)
+			if not screenshot_bytes:
+				raise BrowserError('Could not capture screenshot for visual click loop.')
+
+			raw_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+			return raw_b64, _resize_screenshot_for_action_llm(raw_b64, browser_session)
+
+		VISION_CLICK_LOOP_POST_CLICK_WAIT_SECONDS = 4.5
+
+		async def _wait_for_visual_settle(browser_session: BrowserSession) -> tuple[str, str]:
+			"""Blind-wait after a click batch, then capture one fresh screenshot for the next LLM round."""
+			wait_seconds = VISION_CLICK_LOOP_POST_CLICK_WAIT_SECONDS
+			logger.info(f'vision_click_loop fixed post-click wait {wait_seconds:.2f}s before next screenshot')
+			await asyncio.sleep(wait_seconds)
+
+			raw_b64, llm_b64 = await _take_action_llm_screenshot(browser_session)
+			return raw_b64, llm_b64
+
+		def _get_visual_click_coordinate_guidance(
+			browser_session: BrowserSession,
+			llm_screenshot_b64: str,
+		) -> str:
+			if browser_session.llm_coordinate_system == 'normalized_1000':
+				return (
+					'Coordinate system: return x and y in normalized 0-999 screenshot coordinates. '
+					'(0,0) is top-left and (999,999) is bottom-right of the CURRENT screenshot.'
+				)
+
+			try:
+				from PIL import Image
+
+				img = Image.open(BytesIO(base64.b64decode(llm_screenshot_b64)))
+				return (
+					f'Coordinate system: return pixel x and y in the CURRENT screenshot plane, '
+					f'which is {img.size[0]}x{img.size[1]}. (0,0) is top-left.'
+				)
+			except Exception:
+				if browser_session.llm_screenshot_size:
+					return (
+						f'Coordinate system: return pixel x and y in the CURRENT screenshot plane, '
+						f'which is {browser_session.llm_screenshot_size[0]}x{browser_session.llm_screenshot_size[1]}.'
+					)
+				return 'Coordinate system: return pixel x and y in the CURRENT screenshot plane.'
+
+		def _build_visual_click_loop_messages(
+			params: VisionClickLoopAction,
+			browser_session: BrowserSession,
+			llm_screenshot_b64: str,
+			round_num: int,
+			history: list[str],
+		) -> list[BaseMessage]:
+			coordinate_guidance = _get_visual_click_coordinate_guidance(browser_session, llm_screenshot_b64)
+			history_text = '\n'.join(history[-6:]) if history else 'None.'
+
+			system_prompt = (
+				'You are deciding the next move inside a bounded visual click loop for image challenges such as reCAPTCHA. '
+				'Use only the CURRENT screenshot. Ignore DOM structure, hidden text, prior screenshots, and element indices. '
+				'Choose exactly one status: click_more, click_finish, or ready_to_submit. '
+				'If an unchecked reCAPTCHA-style checkbox is visible and the image challenge has not opened yet, use click_more with the checkbox center first. '
+				'If you see Please try again error, click Refresh button at the bottom left to refresh the captcha first'
+				'When multiple visible images clearly match the instruction, return them all in the SAME click_more response, even the low confidence one. Do not drip-feed one target at a time. '
+				'If the challenge is a 3x3 grid, expect replacement tiles after each click and avoid Verify/Next while replacement rounds are still likely. '
+				'For a 3x3 grid, return only tile coordinates. Do not return the button in the same round. '
+				'If the challenge is a 4x4 grid, select every tile containing any part of the target, even a very small fragment. '
+				'For a 4x4 grid, if the Next/Verify/Skip button is visible in the CURRENT screenshot and should be pressed immediately after the tile selections, return status=click_more with all tile coordinates in clicks AND the button coordinate in finish_click. The button text may change after the tile clicks, but the coordinate stays the same. '
+				'If no 4x4 tiles should be selected, use click_finish with the Skip/Next/Verify button coordinate. '
+				'Use click_finish only for the final control. Never include Verify/Next/Continue inside click_more. '
+				'Use ready_to_submit only when the image-selection task appears complete but no final control is visible, or when the caller disabled the final click. '
+				'Set final_round=true only when you are highly confident the current click_more batch is the last selection batch before the finish control can be clicked.'
+			)
+			user_text = (
+				f'Instruction: {params.instruction}\n'
+				f'Round: {round_num}/{params.max_rounds}\n'
+				f'Click final control when ready: {str(params.click_finish_when_ready).lower()}\n'
+				f'{coordinate_guidance}\n'
+				f'Recent loop history:\n{history_text}\n'
+				'Judge only from the CURRENT screenshot.'
+			)
+
+			return [
+				SystemMessage(content=system_prompt),
+				UserMessage(
+					content=[
+						ContentPartTextParam(text=user_text),
+						ContentPartImageParam(
+							image_url=ImageURL(
+								url=f'data:image/png;base64,{llm_screenshot_b64}',
+								detail=params.screenshot_detail,
+							)
+						),
+					]
+				),
+			]
+
+		def _get_effective_visual_click_loop_params(
+			params: VisionClickLoopAction,
+			round_num: int = 1,
+			lightweight: bool = False,
+		) -> VisionClickLoopAction:
+			"""Choose screenshot detail per round: high on round 1 / heavy decisions, lower on follow-up rounds."""
+			if lightweight:
+				target_detail: Literal['auto', 'low', 'high'] = 'low'
+			elif round_num <= 1:
+				target_detail = 'high'
+			else:
+				target_detail = 'auto'
+			if params.screenshot_detail == target_detail:
+				return params
+			return params.model_copy(update={'screenshot_detail': target_detail})
+
+		def _get_effective_visual_click_loop_llm(
+			action_llm: BaseChatModel,
+		) -> BaseChatModel:
+			"""Force the internal visual loop onto low-thinking Google configs for speed."""
+			try:
+				from browser_use.llm.google.chat import ChatGoogle
+			except Exception:
+				ChatGoogle = None  # type: ignore[assignment]
+
+			if ChatGoogle is not None and isinstance(action_llm, ChatGoogle):
+				model_lower = str(action_llm.model).lower()
+				if 'gemini-3' in model_lower:
+					return replace(action_llm, thinking_level=None, thinking_budget=None)
+				return replace(action_llm, thinking_level=None, thinking_budget=512)
+
+			return action_llm
+
+		def _log_visual_click_loop_messages(messages: Sequence[BaseMessage], round_num: int) -> None:
+			if not CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+				return
+
+			try:
+				log_content = f'\n\n--- VISION CLICK LOOP REQUEST (round {round_num}) ---\n'
+				for idx, message in enumerate(messages):
+					log_content += f'\nMessage {idx} ({type(message).__name__}):\n'
+					content = getattr(message, 'content', None)
+					try:
+						if isinstance(content, list):
+							for item in content:
+								if isinstance(item, dict):
+									if item.get('type') == 'text':
+										log_content += str(item.get('text', ''))
+									elif item.get('type') == 'image_url':
+										log_content += '[IMAGE]'
+									else:
+										log_content += str(item)
+								elif getattr(item, 'type', None) == 'image_url':
+									log_content += '[IMAGE]'
+								elif hasattr(item, 'text'):
+									log_content += str(item.text)
+								else:
+									log_content += str(item)
+						else:
+							log_content += str(content)
+					except Exception as e:
+						log_content += f'[Error parsing content: {e}. Raw: {content}]'
+				log_content += '\n-------------------\n'
+				logger.info(log_content)
+			except Exception as e:
+				logger.debug(f'Failed to print vision click loop messages: {e}')
+
+		async def _get_visual_click_loop_decision(
+			params: VisionClickLoopAction,
+			action_llm: BaseChatModel,
+			browser_session: BrowserSession,
+			llm_screenshot_b64: str,
+			round_num: int,
+			history: list[str],
+		) -> VisionClickLoopDecision:
+			effective_params = _get_effective_visual_click_loop_params(params, round_num=round_num)
+			effective_llm = _get_effective_visual_click_loop_llm(action_llm)
+			messages = _build_visual_click_loop_messages(
+				params=effective_params,
+				browser_session=browser_session,
+				llm_screenshot_b64=llm_screenshot_b64,
+				round_num=round_num,
+				history=history,
+			)
+			_log_visual_click_loop_messages(messages, round_num)
+
+			try:
+				response = await asyncio.wait_for(
+					effective_llm.ainvoke(messages, output_format=VisionClickLoopDecision),
+					timeout=effective_params.llm_timeout_seconds,
+				)
+				decision = response.completion  # type: ignore[assignment]
+				if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+					logger.info(
+						f'\n\n--- VISION CLICK LOOP RESPONSE (round {round_num}) ---\n'
+						f'{decision.model_dump_json(indent=2)}\n'
+						'-------------------\n'
+					)
+				return decision  # type: ignore[return-value]
+			except Exception as structured_error:
+				logger.debug(f'Visual click loop structured output failed, falling back to JSON parse: {structured_error}')
+				response = await asyncio.wait_for(
+					effective_llm.ainvoke(messages),
+					timeout=effective_params.llm_timeout_seconds,
+				)
+				completion = response.completion
+				if isinstance(completion, VisionClickLoopDecision):
+					if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+						logger.info(
+							f'\n\n--- VISION CLICK LOOP RESPONSE (round {round_num}) ---\n'
+							f'{completion.model_dump_json(indent=2)}\n'
+							'-------------------\n'
+						)
+					return completion
+				if isinstance(completion, str):
+					decision = VisionClickLoopDecision.model_validate_json(completion)
+					if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+						logger.info(
+							f'\n\n--- VISION CLICK LOOP RESPONSE (round {round_num}) ---\n'
+							f'{decision.model_dump_json(indent=2)}\n'
+							'-------------------\n'
+						)
+					return decision
+				if hasattr(completion, 'model_dump_json'):
+					decision = VisionClickLoopDecision.model_validate_json(completion.model_dump_json())
+					if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+						logger.info(
+							f'\n\n--- VISION CLICK LOOP RESPONSE (round {round_num}) ---\n'
+							f'{decision.model_dump_json(indent=2)}\n'
+							'-------------------\n'
+						)
+					return decision
+				raise structured_error
+
+		async def _get_visual_finish_decision(
+			params: VisionClickLoopAction,
+			action_llm: BaseChatModel,
+			browser_session: BrowserSession,
+			llm_screenshot_b64: str,
+		) -> VisionFinishDecision:
+			"""Lightweight pass: locate the Submit/Verify control after a final_round=True batch."""
+			effective_params = _get_effective_visual_click_loop_params(params, lightweight=True)
+			effective_llm = _get_effective_visual_click_loop_llm(action_llm)
+			coordinate_guidance = _get_visual_click_coordinate_guidance(browser_session, llm_screenshot_b64)
+
+			system_prompt = (
+				'A visual click loop just finished a click batch and the previous LLM round flagged it as the likely final selection step. '
+				'BEFORE deciding anything else, scan the CURRENT screenshot for ANY unselected tile that matches the original instruction. '
+				'In a 3x3/4x4 challenge grid, every click triggers a replacement image that may itself be a match — so look carefully at every grid cell, especially recently-replaced ones. '
+				'Decision rules, in priority order: '
+				'1) If you can see ANY tile in the grid that matches the original instruction (even one), return needs_more_clicks. Do NOT return click_finish in this case even if a Submit/Verify/Next/Continue control is also visible. '
+				'2) Else if zero matching tiles remain AND a Submit/Verify/Next/Continue control is visible, return click_finish with that control coordinate. '
+				'3) Else (no matches and no finish control visible), return no_finish_visible. '
+				'Be fast but accurate. Verifying prematurely fails the challenge.'
+			)
+			user_text = (
+				f'Original instruction: {params.instruction}\n'
+				f'{coordinate_guidance}\n'
+				'Find the final Submit/Verify control or report that it is not yet visible.'
+			)
+			messages: list[BaseMessage] = [
+				SystemMessage(content=system_prompt),
+				UserMessage(
+					content=[
+						ContentPartTextParam(text=user_text),
+						ContentPartImageParam(
+							image_url=ImageURL(
+								url=f'data:image/png;base64,{llm_screenshot_b64}',
+								detail=effective_params.screenshot_detail,
+							)
+						),
+					]
+				),
+			]
+			_log_visual_click_loop_messages(messages, round_num=0)
+
+			try:
+				response = await asyncio.wait_for(
+					effective_llm.ainvoke(messages, output_format=VisionFinishDecision),
+					timeout=effective_params.llm_timeout_seconds,
+				)
+				decision = response.completion  # type: ignore[assignment]
+				if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
+					logger.info(
+						f'\n\n--- VISION FINISH RESPONSE ---\n'
+						f'{decision.model_dump_json(indent=2)}\n'
+						'-------------------\n'
+					)
+				return decision  # type: ignore[return-value]
+			except Exception as structured_error:
+				logger.debug(f'Vision finish structured output failed, falling back to JSON parse: {structured_error}')
+				response = await asyncio.wait_for(
+					effective_llm.ainvoke(messages),
+					timeout=effective_params.llm_timeout_seconds,
+				)
+				completion = response.completion
+				if isinstance(completion, VisionFinishDecision):
+					return completion
+				if isinstance(completion, str):
+					return VisionFinishDecision.model_validate_json(completion)
+				if hasattr(completion, 'model_dump_json'):
+					return VisionFinishDecision.model_validate_json(completion.model_dump_json())
+				raise structured_error
+
+		self._take_action_llm_screenshot = _take_action_llm_screenshot
+		self._wait_for_visual_settle = _wait_for_visual_settle
+		self._get_visual_click_loop_decision = _get_visual_click_loop_decision
+		self._get_visual_finish_decision = _get_visual_finish_decision
+
 		# --- press_and_hold --------------------------------------------------
 		async def _press_and_hold_at(
 			actual_x: int, actual_y: int, label: str, browser_session: BrowserSession
@@ -1196,6 +1540,7 @@ class Tools(Generic[Context]):
 		# is False, and the full hybrid schema when set_coordinate_clicking(True) re-runs them.
 		self._register_drag_and_drop_action()
 		self._register_multiple_click_action()
+		self._register_vision_click_loop_action()
 		self._register_press_and_hold_action()
 		self._register_scroll_at_action()
 
@@ -2681,6 +3026,7 @@ Validated Code (after quote fixing):
 			@self.registry.action(
 				'Click multiple elements by index in sequence.',
 				param_model=MultipleClickElementActionIndexOnly,
+				terminates_sequence=True,
 				modes={Mode.DOM},
 				backends={Backend.CDP, Backend.WEBDRIVER},
 			)
@@ -2709,6 +3055,7 @@ Validated Code (after quote fixing):
 				'mix of indexed elements and empty-space coordinates.'
 			),
 			param_model=MultipleClickElementAction,
+			terminates_sequence=True,
 			modes={Mode.DOM, Mode.VISION},
 			backends={Backend.CDP, Backend.WEBDRIVER},
 		)
@@ -2741,6 +3088,214 @@ Validated Code (after quote fixing):
 				return ActionResult(extracted_content=memory, long_term_memory=memory)
 			except Exception as e:
 				error_msg = f'Failed to execute multiple clicks: {_sanitize_error_message(e)}'
+				return ActionResult(error=error_msg)
+
+	def _register_vision_click_loop_action(self) -> None:
+		"""Register the screenshot-guided coordinate click loop."""
+		name = 'vision_click_loop'
+		if name in self.registry.registry.actions:
+			del self.registry.registry.actions[name]
+
+		@self.registry.action(
+			(
+				'Run a bounded screenshot-guided coordinate click loop for dynamic visual tasks. '
+				'Use when one round of clicks can reveal a second visual round that needs another LLM decision, including reCAPTCHA flows that start from the checkbox and then open an image challenge. '
+				'The tool will inspect the screenshot, click coordinates, wait for the page to visually settle, '
+				'then inspect again until it clicks the final Submit/Verify control, decides the page is only ready for submit, '
+				'or reaches the round limit.'
+			),
+			param_model=VisionClickLoopAction,
+			terminates_sequence=True,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP, Backend.WEBDRIVER},
+		)
+		async def vision_click_loop(
+			params: VisionClickLoopAction,
+			browser_session: BrowserSession,
+			action_llm: BaseChatModel,
+		):
+			try:
+				_raw_screenshot_b64, llm_screenshot_b64 = await self._take_action_llm_screenshot(browser_session)
+				history: list[str] = []
+				stop_reason = 'max_rounds_reached'
+				total_clicks = 0
+				rounds_executed = 0
+				last_decision: VisionClickLoopDecision | None = None
+
+				for round_num in range(1, params.max_rounds + 1):
+					rounds_executed = round_num
+					decision = await self._get_visual_click_loop_decision(
+						params=params,
+						action_llm=action_llm,
+						browser_session=browser_session,
+						llm_screenshot_b64=llm_screenshot_b64,
+						round_num=round_num,
+						history=history,
+					)
+					last_decision = decision
+
+					if decision.status == 'click_finish':
+						if not params.click_finish_when_ready:
+							stop_reason = 'ready_to_submit'
+							history.append(f'round {round_num}: finish click requested but disabled - {decision.reasoning}')
+							break
+
+						if decision.finish_click is None:
+							stop_reason = 'invalid_missing_finish_click'
+							history.append(f'round {round_num}: click_finish without finish_click - {decision.reasoning}')
+							break
+
+						finish_x, finish_y = self._convert_llm_coordinates_to_viewport(
+							decision.finish_click.x,
+							decision.finish_click.y,
+							browser_session,
+						)
+						event = browser_session.event_bus.dispatch(
+						ClickMultipleCoordinatesEvent(
+							coordinates=[(finish_x, finish_y)],
+							highlight=False,
+							human_like=False,
+							post_click_delay_seconds=0.0,
+						)
+					)
+						await event
+						await event.event_result(raise_if_any=True, raise_if_none=False)
+
+						total_clicks += 1
+						history.append(
+							f'round {round_num}: clicked finish control ({decision.finish_click.x},{decision.finish_click.y}) - {decision.reasoning}'
+						)
+						await asyncio.sleep(0.15)
+						stop_reason = 'finish_clicked'
+						break
+
+					if decision.status == 'ready_to_submit':
+						stop_reason = 'ready_to_submit'
+						history.append(f'round {round_num}: ready_to_submit - {decision.reasoning}')
+						break
+
+					clicks = decision.clicks
+					if not clicks:
+						stop_reason = 'invalid_empty_click_plan'
+						history.append(f'round {round_num}: click_more with no coordinates - {decision.reasoning}')
+						break
+
+					coordinates = [
+						self._convert_llm_coordinates_to_viewport(click.x, click.y, browser_session)
+						for click in clicks
+					]
+
+					event = browser_session.event_bus.dispatch(
+						ClickMultipleCoordinatesEvent(
+							coordinates=coordinates,
+							highlight=False,
+							human_like=False,
+							post_click_delay_seconds=params.inter_click_delay_seconds,
+						)
+					)
+					await event
+					await event.event_result(raise_if_any=True, raise_if_none=False)
+
+					total_clicks += len(coordinates)
+					click_summary = ', '.join(f'({click.x},{click.y})' for click in clicks[:5])
+					if len(clicks) > 5:
+						click_summary += ', ...'
+					history.append(f'round {round_num}: clicked {len(coordinates)} target(s) {click_summary} - {decision.reasoning}')
+
+					if decision.finish_click is not None:
+						if not params.click_finish_when_ready:
+							stop_reason = 'ready_to_submit'
+							history.append(
+								f'round {round_num}: finish click available after click_more but disabled ({decision.finish_click.x},{decision.finish_click.y})'
+							)
+							break
+
+						await asyncio.sleep(max(0.15, min(params.inter_click_delay_seconds, 0.5)))
+						finish_x, finish_y = self._convert_llm_coordinates_to_viewport(
+							decision.finish_click.x,
+							decision.finish_click.y,
+							browser_session,
+						)
+						finish_event = browser_session.event_bus.dispatch(
+							ClickMultipleCoordinatesEvent(
+								coordinates=[(finish_x, finish_y)],
+								highlight=False,
+								human_like=False,
+								post_click_delay_seconds=0.0,
+							)
+						)
+						await finish_event
+						await finish_event.event_result(raise_if_any=True, raise_if_none=False)
+						total_clicks += 1
+						history.append(
+							f'round {round_num}: clicked finish control after click_more ({decision.finish_click.x},{decision.finish_click.y})'
+						)
+						await asyncio.sleep(0.15)
+						stop_reason = 'finish_clicked'
+						break
+
+					_raw_screenshot_b64, llm_screenshot_b64 = await self._wait_for_visual_settle(browser_session=browser_session)
+
+					if decision.final_round and params.click_finish_when_ready:
+						finish_decision = await self._get_visual_finish_decision(
+							params=params,
+							action_llm=action_llm,
+							browser_session=browser_session,
+							llm_screenshot_b64=llm_screenshot_b64,
+						)
+						history.append(f'round {round_num}: final_round lightweight pass -> {finish_decision.status} - {finish_decision.reasoning}')
+
+						if finish_decision.status == 'click_finish' and finish_decision.finish_click is not None:
+							finish_x, finish_y = self._convert_llm_coordinates_to_viewport(
+								finish_decision.finish_click.x,
+								finish_decision.finish_click.y,
+								browser_session,
+							)
+							finish_event = browser_session.event_bus.dispatch(
+								ClickMultipleCoordinatesEvent(
+									coordinates=[(finish_x, finish_y)],
+									highlight=False,
+									human_like=False,
+									post_click_delay_seconds=0.0,
+								)
+							)
+							await finish_event
+							await finish_event.event_result(raise_if_any=True, raise_if_none=False)
+							total_clicks += 1
+							history.append(
+								f'round {round_num}: clicked finish control via lightweight pass ({finish_decision.finish_click.x},{finish_decision.finish_click.y})'
+							)
+							await asyncio.sleep(0.15)
+							stop_reason = 'finish_clicked'
+							break
+						# no_finish_visible / needs_more_clicks => fall through to next full round
+
+				ready_to_submit = stop_reason in {'ready_to_submit', 'finish_clicked'}
+				history_text = '; '.join(history) if history else 'no rounds executed'
+				last_status = last_decision.status if last_decision is not None else 'none'
+				summary = (
+					f'Vision click loop instruction="{params.instruction}": {history_text}. '
+					f'Stop reason: {stop_reason}. ready_to_submit={str(ready_to_submit).lower()}. '
+					f'last_status={last_status}.'
+				)
+				memory = (
+					f'Vision click loop for "{params.instruction}": {stop_reason}; '
+					f'clicked {total_clicks} point(s) across {rounds_executed} round(s).'
+				)
+				logger.info(f'{memory}')
+				return ActionResult(
+					extracted_content=summary,
+					long_term_memory=memory,
+					metadata={
+						'ready_to_submit': ready_to_submit,
+						'stop_reason': stop_reason,
+						'rounds_executed': rounds_executed,
+						'total_clicked': total_clicks,
+						'last_status': last_status,
+					},
+				)
+			except Exception as e:
+				error_msg = f'Failed vision click loop for "{params.instruction}": {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
 
 	def _register_press_and_hold_action(self) -> None:
@@ -2836,6 +3391,7 @@ Validated Code (after quote fixing):
 		# models without coord output (e.g. gemini-2.5-flash) can still use them via index.
 		self._register_drag_and_drop_action()
 		self._register_multiple_click_action()
+		self._register_vision_click_loop_action()
 		self._register_press_and_hold_action()
 		self._register_scroll_at_action()
 
@@ -2848,6 +3404,7 @@ Validated Code (after quote fixing):
 		self,
 		action: ActionModel,
 		browser_session: BrowserSession,
+		action_llm: BaseChatModel | None = None,
 		page_extraction_llm: BaseChatModel | None = None,
 		sensitive_data: dict[str, str | dict[str, str]] | None = None,
 		available_file_paths: list[str] | None = None,
@@ -2880,6 +3437,7 @@ Validated Code (after quote fixing):
 							action_name=action_name,
 							params=params,
 							browser_session=browser_session,
+							action_llm=action_llm,
 							page_extraction_llm=page_extraction_llm,
 							file_system=file_system,
 							sensitive_data=sensitive_data,
@@ -2933,6 +3491,7 @@ Validated Code (after quote fixing):
 				# Separate action params from special params (injected dependencies)
 				special_param_names = {
 					'browser_session',
+					'action_llm',
 					'page_extraction_llm',
 					'file_system',
 					'available_file_paths',

@@ -90,7 +90,9 @@ Strictly follow these rules while using the browser and navigating the web:
   - Try to return the center point of object/target you're interacting with
   - If you encounter a slide captcha, use `drag_and_drop` from the start to the end of the slider.
   - If you encounter a press-and-hold captcha, use `press_and_hold` at the center of the button.
-  - If you encounter an image grid captcha (e.g. Google reCAPTCHA), use `multiple_click` to click all matching images at once using coordinates.
+  - If you encounter an image grid captcha (e.g. Google reCAPTCHA) and all matching images are already visible in one round, use `multiple_click` to click all matching images at once using coordinates.
+  - If a Google reCAPTCHA-style checkbox is visible and solving it may open an image grid, start with `vision_click_loop` immediately so the same loop can click the checkbox first, handle any image rounds, and click the final Submit/Verify control when the challenge is complete.
+  - If clicking one image round can reveal another image round on the same page, prefer `vision_click_loop` so you can re-check the new screenshot and click the final Submit/Verify control when the image task is complete.
   - Since you are in DOM mode, if the captcha elements don't have indexes, rely entirely on the provided image and estimate coordinates (`x`, `y`) based on the viewport. For captcha resolving, do not use index/DOM-dependent actions such as `input`, `extract`, `search_page`, `find_elements`, `scroll_to_text`, `get_dropdown_options`, `select_dropdown_option`, or `click`/`hover` with an `index`. Use coordinate-based actions instead.
 </browser_rules>
 <file_system>

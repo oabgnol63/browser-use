@@ -418,13 +418,14 @@ class SeleniumActionService:
         )
 
 
-    async def click_coordinates(self, x: int, y: int) -> dict:
+    async def click_coordinates(self, x: int, y: int, human_like: bool = True) -> dict:
         """
         Click at specific coordinates.
         
         Args:
             x: X coordinate
             y: Y coordinate
+            human_like: Whether to use the slower humanized pointer path
             
         Returns:
             Dict with click result
@@ -433,7 +434,15 @@ class SeleniumActionService:
         
         try:
             def do_click():
-                self._perform_human_click(target_x=x, target_y=y)
+                if human_like:
+                    self._perform_human_click(target_x=x, target_y=y)
+                else:
+                    action_builder = ActionBuilder(self.driver)
+                    action_builder.pointer_action.move_to_location(x, y)
+                    action_builder.pointer_action.pointer_down()
+                    action_builder.pointer_action.pause(0.01)
+                    action_builder.pointer_action.pointer_up()
+                    action_builder.perform()
             
             await asyncio.get_event_loop().run_in_executor(None, do_click)
             

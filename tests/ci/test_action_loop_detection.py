@@ -1,8 +1,11 @@
 """Tests for action loop detection — behavioral cycle breaking (PR #4)."""
 
+from unittest.mock import AsyncMock
+
 from browser_use.agent.service import Agent
 from browser_use.agent.views import (
 	ActionLoopDetector,
+	ActionResult,
 	PageFingerprint,
 	VisualPageFingerprint,
 	compute_action_hash,
@@ -425,6 +428,95 @@ async def test_no_loop_nudge_for_diverse_actions():
 
 	messages = _get_context_messages(agent)
 	assert len(messages) == 0
+
+
+async def test_vision_click_loop_terminates_after_five_consecutive_steps(monkeypatch):
+	"""Five consecutive vision_click_loop steps should hard-stop the task."""
+	monkeypatch.setenv('BROWSER_USE_DEV_ENV', '1')
+	llm = create_mock_llm()
+	agent = Agent(task='Test task', llm=llm)
+	agent._check_and_update_downloads = AsyncMock()
+
+	for expected_count in range(1, 5):
+		agent.state.last_model_output = agent.AgentOutput(
+			evaluation_previous_goal=None,
+			memory='Keep solving the visual challenge',
+			next_goal=None,
+			action=[{'vision_click_loop': {'instruction': 'solve the captcha'}}],  # type: ignore[arg-type]
+		)
+		agent.state.last_result = [ActionResult(extracted_content='Vision click loop ran')]
+		await agent._post_process()
+		assert agent.state.last_result is not None
+		assert agent.state.last_result[-1].is_done is not True
+
+	agent.state.last_model_output = agent.AgentOutput(
+		evaluation_previous_goal=None,
+		memory='Keep solving the visual challenge',
+		next_goal=None,
+		action=[{'vision_click_loop': {'instruction': 'solve the captcha'}}],  # type: ignore[arg-type]
+	)
+	agent.state.last_result = [ActionResult(extracted_content='Vision click loop ran')]
+	await agent._post_process()
+
+	assert agent.state.last_result is not None
+	assert agent.state.last_result[-1].is_done is True
+	assert agent.state.last_result[-1].success is False
+	assert agent.state.last_result[-1].metadata == {
+		'stop_reason': 'vision_click_loop_limit_reached',
+		'consecutive_vision_click_loop_steps': 5,
+	}
+	assert 'vision_click_loop ran 5 consecutive steps' in (agent.state.last_result[-1].extracted_content or '')
+
+
+async def test_vision_click_loop_limit_resets_after_non_visual_step(monkeypatch):
+	"""The hard-stop only applies when vision_click_loop is used in a row."""
+	monkeypatch.setenv('BROWSER_USE_DEV_ENV', '1')
+	llm = create_mock_llm()
+	agent = Agent(task='Test task', llm=llm)
+	agent._check_and_update_downloads = AsyncMock()
+
+	for memory, action in [
+		('Use the visual loop', [{'vision_click_loop': {'instruction': 'solve the captcha'}}]),
+		('Use the visual loop again', [{'vision_click_loop': {'instruction': 'solve the captcha'}}]),
+		('Use the visual loop again', [{'vision_click_loop': {'instruction': 'solve the captcha'}}]),
+		('Use the visual loop again', [{'vision_click_loop': {'instruction': 'solve the captcha'}}]),
+	]:
+		agent.state.last_model_output = agent.AgentOutput(
+			evaluation_previous_goal=None,
+			memory=memory,
+			next_goal=None,
+			action=action,  # type: ignore[arg-type]
+		)
+		agent.state.last_result = [ActionResult(extracted_content='Vision click loop ran')]
+		await agent._post_process()
+		assert agent.state.last_result is not None
+		assert agent.state.last_result[-1].is_done is not True
+
+	agent.state.last_model_output = agent.AgentOutput(
+		evaluation_previous_goal=None,
+		memory='Try a different action',
+		next_goal=None,
+		action=[{'click': {'index': 1}}],  # type: ignore[arg-type]
+	)
+	agent.state.last_result = [ActionResult(extracted_content='Clicked a different element')]
+	await agent._post_process()
+
+	for memory in [
+		'Return to the visual loop',
+		'Return to the visual loop again',
+		'Return to the visual loop again',
+		'Return to the visual loop again',
+	]:
+		agent.state.last_model_output = agent.AgentOutput(
+			evaluation_previous_goal=None,
+			memory=memory,
+			next_goal=None,
+			action=[{'vision_click_loop': {'instruction': 'solve the captcha'}}],  # type: ignore[arg-type]
+		)
+		agent.state.last_result = [ActionResult(extracted_content='Vision click loop ran')]
+		await agent._post_process()
+		assert agent.state.last_result is not None
+		assert agent.state.last_result[-1].is_done is not True
 
 
 async def test_loop_detector_initialized_from_settings():

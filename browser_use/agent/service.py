@@ -54,6 +54,7 @@ from browser_use.agent.views import (
 	AgentStepInfo,
 	AgentStructuredOutput,
 	BrowserStateHistory,
+	compute_action_hash,
 	DetectedVariable,
 	JudgementResult,
 	MessageCompactionSettings,
@@ -82,6 +83,8 @@ from browser_use.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_VISION_CLICK_LOOP_TERMINATION_LIMIT = 5
 
 
 def log_response(response: AgentOutput, registry=None, logger=None) -> None:
@@ -1292,6 +1295,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Record executed actions for loop detection
 		self._update_loop_detector_actions()
+		self._enforce_vision_click_loop_limit()
 
 		# check for action errors - only count single-action steps toward consecutive failures;
 		# multi-action steps with errors are handled by loop detection and replan nudges instead
@@ -1600,6 +1604,46 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			if not isinstance(params, dict):
 				params = {}
 			self.state.loop_detector.record_action(action_name, params)
+
+	def _enforce_vision_click_loop_limit(self) -> None:
+		"""Stop the task when vision_click_loop is the sole action for 5 consecutive steps."""
+		if self.state.last_model_output is None or len(self.state.last_model_output.action) != 1:
+			return
+
+		action_data = self.state.last_model_output.action[0].model_dump(exclude_unset=True)
+		action_name = next(iter(action_data.keys()), 'unknown')
+		if action_name != 'vision_click_loop':
+			return
+
+		params = action_data.get(action_name, {})
+		if not isinstance(params, dict):
+			params = {}
+		vision_loop_hash = compute_action_hash(action_name, params)
+		recent_hashes = self.state.loop_detector.recent_action_hashes
+		if len(recent_hashes) < _VISION_CLICK_LOOP_TERMINATION_LIMIT:
+			return
+		if any(h != vision_loop_hash for h in recent_hashes[-_VISION_CLICK_LOOP_TERMINATION_LIMIT:]):
+			return
+
+		message = (
+			f'Stopped because vision_click_loop ran {_VISION_CLICK_LOOP_TERMINATION_LIMIT} consecutive steps '
+			'without completing the task.'
+		)
+		self.logger.warning(message)
+		termination_result = ActionResult(
+			is_done=True,
+			success=False,
+			extracted_content=message,
+			long_term_memory=message,
+			metadata={
+				'stop_reason': 'vision_click_loop_limit_reached',
+				'consecutive_vision_click_loop_steps': _VISION_CLICK_LOOP_TERMINATION_LIMIT,
+			},
+		)
+		if self.state.last_result:
+			self.state.last_result.append(termination_result)
+		else:
+			self.state.last_result = [termination_result]
 
 	def _update_loop_detector_page_state(self, browser_state_summary: BrowserStateSummary) -> None:
 		"""Record the current page state for stagnation detection."""
@@ -2855,6 +2899,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				result = await self.tools.act(
 					action=action,
 					browser_session=self.browser_session,
+					action_llm=self.llm,
 					file_system=self.file_system,
 					page_extraction_llm=self.settings.page_extraction_llm,
 					sensitive_data=self.sensitive_data,

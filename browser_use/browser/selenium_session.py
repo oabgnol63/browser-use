@@ -141,7 +141,8 @@ class SeleniumBrowserSession(BrowserSession):
                     self.logger.warning(f'Could not find element for index {idx}')
                     continue
                 await self._selenium_session.action_service.click_element(node, self._cached_selector_map)
-                await asyncio.sleep(0.3)
+                if event.post_click_delay_seconds > 0:
+                    await asyncio.sleep(event.post_click_delay_seconds)
             self.logger.debug('🖱️ Multiple clicks on elements completed')
             return {'indices': event.indices}
         except Exception as e:
@@ -153,8 +154,9 @@ class SeleniumBrowserSession(BrowserSession):
         event.event_timeout = _get_timeout('TIMEOUT_SELENIUM_ClickMultipleCoordinatesEvent', 60.0)
         try:
             for (x, y) in event.coordinates:
-                await self._selenium_session.click_coordinates(x, y)
-                await asyncio.sleep(0.3)
+                await self._selenium_session.click_coordinates(x, y, human_like=event.human_like)
+                if event.post_click_delay_seconds > 0:
+                    await asyncio.sleep(event.post_click_delay_seconds)
             self.logger.debug('🖱️ Multiple clicks on coordinates completed')
             return {'coordinates': event.coordinates}
         except Exception as e:

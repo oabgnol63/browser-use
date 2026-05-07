@@ -70,6 +70,7 @@ class Registry(Generic[Context]):
 			'browser_session': BrowserSession,
 			'page_url': str,
 			'cdp_client': None,  # CDPClient type from cdp_use, but we don't import it here
+			'action_llm': BaseChatModel,
 			'page_extraction_llm': BaseChatModel,
 			'available_file_paths': list,
 			'has_sensitive_data': bool,
@@ -216,6 +217,8 @@ class Registry(Generic[Context]):
 						if value is None and param.default == Parameter.empty:
 							if param.name == 'browser_session':
 								raise ValueError(f'Action {func.__name__} requires browser_session but none provided.')
+							elif param.name == 'action_llm':
+								raise ValueError(f'Action {func.__name__} requires action_llm but none provided.')
 							elif param.name == 'page_extraction_llm':
 								raise ValueError(f'Action {func.__name__} requires page_extraction_llm but none provided.')
 							elif param.name == 'file_system':
@@ -235,6 +238,8 @@ class Registry(Generic[Context]):
 						# Special param is required but not provided
 						if param.name == 'browser_session':
 							raise ValueError(f'Action {func.__name__} requires browser_session but none provided.')
+						elif param.name == 'action_llm':
+							raise ValueError(f'Action {func.__name__} requires action_llm but none provided.')
 						elif param.name == 'page_extraction_llm':
 							raise ValueError(f'Action {func.__name__} requires page_extraction_llm but none provided.')
 						elif param.name == 'file_system':
@@ -366,6 +371,7 @@ class Registry(Generic[Context]):
 		action_name: str,
 		params: dict,
 		browser_session: BrowserSession | None = None,
+		action_llm: BaseChatModel | None = None,
 		page_extraction_llm: BaseChatModel | None = None,
 		file_system: FileSystem | None = None,
 		sensitive_data: dict[str, str | dict[str, str]] | None = None,
@@ -400,6 +406,7 @@ class Registry(Generic[Context]):
 			# Build special context dict
 			special_context = {
 				'browser_session': browser_session,
+				'action_llm': action_llm,
 				'page_extraction_llm': page_extraction_llm,
 				'available_file_paths': available_file_paths,
 				'has_sensitive_data': action_name == 'input' and bool(sensitive_data),
@@ -431,7 +438,7 @@ class Registry(Generic[Context]):
 
 		except ValueError as e:
 			# Preserve ValueError messages from validation
-			if 'requires browser_session but none provided' in str(e) or 'requires page_extraction_llm but none provided' in str(
+			if 'requires browser_session but none provided' in str(e) or 'requires action_llm but none provided' in str(e) or 'requires page_extraction_llm but none provided' in str(
 				e
 			):
 				raise RuntimeError(str(e)) from e

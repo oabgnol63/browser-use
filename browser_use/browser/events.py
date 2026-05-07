@@ -185,6 +185,9 @@ class ClickMultipleCoordinatesEvent(BaseEvent[dict]):
 	"""Multiple clicks on specific coordinates."""
 
 	coordinates: list[tuple[int, int]]
+	highlight: bool = True
+	human_like: bool = True
+	post_click_delay_seconds: float = 0.3
 
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickMultipleCoordinatesEvent', 60.0))  # seconds
 

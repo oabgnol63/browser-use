@@ -281,7 +281,7 @@ class TestBuiltinCdpBackendAnnotations:
 	def test_cdp_only_tools_have_backend_constraint(self):
 		tools = Tools()
 		cdp_only = [
-			"evaluate", "save_as_pdf", "search_page", "find_elements", "press_and_hold_coordinate",
+			"evaluate", "save_as_pdf", "search_page", "find_elements", "press_and_hold",
 		]
 		for name in cdp_only:
 			action = tools.registry.registry.actions.get(name)
@@ -296,7 +296,7 @@ class TestBuiltinCdpBackendAnnotations:
 			"done", "wait", "go_back", "go_forward", "search", "navigate",
 			"switch", "close", "send_keys", "write_file", "replace_file",
 			"read_file", "screenshot", "scroll", "input",
-			"scroll_coordinate", "hover_coordinate", "drag_and_drop_coordinate",
+			"scroll_at", "hover",
 		]
 		for name in unconstrained:
 			action = tools.registry.registry.actions.get(name)
@@ -305,9 +305,15 @@ class TestBuiltinCdpBackendAnnotations:
 				f"Tool '{name}' should be backends=None, got {action.backends}"
 			)
 
-	def test_multiple_click_coordinate_declares_supported_backends(self):
+	def test_multiple_click_declares_supported_backends(self):
 		tools = Tools()
-		action = tools.registry.registry.actions.get("multiple_click_coordinate")
+		action = tools.registry.registry.actions.get("multiple_click")
+		assert action is not None
+		assert action.backends == {Backend.CDP, Backend.WEBDRIVER}
+
+	def test_vision_click_loop_declares_supported_backends(self):
+		tools = Tools()
+		action = tools.registry.registry.actions.get("vision_click_loop")
 		assert action is not None
 		assert action.backends == {Backend.CDP, Backend.WEBDRIVER}
 
@@ -343,12 +349,22 @@ class TestBuiltinToolAnnotations:
 	def test_explicit_cross_mode_coordinate_tools(self):
 		"""New coordinate tools should declare DOM+VISION explicitly."""
 		tools = Tools()
-		for name in ["multiple_click_coordinate", "press_and_hold_coordinate"]:
+		tools.set_coordinate_clicking(True)
+		for name in ["multiple_click", "press_and_hold", "vision_click_loop"]:
 			action = tools.registry.registry.actions.get(name)
 			assert action is not None, f"Tool '{name}' not found in registry"
 			assert action.modes == {Mode.DOM, Mode.VISION}, (
 				f"Tool '{name}' should be modes={{Mode.DOM, Mode.VISION}}, got {action.modes}"
 			)
+
+
+class TestSchemaCompatibility:
+	def test_vision_click_loop_schema_avoids_exclusive_minimum(self):
+		from browser_use.tools.views import VisionClickLoopAction
+
+		schema = VisionClickLoopAction.model_json_schema()
+		schema_text = str(schema)
+		assert "exclusiveMinimum" not in schema_text
 
 
 class TestCoordinateClickingModesPropagation:
@@ -449,9 +465,9 @@ class TestToolsInitWithConstraints:
 		assert "scroll" in tools.registry.registry.actions
 		assert "send_keys" in tools.registry.registry.actions
 		# Coordinate tools are backend-agnostic — Selenium has handlers
-		assert "scroll_coordinate" in tools.registry.registry.actions
-		assert "hover_coordinate" in tools.registry.registry.actions
-		assert "drag_and_drop_coordinate" in tools.registry.registry.actions
+		assert "scroll_at" in tools.registry.registry.actions
+		assert "hover" in tools.registry.registry.actions
+		assert "drag_and_drop" in tools.registry.registry.actions
 
 	def test_cdp_backend_keeps_cdp_tools(self):
 		tools = Tools(active_backend=Backend.CDP)

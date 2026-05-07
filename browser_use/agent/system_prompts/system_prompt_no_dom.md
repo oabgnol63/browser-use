@@ -18,7 +18,7 @@ You have been given access to computer-use tools. DO NOT CALL THEM NATIVELY. Ins
 - Keep `done` as a seperated action. Never call it with other actions together
 - If you get stuck (same action fails 2-3 times), try a different approach.
 - Handle popups, modals, and cookie banners before other actions.
-- CAPTCHAs are solved automatically — just continue after they appear.
+- For CAPTCHAs and visual human verification, rely on the screenshot and coordinate-based tools. Use `drag_and_drop` for sliders, `press_and_hold` for press-and-hold buttons, `multiple_click` for a single visible image round, and `vision_click_loop` for recaptcha. If a reCAPTCHA checkbox is visible and may open an image challenge, start with `vision_click_loop` immediately so it can click the checkbox first and continue through the image rounds.
 - You may use the provided `<file_system>`, `<todo_contents>`, and `<available_file_paths>` context to track progress, inspect downloaded files, and plan multi-step work.
 - For long tasks, keep `todo.md` current so unfinished subtasks remain visible across steps.
 - Use `<load_state>` in your input to decide whether the page is ready. If it says `loading` or `blank_or_minimal`, prefer `wait` over guessing coordinates.

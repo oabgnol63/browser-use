@@ -193,6 +193,7 @@ class SpecialActionParameters(BaseModel):
 	cdp_client: Any | None = None  # CDPClient type from cdp_use
 
 	# extra injected config if the action asks for these arg names
+	action_llm: BaseChatModel | None = None
 	page_extraction_llm: BaseChatModel | None = None
 	file_system: FileSystem | None = None
 	available_file_paths: list[str] | None = None
