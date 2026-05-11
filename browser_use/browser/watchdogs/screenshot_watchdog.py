@@ -1,5 +1,6 @@
 """Screenshot watchdog for handling screenshot requests using CDP."""
 
+import asyncio
 import base64
 from io import BytesIO
 from PIL import Image
@@ -26,6 +27,43 @@ class ScreenshotWatchdog(BaseWatchdog):
 	# Events this watchdog emits
 	EMITS: ClassVar[list[type[BaseEvent[Any]]]] = []
 
+	def _is_vision_only_mode(self) -> bool:
+		return bool(getattr(self.browser_session, '_use_native_computer_use', False))
+
+	async def _resolve_target_id(self, event: ScreenshotEvent) -> str:
+		"""Resolve which target should be captured for this screenshot request."""
+		if self._is_vision_only_mode():
+			if not self.browser_session.session_manager:
+				raise BrowserError('[ScreenshotWatchdog] Session manager unavailable for vision-only screenshot capture')
+
+			focus_timeout = min(event.event_timeout or 15.0, 3.0)
+			focus_valid = await self.browser_session.session_manager.ensure_valid_focus(timeout=focus_timeout)
+			if not focus_valid or not self.browser_session.agent_focus_target_id:
+				raise BrowserError('[ScreenshotWatchdog] No valid focused page available for vision-only screenshot capture')
+
+			focused_target = self.browser_session.get_focused_target()
+			if not focused_target or focused_target.target_type not in ('page', 'tab'):
+				target_type_str = focused_target.target_type if focused_target else 'None'
+				raise BrowserError(
+					f'[ScreenshotWatchdog] Vision-only screenshot capture requires focused page/tab target, got {target_type_str}'
+				)
+
+			return focused_target.target_id
+
+		# Validate focused target is a top-level page (not iframe/worker)
+		# CDP Page.captureScreenshot only works on page/tab targets
+		focused_target = self.browser_session.get_focused_target()
+		if focused_target and focused_target.target_type in ('page', 'tab'):
+			return focused_target.target_id
+
+		# Focused target is iframe/worker/missing - fall back to any page target
+		target_type_str = focused_target.target_type if focused_target else 'None'
+		self.logger.warning(f'[ScreenshotWatchdog] Focused target is {target_type_str}, falling back to page target')
+		page_targets = self.browser_session.get_page_targets()
+		if not page_targets:
+			raise BrowserError('[ScreenshotWatchdog] No page targets available for screenshot')
+		return page_targets[-1].target_id
+
 	@observe_debug(ignore_input=True, ignore_output=True, name='screenshot_event_handler')
 	async def on_ScreenshotEvent(self, event: ScreenshotEvent) -> str:
 		"""Handle screenshot request using CDP.
@@ -38,21 +76,7 @@ class ScreenshotWatchdog(BaseWatchdog):
 		"""
 		self.logger.debug('[ScreenshotWatchdog] Handler START - on_ScreenshotEvent called')
 		try:
-			# Validate focused target is a top-level page (not iframe/worker)
-			# CDP Page.captureScreenshot only works on page/tab targets
-			focused_target = self.browser_session.get_focused_target()
-
-			if focused_target and focused_target.target_type in ('page', 'tab'):
-				target_id = focused_target.target_id
-			else:
-				# Focused target is iframe/worker/missing - fall back to any page target
-				target_type_str = focused_target.target_type if focused_target else 'None'
-				self.logger.warning(f'[ScreenshotWatchdog] Focused target is {target_type_str}, falling back to page target')
-				page_targets = self.browser_session.get_page_targets()
-				if not page_targets:
-					raise BrowserError('[ScreenshotWatchdog] No page targets available for screenshot')
-				target_id = page_targets[-1].target_id
-
+			target_id = await self._resolve_target_id(event)
 			cdp_session = await self.browser_session.get_or_create_cdp_session(target_id, focus=True)
 
 			# Remove highlights BEFORE taking the screenshot so they don't appear in the image.
@@ -78,7 +102,11 @@ class ScreenshotWatchdog(BaseWatchdog):
 
 			# Take screenshot using CDP
 			self.logger.debug(f'[ScreenshotWatchdog] Taking screenshot with params: {params}')
-			result = await cdp_session.cdp_client.send.Page.captureScreenshot(params=params, session_id=cdp_session.session_id)
+			capture_coro = cdp_session.cdp_client.send.Page.captureScreenshot(params=params, session_id=cdp_session.session_id)
+			if self._is_vision_only_mode() and event.event_timeout is not None:
+				result = await asyncio.wait_for(capture_coro, timeout=event.event_timeout)
+			else:
+				result = await capture_coro
 
 			# Return base64-encoded screenshot data
 			if result and 'data' in result:

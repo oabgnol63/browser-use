@@ -150,7 +150,13 @@ class TestCoordinateClickingModelDetection:
 		"""Test that the model detection patterns correctly identify coordinate-capable models."""
 		model_lower = model_name.lower()
 		supports_coords = any(
-			pattern in model_lower for pattern in ['claude-sonnet-4', 'claude-opus-4', 'gemini-3-flash-preview', 'browser-use/']
+			pattern in model_lower
+			for pattern in [
+				'claude-sonnet-4',
+				'claude-opus-4',
+				'gemini-3-flash-preview',
+				'browser-use/',
+			]
 		)
 		assert supports_coords == expected_coords, f'Model {model_name}: expected {expected_coords}, got {supports_coords}'
 
@@ -176,7 +182,12 @@ class TestCoordinateClickingAgentMode:
 		llm = create_mock_llm()
 		llm.model = 'gemini-3-flash-preview'
 
-		agent = Agent(task='Test task', llm=llm, browser_session=browser_session)
+		agent = Agent(
+			task='Test task',
+			llm=llm,
+			browser_session=browser_session,
+			override_system_message='Test system prompt',
+		)
 		get_browser_state_summary = AsyncMock(
 			return_value=SimpleNamespace(url='https://example.com', screenshot=None, dom_state=None)
 		)
@@ -193,15 +204,23 @@ class TestCoordinateClickingAgentMode:
 
 		assert agent.tools.registry.active_mode == Mode.DOM
 		assert agent.tools._coordinate_clicking_enabled is True
+		assert agent.browser_session._use_native_computer_use is False
 		assert get_browser_state_summary.await_args.kwargs['include_dom'] is True
 
 	async def test_native_computer_use_switches_to_vision_mode(self, browser_session):
 		llm = create_mock_llm()
 		llm.model = 'gemini-3-flash-preview'
 
-		agent = Agent(task='Test task', llm=llm, browser_session=browser_session, use_native_computer_use=True)
+		agent = Agent(
+			task='Test task',
+			llm=llm,
+			browser_session=browser_session,
+			use_native_computer_use=True,
+			override_system_message='Test system prompt',
+		)
 
 		assert agent.tools.registry.active_mode == Mode.VISION
+		assert agent.browser_session._use_native_computer_use is True
 
 	def test_tools_state_preserved_after_modification(self):
 		"""Verify that other tool state is preserved when toggling coordinate clicking."""

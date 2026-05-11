@@ -34,7 +34,6 @@ load_dotenv()
 from pydantic import BaseModel, ValidationError
 from uuid_extensions import uuid7str
 
-from browser_use import Browser, BrowserProfile, BrowserSession
 from browser_use.agent.judge import construct_judge_messages
 
 # Lazy import for gif to avoid heavy agent.views import at startup
@@ -54,15 +53,16 @@ from browser_use.agent.views import (
 	AgentStepInfo,
 	AgentStructuredOutput,
 	BrowserStateHistory,
-	compute_action_hash,
 	DetectedVariable,
 	JudgementResult,
 	MessageCompactionSettings,
 	PlanItem,
 	StepMetadata,
+	compute_action_hash,
 )
 from browser_use.browser.events import _get_timeout
-from browser_use.browser.session import DEFAULT_BROWSER_PROFILE
+from browser_use.browser.profile import BrowserProfile
+from browser_use.browser.session import DEFAULT_BROWSER_PROFILE, BrowserSession
 from browser_use.browser.views import BrowserStateSummary
 from browser_use.config import CONFIG
 from browser_use.dom.views import DOMInteractedElement, MatchLevel
@@ -85,6 +85,7 @@ from browser_use.utils import (
 logger = logging.getLogger(__name__)
 
 _VISION_CLICK_LOOP_TERMINATION_LIMIT = 5
+Browser = BrowserSession
 
 
 def log_response(response: AgentOutput, registry=None, logger=None) -> None:
@@ -123,7 +124,6 @@ def log_response(response: AgentOutput, registry=None, logger=None) -> None:
 	if next_goal:
 		# Blue color for next goal
 		logger.info(f'  \033[34m🎯 Next goal: {next_goal}\033[0m')
-
 
 Context = TypeVar('Context')
 
@@ -231,7 +231,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				llm = get_llm_by_name(default_llm_name)
 			else:
 				# No default LLM specified, use the original default
-				from browser_use import ChatBrowserUse
+				from browser_use.llm.browser_use.chat import ChatBrowserUse
 
 				llm = ChatBrowserUse()
 
@@ -317,6 +317,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			browser_profile=browser_profile,
 			id=uuid7str()[:-4] + self.id[-4:],  # re-use the same 4-char suffix so they show up together in logs
 		)
+		self.browser_session._use_native_computer_use = use_native_computer_use
 
 		# Coordinate system handling:
 		# - Gemini coord-clicking models: ChatGoogle auto-injects computer-use tool by model name;
@@ -2091,7 +2092,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				parsed.action = parsed.action[: self.settings.max_actions_per_step]
 
 			if CONFIG.BROWSER_USE_PRINT_LLM_MESSAGES:
-				self.logger.info(f'\n\n--- LLM RESPONSE (step {self.state.n_steps}) ---\n{parsed.model_dump_json(indent=2)}\n-------------------\n')
+				self.logger.info(
+					f'\n\n--- LLM RESPONSE (step {self.state.n_steps}) ---\n'
+					f'{parsed.model_dump_json(indent=2, exclude_none=True)}\n'
+					'-------------------\n'
+				)
 
 			if not (hasattr(self.state, 'paused') and (self.state.paused or self.state.stopped)):
 				log_response(parsed, self.tools.registry.registry, self.logger)

@@ -443,6 +443,9 @@ class BrowserSession(BaseModel):
 	# Last known mouse position for human-like movement
 	_last_mouse_pos: tuple[int, int] | None = PrivateAttr(default=None)
 
+	# Runtime mode flag propagated by Agent for mode-specific watchdog behavior.
+	_use_native_computer_use: bool = PrivateAttr(default=False)
+
 	@classmethod
 	def from_system_chrome(cls, profile_directory: str | None = None, **kwargs: Any) -> Self:
 		"""Create a BrowserSession using system's Chrome installation and profile"""
@@ -2291,13 +2294,30 @@ class BrowserSession(BaseModel):
 
 		task.add_done_callback(_on_message_handler_done)
 
+	async def _refresh_targets_from_cdp(self) -> None:
+		"""Refresh cached target metadata from a live CDP snapshot when needed."""
+		if not self._use_native_computer_use:
+			return
+
+		if not self.session_manager or not self._cdp_client_root:
+			return
+
+		try:
+			targets_result = await self._cdp_client_root.send.Target.getTargets()
+			target_infos = targets_result.get('targetInfos', [])
+			await self.session_manager.sync_targets_from_snapshot(target_infos)
+		except Exception as e:
+			self.logger.debug(f'Failed to refresh target snapshot from CDP: {type(e).__name__}: {e}')
+
 	async def get_tabs(self) -> list[TabInfo]:
-		"""Get information about all open tabs using cached target data."""
+		"""Get information about all open tabs using the freshest available target data."""
 		tabs = []
 
 		# Safety check - return empty list if browser not connected yet
 		if not self.session_manager:
 			return tabs
+
+		await self._refresh_targets_from_cdp()
 
 		# Get all page targets from SessionManager
 		page_targets = self.session_manager.get_all_page_targets()
@@ -2358,6 +2378,8 @@ class BrowserSession(BaseModel):
 		if not self.agent_focus_target_id:
 			return None
 
+		await self._refresh_targets_from_cdp()
+
 		target = self.session_manager.get_target(self.agent_focus_target_id)
 
 		return {
@@ -2372,6 +2394,7 @@ class BrowserSession(BaseModel):
 	async def get_current_page_url(self) -> str:
 		"""Get the URL of the current page."""
 		if self.agent_focus_target_id:
+			await self._refresh_targets_from_cdp()
 			target = self.session_manager.get_target(self.agent_focus_target_id)
 			return target.url
 		return 'about:blank'
@@ -2379,6 +2402,7 @@ class BrowserSession(BaseModel):
 	async def get_current_page_title(self) -> str:
 		"""Get the title of the current page."""
 		if self.agent_focus_target_id:
+			await self._refresh_targets_from_cdp()
 			target = self.session_manager.get_target(self.agent_focus_target_id)
 			return target.title
 		return 'Unknown page title'
@@ -4074,4 +4098,3 @@ class BrowserSession(BaseModel):
 			'width': max(content[0], content[2], content[4], content[6]) - min(content[0], content[2], content[4], content[6]),
 			'height': max(content[1], content[3], content[5], content[7]) - min(content[1], content[3], content[5], content[7]),
 		}
-

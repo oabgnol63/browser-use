@@ -884,8 +884,11 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			if not success:
 				# Fallback to JavaScript scroll
-				self.logger.debug('CDP gesture scroll failed, falling back to JavaScript scroll')
-				await self._scroll_page_with_js(pixels)
+				self.logger.debug('CDP gesture scroll had no effect, falling back to JavaScript scroll')
+				success = await self._scroll_page_with_js(pixels)
+
+			if not success:
+				raise BrowserError('Scroll had no visible effect on the page or active scroll container')
 
 			# Note: We don't clear cached state here - let multi_act handle DOM change detection
 			# by explicitly rebuilding and comparing when needed
@@ -2531,6 +2534,79 @@ class DefaultActionWatchdog(BaseWatchdog):
 			self.logger.warning(f'⚠️ Failed to trigger framework events: {type(e).__name__}: {e}')
 			# Don't raise - framework events are a best-effort enhancement
 
+	async def _get_scroll_state(self, cdp_session) -> dict:
+		"""Capture window/root/container scroll state for movement verification."""
+		result = await cdp_session.cdp_client.send.Runtime.evaluate(
+			params={
+				'expression': f"""
+(() => {{
+	function findScrollable(start) {{
+		for (let el = start; el; el = el.parentElement) {{
+			if (el === document.body || el === document.documentElement) {{
+				continue;
+			}}
+			const style = getComputedStyle(el);
+			const canScrollY = ['auto', 'scroll', 'overlay'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
+			const canScrollX = ['auto', 'scroll', 'overlay'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
+			if (canScrollY || canScrollX) {{
+				return el;
+			}}
+		}}
+		return null;
+	}}
+
+	function summarize(el) {{
+		if (!el) {{
+			return null;
+		}}
+		return {{
+			tag: el.tagName || null,
+			scrollTop: Number(el.scrollTop || 0),
+			scrollLeft: Number(el.scrollLeft || 0),
+		}};
+	}}
+
+	const root = document.scrollingElement || document.documentElement || document.body;
+	const centerEl = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+	const activeEl = document.activeElement;
+
+	return {{
+		windowX: Number(window.scrollX || window.pageXOffset || 0),
+		windowY: Number(window.scrollY || window.pageYOffset || 0),
+		rootTop: Number(root ? root.scrollTop || 0 : 0),
+		rootLeft: Number(root ? root.scrollLeft || 0 : 0),
+		center: summarize(findScrollable(centerEl)),
+		active: summarize(findScrollable(activeEl)),
+	}};
+}})()
+""",
+				'returnByValue': True,
+				'awaitPromise': True,
+			},
+			session_id=cdp_session.session_id,
+		)
+		return result.get('result', {}).get('value', {}) or {}
+
+	@staticmethod
+	def _scroll_state_changed(before: dict, after: dict) -> bool:
+		"""Return True when any tracked window/root/container scroll offset changed."""
+		if not before or not after:
+			return False
+
+		for key in ('windowX', 'windowY', 'rootTop', 'rootLeft'):
+			if before.get(key) != after.get(key):
+				return True
+
+		for container_key in ('center', 'active'):
+			before_container = before.get(container_key) or {}
+			after_container = after.get(container_key) or {}
+			if before_container.get('scrollTop') != after_container.get('scrollTop'):
+				return True
+			if before_container.get('scrollLeft') != after_container.get('scrollLeft'):
+				return True
+
+		return False
+
 	async def _scroll_with_cdp_gesture(self, pixels: int) -> bool:
 		"""
 		Scroll using CDP Input.synthesizeScrollGesture to simulate realistic scroll gesture.
@@ -2546,6 +2622,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			cdp_session = await self.browser_session.get_or_create_cdp_session()
 			cdp_client = cdp_session.cdp_client
 			session_id = cdp_session.session_id
+			before_state = await self._get_scroll_state(cdp_session)
 
 			# Get viewport dimensions from cached value if available
 			if self.browser_session._original_viewport_size:
@@ -2576,23 +2653,92 @@ class DefaultActionWatchdog(BaseWatchdog):
 				session_id=session_id,
 			)
 
-			self.logger.debug(f'📄 Scrolled via CDP gesture: {pixels}px')
-			return True
+			await asyncio.sleep(0.05)
+			after_state = await self._get_scroll_state(cdp_session)
+			if self._scroll_state_changed(before_state, after_state):
+				self.logger.debug(f'📄 Scrolled via CDP gesture: {pixels}px')
+				return True
+
+			self.logger.debug(f'CDP gesture completed but produced no scroll movement for {pixels}px request')
+			return False
 
 		except Exception as e:
 			# Not critical - JavaScript fallback will handle scrolling
 			self.logger.debug(f'CDP gesture scroll failed ({type(e).__name__}: {e}), falling back to JS')
 			return False
 
-	async def _scroll_page_with_js(self, pixels: int) -> None:
-		"""Scroll the page using JavaScript window.scrollBy()."""
+	async def _scroll_page_with_js(self, pixels: int) -> bool:
+		"""Scroll the page or closest active container using JavaScript and verify movement."""
 		try:
 			cdp_session = await self.browser_session.get_or_create_cdp_session()
-			await cdp_session.cdp_client.send.Runtime.evaluate(
-				params={'expression': f'window.scrollBy(0, {pixels})', 'awaitPromise': True},
+			result = await cdp_session.cdp_client.send.Runtime.evaluate(
+				params={
+					'expression': f"""
+(() => {{
+	function findScrollable(start) {{
+		for (let el = start; el; el = el.parentElement) {{
+			if (el === document.body || el === document.documentElement) {{
+				continue;
+			}}
+			const style = getComputedStyle(el);
+			const canScrollY = ['auto', 'scroll', 'overlay'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
+			const canScrollX = ['auto', 'scroll', 'overlay'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
+			if (canScrollY || canScrollX) {{
+				return el;
+			}}
+		}}
+		return null;
+	}}
+
+	const dy = {pixels};
+	const centerEl = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+	const activeEl = document.activeElement;
+	const root = document.scrollingElement || document.documentElement || document.body;
+
+	const candidates = [findScrollable(activeEl), findScrollable(centerEl)];
+	for (const candidate of candidates) {{
+		if (!candidate) {{
+			continue;
+		}}
+		const beforeTop = Number(candidate.scrollTop || 0);
+		const beforeLeft = Number(candidate.scrollLeft || 0);
+		candidate.scrollBy(0, dy);
+		if (Number(candidate.scrollTop || 0) !== beforeTop || Number(candidate.scrollLeft || 0) !== beforeLeft) {{
+			return {{ moved: true, scroller: candidate.tagName || 'unknown', target: 'container' }};
+		}}
+	}}
+
+	const beforeRootTop = Number(root ? root.scrollTop || 0 : 0);
+	const beforeRootLeft = Number(root ? root.scrollLeft || 0 : 0);
+	if (root && typeof root.scrollBy === 'function') {{
+		root.scrollBy(0, dy);
+	}} else {{
+		window.scrollBy(0, dy);
+	}}
+	const afterRootTop = Number(root ? root.scrollTop || 0 : 0);
+	const afterRootLeft = Number(root ? root.scrollLeft || 0 : 0);
+
+	return {{
+		moved: afterRootTop !== beforeRootTop || afterRootLeft !== beforeRootLeft,
+		scroller: root ? (root.tagName || 'window-root') : 'window',
+		target: 'root',
+	}};
+}})()
+""",
+					'awaitPromise': True,
+					'returnByValue': True,
+				},
 				session_id=cdp_session.session_id,
 			)
-			self.logger.debug(f'📄 Scrolled via JS fallback: {pixels}px')
+			scroll_result = result.get('result', {}).get('value', {}) or {}
+			if scroll_result.get('moved'):
+				self.logger.debug(
+					f'📄 Scrolled via JS fallback: {pixels}px on {scroll_result.get("target")} {scroll_result.get("scroller")}'
+				)
+				return True
+
+			self.logger.debug(f'JS scroll fallback completed but produced no movement for {pixels}px request')
+			return False
 		except Exception as e:
 			self.logger.warning(f'JS scroll fallback failed: {e}')
 			raise

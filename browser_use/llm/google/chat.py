@@ -239,12 +239,11 @@ class ChatGoogle(BaseChatModel):
 		if request_config.get('cached_content') and any(
 			key in request_config for key in ('tools', 'tool_config', 'system_instruction')
 		):
-			cache_name = request_config.pop('cached_content', None)
-			if system_instruction and 'system_instruction' not in request_config:
-				request_config['system_instruction'] = system_instruction
-			self.logger.debug(
-				f'Disabled cached_content for request because Gemini forbids combining it with tools/tool_config/system_instruction: {cache_name}'
-			)
+			# If cached_content is set, the tools and system instruction are baked into the cache.
+			# Gemini forbids passing them again in the request config.
+			request_config.pop('tools', None)
+			request_config.pop('tool_config', None)
+			request_config.pop('system_instruction', None)
 
 		return request_config
 
@@ -290,7 +289,12 @@ class ChatGoogle(BaseChatModel):
 		if system_instruction:
 			# Cache long system instructions explicitly to save tokens across steps
 			if len(system_instruction) > 4000:
-				system_hash = hashlib.md5(system_instruction.encode()).hexdigest()
+				hash_input = system_instruction
+				if 'tools' in config:
+					hash_input += str(config['tools'])
+				if 'tool_config' in config:
+					hash_input += str(config['tool_config'])
+				system_hash = hashlib.md5(hash_input.encode()).hexdigest()
 				
 				if not hasattr(self, '_system_caches'):
 					# Keep dictionary of caches so we can handle changing system prompts 
@@ -308,6 +312,8 @@ class ChatGoogle(BaseChatModel):
 						client = self.get_client()
 						cache_config = types.CreateCachedContentConfig(
 							system_instruction=system_instruction,
+							tools=config.get('tools'),  # type: ignore
+							tool_config=config.get('tool_config'),  # type: ignore
 							ttl='1800s'  # 20 mins TTL
 						)
 						cache = await asyncio.to_thread(

@@ -159,6 +159,23 @@ class SessionManager:
 				page_targets.append(target)
 		return page_targets
 
+	async def sync_targets_from_snapshot(self, target_infos: list[dict]) -> None:
+		"""Merge a live Target.getTargets snapshot into the owned target cache.
+
+		This is a defensive refresh path for environments where targetInfoChanged
+		events can lag or be dropped after same-tab navigations/history changes.
+		"""
+		async with self._lock:
+			for target_info in target_infos:
+				target_id = target_info.get('targetId')
+				if not target_id or target_id not in self._targets:
+					continue
+
+				target = self._targets[target_id]
+				target.target_type = target_info.get('type', target.target_type)
+				target.url = target_info.get('url', target.url)
+				target.title = target_info.get('title', target.title)
+
 	async def validate_session(self, target_id: TargetID) -> bool:
 		"""Check if a target still has active sessions.
 
