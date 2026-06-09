@@ -130,7 +130,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-venv-
 
-      - run: uv sync --dev --all-extras
+      - run: uv sync --dev --all-extras --refresh-package browser-use-core
 
       - name: Get week number for cache key
         id: week
@@ -214,7 +214,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-venv-
 
-      - run: uv sync --dev --all-extras
+      - run: uv sync --dev --all-extras --refresh-package browser-use-core
 
       - name: Get week number for cache key
         id: week

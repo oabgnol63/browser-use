@@ -368,13 +368,16 @@ class DomService:
 			root_frame_id = frame_tree['frameTree']['frame']['id']
 			all_frame_ids = [root_frame_id]
 
-		# Get accessibility tree for each frame, being resilient to frames that disappeared
-		async def _fetch_ax_tree(frame_id: str):
+		# Get accessibility tree for each frame, being resilient to child frames that disappeared
+		async def _fetch_ax_tree(frame_id: str, is_root: bool = False):
 			try:
 				return await cdp_session.cdp_client.send.Accessibility.getFullAXTree(
 					params={'frameId': frame_id}, session_id=cdp_session.session_id
 				)
 			except Exception as e:
+				# If it's the root frame, we MUST propagate the error so the caller can retry
+				if is_root:
+					raise e
 				msg = getattr(e, 'message', None) or str(e)
 				# Common CDP error when a frame detaches between discovery and query
 				if '-32602' in msg or 'Frame with the given frameId is not found' in msg:
@@ -383,7 +386,12 @@ class DomService:
 				self.logger.warning(f'AX tree request failed for frame {frame_id}: {msg}')
 				return None
 
-		ax_trees = await asyncio.gather(*[ _fetch_ax_tree(fid) for fid in all_frame_ids ], return_exceptions=False)
+		# Retrieve accessibility trees (the root frame is always index 0)
+		ax_trees = await asyncio.gather(
+			_fetch_ax_tree(all_frame_ids[0], is_root=True),
+			*[ _fetch_ax_tree(fid, is_root=False) for fid in all_frame_ids[1:] ],
+			return_exceptions=False
+		)
 
 		# Merge all AX nodes into a single array
 		merged_nodes: list[AXNode] = []
@@ -1151,10 +1159,12 @@ class DomService:
 		pagination_buttons: list[dict[str, str | int | bool]] = []
 
 		# Common pagination patterns to look for
+		# `«` and `»` are ambiguous across sites, so treat them only as prev/next
+		# fallback symbols and let word-based first/last signals win
 		next_patterns = ['next', '>', '»', '→', 'siguiente', 'suivant', 'weiter', 'volgende']
 		prev_patterns = ['prev', 'previous', '<', '«', '←', 'anterior', 'précédent', 'zurück', 'vorige']
-		first_patterns = ['first', '⇤', '«', 'primera', 'première', 'erste', 'eerste']
-		last_patterns = ['last', '⇥', '»', 'última', 'dernier', 'letzte', 'laatste']
+		first_patterns = ['first', '⇤', 'primera', 'première', 'erste', 'eerste']
+		last_patterns = ['last', '⇥', 'última', 'dernier', 'letzte', 'laatste']
 
 		for index, node in selector_map.items():
 			# Skip non-clickable elements
@@ -1180,18 +1190,18 @@ class DomService:
 
 			button_type: str | None = None
 
-			# Check for next button
-			if any(pattern in all_text for pattern in next_patterns):
-				button_type = 'next'
-			# Check for previous button
-			elif any(pattern in all_text for pattern in prev_patterns):
-				button_type = 'prev'
-			# Check for first button
-			elif any(pattern in all_text for pattern in first_patterns):
+			# Match specific first/last semantics before generic prev/next fallbacks.
+			if any(pattern in all_text for pattern in first_patterns):
 				button_type = 'first'
 			# Check for last button
 			elif any(pattern in all_text for pattern in last_patterns):
 				button_type = 'last'
+			# Check for next button
+			elif any(pattern in all_text for pattern in next_patterns):
+				button_type = 'next'
+			# Check for previous button
+			elif any(pattern in all_text for pattern in prev_patterns):
+				button_type = 'prev'
 			# Check for numeric page buttons (single or double digit)
 			elif text.isdigit() and len(text) <= 2 and role in ['button', 'link', '']:
 				button_type = 'page_number'

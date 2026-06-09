@@ -78,6 +78,8 @@ from browser_use.utils import (
 	_log_pretty_path,
 	check_latest_browser_use_version,
 	get_browser_use_version,
+	is_placeholder_url,
+	sanitize_url_candidate,
 	time_execution_async,
 	time_execution_sync,
 )
@@ -1855,6 +1857,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# Only pass request_type for ChatBrowserUse (other providers don't support it)
 		if self.judge_llm.provider == 'browser-use':
 			kwargs['request_type'] = 'judge'
+			kwargs['session_id'] = self.session_id
 
 		try:
 			response = await self.judge_llm.ainvoke(input_messages, **kwargs)
@@ -1900,8 +1903,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				if judgement.failure_reason:
 					judge_log += f'   Failure Reason: {judgement.failure_reason}\n'
 				if judgement.reached_captcha:
-					judge_log += '   🤖 Captcha Detected: Agent encountered captcha challenges\n'
-					judge_log += '   👉 🥷 Use Browser Use Cloud for the most stealth browser infra: https://docs.browser-use.com/customize/browser/remote\n'
+					self.logger.warning(
+						'Agent was blocked by a captcha. Cloud browsers include stealth fingerprinting and proxy rotation to avoid this.\n'
+						'         Try: Browser(use_cloud=True)  |  Get an API key: https://cloud.browser-use.com?utm_source=oss&utm_medium=captcha_nudge'
+					)
 				judge_log += f'   {judgement.reasoning}\n'
 				self.logger.info(judge_log)
 
@@ -2434,11 +2439,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			has_captcha_issue = any(keyword in final_result_str for keyword in captcha_keywords)
 
 			if has_captcha_issue:
-				# Suggest use_cloud=True for captcha/cloudflare issues
-				task_preview = self.task[:10] if len(self.task) > 10 else self.task
-				self.logger.info('')
-				self.logger.info('Failed because of CAPTCHA? For better browser stealth, try:')
-				self.logger.info(f'   agent = Agent(task="{task_preview}...", browser=Browser(use_cloud=True))')
+				self.logger.warning(
+					'Agent was blocked by a captcha. Cloud browsers include stealth fingerprinting and proxy rotation to avoid this.\n'
+					'         Try: Browser(use_cloud=True)  |  Get an API key: https://cloud.browser-use.com?utm_source=oss&utm_medium=captcha_nudge'
+				)
 
 			# General failure message
 			self.logger.info('')
@@ -2647,7 +2651,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				original_position = match.start()  # Store original position before URL modification
 
 				# Remove trailing punctuation that's not part of URLs
-				url = re.sub(r'[.,;:!?()\[\]]+$', '', url)
+				url = sanitize_url_candidate(url)
+
+				if is_placeholder_url(url):
+					self.logger.debug(f'Excluding placeholder URL from auto-navigation: {url}')
+					continue
 
 				# Check if URL ends with a file extension that should be excluded
 				url_lower = url.lower()
@@ -2825,11 +2833,25 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# Register skills as actions if SkillService is configured
 			await self._register_skills_as_actions()
 
-			# Normally there was no try catch here but the callback can raise an InterruptedError
+			# Normally there was no try catch here but the callback can raise an InterruptedError.
+			# Wrap with step_timeout so initial actions (usually a single URL navigate) can't
+			# hang indefinitely on a silent CDP WebSocket — without this the agent would take
+			# zero steps and return with an empty history while any outer watchdog waits.
 			try:
-				await self._execute_initial_actions()
+				await asyncio.wait_for(
+					self._execute_initial_actions(),
+					timeout=self.settings.step_timeout,
+				)
 			except InterruptedError:
 				pass
+			except TimeoutError:
+				initial_timeout_msg = (
+					f'Initial actions timed out after {self.settings.step_timeout}s '
+					f'(browser may be unresponsive). Proceeding to main execution loop.'
+				)
+				self.logger.error(f'⏰ {initial_timeout_msg}')
+				self.state.last_result = [ActionResult(error=initial_timeout_msg)]
+				self.state.consecutive_failures += 1
 			except Exception as e:
 				raise e
 
@@ -3125,6 +3147,12 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					break
 
 			except Exception as e:
+				# Re-raise InterruptedError so _check_stop_or_pause's stop/pause signal still propagates
+				if isinstance(e, InterruptedError):
+					raise
+				# Re-raise browser/connection errors so _handle_step_error can handle reconnect/shutdown
+				if self._is_connection_like_error(e):
+					raise
 				# Handle any exceptions during action execution
 				self.logger.error(f'❌ Executing action {i + 1} failed -> {type(e).__name__}: {e}')
 				await self._demo_mode_log(
@@ -3132,7 +3160,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					'error',
 					{'action': action_name, 'step': self.state.n_steps},
 				)
-				raise e
+				# Preserve partial results so the agent knows which actions succeeded before the failure
+				results.append(ActionResult(error=f'{type(e).__name__}: {e}'))
+				return results
 
 		return results
 
@@ -4451,3 +4481,6 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					elif isinstance(item, dict):
 						count += self._substitute_in_dict(item, replacements)
 		return count
+
+
+_PythonAgent = Agent

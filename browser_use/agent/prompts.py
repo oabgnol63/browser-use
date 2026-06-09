@@ -459,29 +459,12 @@ Available tabs:
 """
 		return browser_state
 
-	def _get_static_context(self) -> str:
-		time_str = datetime.now().strftime('%Y-%m-%d')
-		step_info_description = f'Today:{time_str}'
-
-		agent_state = f"""
-<user_request>
-{self.task}
-</user_request>
-"""
-		if self.sensitive_data:
-			agent_state += f'<sensitive_data>{self.sensitive_data}</sensitive_data>\n'
-
-		agent_state += f'<date_info>{step_info_description}</date_info>\n'
-		return agent_state
-
-	def _get_dynamic_context(self) -> str:
-		context = ''
-
+	def _get_agent_state_description(self) -> str:
 		_todo_contents = self.file_system.get_todo_contents() if self.file_system else ''
 		if not len(_todo_contents):
 			_todo_contents = '[empty todo.md, fill it when applicable]'
 
-		context += f"""
+		agent_state = f"""
 <file_system>
 {self.file_system.describe() if self.file_system else 'No file system available'}
 </file_system>
@@ -490,13 +473,29 @@ Available tabs:
 </todo_contents>
 """
 		if self.plan_description:
-			context += f'<plan>\n{self.plan_description}\n</plan>\n'
+			agent_state += f'<plan>\n{self.plan_description}\n</plan>\n'
+
+		if self.sensitive_data:
+			agent_state += f'<sensitive_data>{self.sensitive_data}</sensitive_data>\n'
 
 		if self.available_file_paths:
 			available_file_paths_text = '\n'.join(self.available_file_paths)
-			context += f'<available_file_paths>{available_file_paths_text}\nUse with absolute paths</available_file_paths>\n'
+			agent_state += f'<available_file_paths>{available_file_paths_text}\nUse with absolute paths</available_file_paths>\n'
+		return agent_state
 
-		return context
+	def _get_user_request_description(self) -> str:
+		return f'<user_request>\n{self.task}\n</user_request>\n\n'
+
+	def _get_step_meta_description(self) -> str:
+		# Per-step varying metadata (step counter, wall-clock date). Kept out of <agent_state> so it
+		# lives at the tail of the user message — anything before this block can in principle be
+		# treated as the cacheable prefix.
+		if self.step_info:
+			step_info_description = f'Step{self.step_info.step_number + 1} maximum:{self.step_info.max_steps}\n'
+		else:
+			step_info_description = ''
+		step_info_description += f'Today:{datetime.now().strftime("%Y-%m-%d")}'
+		return f'<step_info>{step_info_description}</step_info>\n'
 
 	def _resize_screenshot(self, screenshot_b64: str) -> str:
 		"""Resize screenshot to llm_screenshot_size if configured."""
@@ -537,70 +536,58 @@ Available tabs:
 	@observe_debug(ignore_input=True, ignore_output=True, name='get_user_message')
 	def get_user_message(self, use_vision: bool = True) -> UserMessage:
 		"""Get complete state as a single cached message"""
-		# Don't pass screenshot to model if page is a new tab page, step is 0, and there's only one tab
-		if (
-			is_new_tab_page(self.browser_state.url)
-			and self.step_info is not None
-			and self.step_info.step_number == 0
-			and len(self.browser_state.tabs) == 1
-		):
+		# New-tab pages only carry placeholder screenshots, even later in a multi-tab session.
+		if is_new_tab_page(self.browser_state.url):
 			use_vision = False
 
 		# Build complete state description
-		# 1. Static agent_state goes first to enable prompt caching
-		static_description = '<agent_state>\n' + self._get_static_context().strip('\n') + '\n</agent_state>\n\n'
-
-		# 2. Dynamic agent_history goes next
-		static_description += (
-			'<agent_history>\n'
+		state_description = (
+			self._get_user_request_description()
+			+ '<agent_history>\n'
 			+ (self.agent_history_description.strip('\n') if self.agent_history_description else '')
 			+ '\n</agent_history>\n\n'
 		)
-
-		# 3. Dynamic current context, step info, and browser state go last
-		dynamic_description = '<current_context>\n' + self._get_dynamic_context().strip('\n') + '\n</current_context>\n\n'
-
-		# 4. Dynamic current step info and browser state go last
-		if self.step_info:
-			dynamic_description += f'<step_info>Step{self.step_info.step_number + 1} maximum:{self.step_info.max_steps}</step_info>\n\n'
-
-		dynamic_description += '<browser_state>\n' + self._get_browser_state_description().strip('\n') + '\n</browser_state>\n'
+		state_description += '<agent_state>\n' + self._get_agent_state_description().strip('\n') + '\n</agent_state>\n'
+		state_description += '<browser_state>\n' + self._get_browser_state_description().strip('\n') + '\n</browser_state>\n'
 		# Only add read_state if it has content
 		read_state_description = self.read_state_description.strip('\n').strip() if self.read_state_description else ''
 		if read_state_description:
-			dynamic_description += '<read_state>\n' + read_state_description + '\n</read_state>\n'
+			state_description += '<read_state>\n' + read_state_description + '\n</read_state>\n'
 
 		if self.page_filtered_actions:
-			dynamic_description += '<page_specific_actions>\n'
-			dynamic_description += self.page_filtered_actions + '\n'
-			dynamic_description += '</page_specific_actions>\n'
+			state_description += '<page_specific_actions>\n'
+			state_description += self.page_filtered_actions + '\n'
+			state_description += '</page_specific_actions>\n'
 
 		# Add unavailable skills information if any
 		if self.unavailable_skills_info:
-			dynamic_description += '\n' + self.unavailable_skills_info + '\n'
+			state_description += '\n' + self.unavailable_skills_info + '\n'
+
+		# Per-step varying metadata (step counter, date) lives at the tail of the message so that
+		# everything above can in principle be treated as a cacheable prefix.
+		state_description += self._get_step_meta_description()
 
 		# Sanitize surrogates from all text content
-		static_description = sanitize_surrogates(static_description)
-		dynamic_description = sanitize_surrogates(dynamic_description)
+		state_description = sanitize_surrogates(state_description)
 
 		# Check if we have images to include (from read_file action)
 		has_images = bool(self.read_state_images)
+		screenshots = [screenshot for screenshot in self.screenshots if screenshot != PLACEHOLDER_4PX_SCREENSHOT]
 
-		content_parts: list[ContentPartTextParam | ContentPartImageParam] = [
-			ContentPartTextParam(text=static_description),
-			ContentPartTextParam(text=dynamic_description)
-		]
+		# Vision-only mode: send only the current screenshot. History already narrates prior steps.
+		if self.use_native_computer_use and screenshots:
+			screenshots = screenshots[-1:]
 
-		if (use_vision is True and self.screenshots) or has_images:
+		if (use_vision is True and screenshots) or has_images:
+			# Start with text description
+			content_parts: list[ContentPartTextParam | ContentPartImageParam] = [ContentPartTextParam(text=state_description)]
+
 			# Add sample images
 			content_parts.extend(self.sample_images)
 
-			# Vision-only mode: send only the current screenshot. History already narrates prior steps.
-			screenshots_to_send = self.screenshots[-1:] if self.use_native_computer_use else self.screenshots
-
 			# Add screenshots with labels
-			for i, screenshot in enumerate(screenshots_to_send):
-				if self.use_native_computer_use or i == len(self.screenshots) - 1:
+			for i, screenshot in enumerate(screenshots):
+				if self.use_native_computer_use or i == len(screenshots) - 1:
 					label = 'Current screenshot:'
 				else:
 					# Use simple, accurate labeling since we don't have actual step timing info
@@ -651,7 +638,9 @@ Available tabs:
 					)
 				)
 
-		return UserMessage(content=content_parts, cache=True)
+			return UserMessage(content=content_parts, cache=True)
+
+		return UserMessage(content=state_description, cache=True)
 
 
 def get_rerun_summary_prompt(original_task: str, total_steps: int, success_count: int, error_count: int) -> str:
