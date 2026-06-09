@@ -168,6 +168,7 @@ reportMissingTypeStubs = false
 [tool.hatch.build]
 include = [
 	"browser_use/**/*.py",
+	"browser_use/**/*.md",
     "!browser_use/**/tests/*.py",
     "!browser_use/**/tests.py",
     "browser_use/cli_templates/*.py",
@@ -184,6 +185,8 @@ timeout = 300
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+cache_dir = ".tmp-test-artifacts/pytest-cache"
+addopts = "-svx --strict-markers --tb=short --dist=loadscope --basetemp=.tmp-test-artifacts/tmp"
 markers = [
     "slow: marks tests as slow (deselect with `-m 'not slow'`)",
     "integration: marks tests as integration tests",
@@ -192,7 +195,6 @@ markers = [
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
-addopts = "-svx --strict-markers --tb=short --dist=loadscope"
 log_cli = true
 log_cli_format = "%(levelname)-8s [%(name)s] %(message)s"
 filterwarnings = [

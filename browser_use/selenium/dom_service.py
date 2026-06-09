@@ -11,9 +11,10 @@ Enhanced iframe support:
 """
 
 import asyncio
+import json
 import logging
-import time
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -105,6 +106,51 @@ class SeleniumDomService:
         self.js_code = raw_js_code
         self.logger.debug(f'JavaScript code loaded, length: {len(self.js_code)} chars')
 
+    def _should_use_json_dom_transport(self) -> bool:
+        """Use string transport for Appium iOS Safari to avoid XCUITest recursion errors."""
+        capabilities = dict(getattr(self.driver, 'capabilities', {}) or {})
+        platform_name = str(capabilities.get('platformName') or capabilities.get('platform') or '').lower()
+        automation_name = str(
+            capabilities.get('appium:automationName') or capabilities.get('automationName') or ''
+        ).lower()
+        return 'ios' in platform_name or automation_name == 'xcuitest'
+
+    def _minimal_eval_result_payload(self, eval_result: dict | None) -> dict:
+        eval_result = eval_result or {}
+        return {
+            'map': eval_result.get('map', {}),
+            'rootId': eval_result.get('rootId'),
+        }
+
+    def _execute_dom_extraction_script(self, args: dict) -> dict:
+        """Execute DOM extraction JS with an Appium-safe fallback transport."""
+        object_script = f'return ({self.js_code})(arguments[0])'
+        json_script = f"""
+            const __browserUseDomResult = ({self.js_code})(arguments[0]) || {{}};
+            return JSON.stringify({{
+                map: __browserUseDomResult.map || {{}},
+                rootId: __browserUseDomResult.rootId ?? null
+            }});
+        """
+
+        if self._should_use_json_dom_transport():
+            serialized_result = self.driver.execute_script(json_script, args)
+            return self._minimal_eval_result_payload(json.loads(serialized_result or '{}'))
+
+        try:
+            eval_result: dict = self.driver.execute_script(object_script, args)
+        except Exception as js_error:
+            if 'Recursive object cannot be transferred' not in str(js_error):
+                raise
+
+            self.logger.warning(
+                'DOM extraction returned a non-transferable object; retrying via JSON string transport'
+            )
+            serialized_result = self.driver.execute_script(json_script, args)
+            return self._minimal_eval_result_payload(json.loads(serialized_result or '{}'))
+
+        return self._minimal_eval_result_payload(eval_result)
+
     async def __aenter__(self):
         return self
 
@@ -181,7 +227,7 @@ class SeleniumDomService:
             # Execute the main DOM extraction script
             # The IIFE pattern needs 'return' prefix for Selenium execute_script to capture the result
             try:
-                eval_result: dict = self.driver.execute_script(f'return ({self.js_code})(arguments[0])', args)
+                eval_result = self._execute_dom_extraction_script(args)
             except Exception as js_error:
                 self.logger.warning(f'DOM extraction JS failed: {js_error}')
                 return self._create_empty_root_node(), {}, {'total_ms': (time.time() - start_time) * 1000}
@@ -743,7 +789,7 @@ class SeleniumDomService:
             }
             
             try:
-                eval_result: dict = self.driver.execute_script(f'return ({self.js_code})(arguments[0])', args)
+                eval_result = self._execute_dom_extraction_script(args)
             except Exception as js_error:
                 self.logger.debug(f'DOM extraction JS failed in iframe: {js_error}')
                 return {}
@@ -971,4 +1017,3 @@ class SeleniumDomService:
             self.logger.debug('=' * 70)
         
         return main_root, merged_selector_map, iframe_info_map
-

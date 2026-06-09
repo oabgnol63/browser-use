@@ -130,14 +130,14 @@ class TestDOMSerializer:
 		selector_map = browser_state_summary.dom_state.selector_map
 		print(f'   Selector map: {selector_map.keys()}')
 
-		print('\n📊 DOM Serializer Analysis:')
+		print('\n[ANALYSIS] DOM Serializer Analysis:')
 		print(f'   Total interactive elements found: {len(selector_map)}')
 		serilized_text = browser_state_summary.dom_state.llm_representation()
 		print(f'   Serialized text: {serilized_text}')
 		# assume all selector map keys are as text in the serialized text
 		# for idx, element in selector_map.items():
 		# 	assert str(idx) in serilized_text, f'Element {idx} should be in serialized text'
-		# 	print(f'   ✓ Element {idx} found in serialized text')
+		# 	print(f'   [OK] Element {idx} found in serialized text')
 
 		# assume at least 10 interactive elements are in the selector map
 		assert len(selector_map) >= 10, f'Should find at least 10 interactive elements, found {len(selector_map)}'
@@ -149,7 +149,7 @@ class TestDOMSerializer:
 		indices = re.findall(r'\[(\d+)\]', serilized_text)
 		for idx in indices:
 			assert int(idx) in selector_map.keys(), f'Element {idx} should be in selector map'
-			print(f'   ✓ Element {idx} found in selector map')
+			print(f'   [OK] Element {idx} found in selector map')
 
 		regular_elements = []
 		shadow_elements = []
@@ -185,14 +185,14 @@ class TestDOMSerializer:
 		# - Iframe tags: 2 elements (the iframe elements themselves)
 		# Total: ~10-11 interactive elements depending on cross-origin iframe extraction
 
-		print('\n✅ DOM Serializer Test Summary:')
-		print(f'   • Regular DOM: {len(regular_elements)} elements {"✓" if len(regular_elements) >= 3 else "✗"}')
-		print(f'   • Shadow DOM: {len(shadow_elements)} elements {"✓" if len(shadow_elements) >= 3 else "✗"}')
+		print('\n[SUMMARY] DOM Serializer Test Summary:')
+		print(f'   * Regular DOM: {len(regular_elements)} elements {"OK" if len(regular_elements) >= 3 else "FAIL"}')
+		print(f'   * Shadow DOM: {len(shadow_elements)} elements {"OK" if len(shadow_elements) >= 3 else "FAIL"}')
 		print(
-			f'   • Same-origin iframe content: {len(iframe_content_elements)} elements {"✓" if len(iframe_content_elements) >= 2 else "✗"}'
+			f'   * Same-origin iframe content: {len(iframe_content_elements)} elements {"OK" if len(iframe_content_elements) >= 2 else "FAIL"}'
 		)
-		print(f'   • Iframe tags: {len(iframe_tags)} elements {"✓" if len(iframe_tags) >= 2 else "✗"}')
-		print(f'   • Total elements: {len(selector_map)}')
+		print(f'   * Iframe tags: {len(iframe_tags)} elements {"OK" if len(iframe_tags) >= 2 else "FAIL"}')
+		print(f'   * Total elements: {len(selector_map)}')
 
 		# Verify we found elements from all sources
 		assert len(selector_map) >= 8, f'Should find at least 8 interactive elements, found {len(selector_map)}'
@@ -203,7 +203,7 @@ class TestDOMSerializer:
 		)
 
 		# Now test clicking elements from each category using tools.click(index)
-		print('\n🖱️  Testing Click Functionality:')
+		print('\n[CLICK] Testing Click Functionality:')
 
 		# Helper to call tools.click(index) and verify it worked
 		async def click(index: int, element_description: str, browser_session: BrowserSession):
@@ -215,7 +215,7 @@ class TestDOMSerializer:
 				'not available' in result.extracted_content.lower() or 'failed' in result.extracted_content.lower()
 			):
 				raise AssertionError(f'Click on {element_description} [{index}] failed: {result.extracted_content}')
-			print(f'   ✓ {element_description} [{index}] clicked successfully')
+			print(f'   [OK] {element_description} [{index}] clicked successfully')
 			return result
 
 		# Test clicking a regular DOM element (button)
@@ -237,7 +237,7 @@ class TestDOMSerializer:
 				await click(iframe_button_idx, 'Same-origin iframe button', browser_session)
 
 		# Validate click counter - verify all 3 clicks actually executed JavaScript
-		print('\n✅ Validating click counter...')
+		print('\n[VALIDATION] Validating click counter...')
 
 		# Get the CDP session for the main page (use target from a regular DOM element)
 		# Note: browser_session.agent_focus_target_id may point to a different target than the page
@@ -262,7 +262,7 @@ class TestDOMSerializer:
 			f'This means some clicks did not execute JavaScript properly.'
 		)
 
-		print('\n🎉 DOM Serializer test completed successfully!')
+		print('\nDOM Serializer test completed successfully!')
 
 	async def test_dom_serializer_element_counts_detailed(self, browser_session, base_url):
 		"""Detailed test to verify specific element types are captured correctly."""
@@ -332,7 +332,7 @@ class TestDOMSerializer:
 			elif 'link' in element_str or '<a' in element_str or 'href' in element_str:
 				links += 1
 
-		print('\n📊 Element Type Counts:')
+		print('\n[COUNTS] Element Type Counts:')
 		print(f'   Buttons: {buttons}')
 		print(f'   Inputs: {inputs}')
 		print(f'   Links: {links}')
@@ -342,7 +342,7 @@ class TestDOMSerializer:
 		assert buttons >= 1, f'Should find at least 1 button, found {buttons}'
 		assert inputs >= 1, f'Should find at least 1 input, found {inputs}'
 
-		print('\n✅ Element type verification passed!')
+		print('\nElement type verification passed!')
 
 	async def test_stacked_complex_scenarios(self, browser_session, base_url):
 		"""Test clicking through stacked complex scenarios and verify cross-origin iframe extraction.
@@ -352,7 +352,7 @@ class TestDOMSerializer:
 		2. Closed shadow DOM element interaction (nested inside open shadow)
 		3. Same-origin iframe element interaction (inside closed shadow)
 		4. Cross-origin iframe placeholder with about:blank (no external dependencies)
-		5. Truly nested structure: Open Shadow → Closed Shadow → Iframe
+		5. Truly nested structure: Open Shadow -> Closed Shadow -> Iframe
 		"""
 		from browser_use.tools.service import Tools
 
@@ -372,10 +372,10 @@ class TestDOMSerializer:
 		)
 
 		selector_map = browser_state_summary.dom_state.selector_map
-		print(f'\n📊 Stacked Test - Found {len(selector_map)} elements')
+		print(f'\n[STACKED] Stacked Test - Found {len(selector_map)} elements')
 
 		# Debug: Show all elements
-		print('\n🔍 All elements found:')
+		print('\nAll elements found:')
 		for idx, element in selector_map.items():
 			elem_id = element.attributes.get('id', 'NO_ID') if hasattr(element, 'attributes') else 'NO_ATTR'
 			print(f'   [{idx}] {element.tag_name} id={elem_id} target={element.target_id[-4:] if element.target_id else "None"}')
@@ -399,14 +399,14 @@ class TestDOMSerializer:
 				elif 'final-button' in elem_id:
 					final_button = (idx, element)
 
-		print('\n📋 Element Distribution:')
+		print('\n[DISTRIBUTION] Element Distribution:')
 		print(f'   Open Shadow: {len(open_shadow_elements)} elements')
 		print(f'   Closed Shadow: {len(closed_shadow_elements)} elements')
 		print(f'   Iframe content: {len(iframe_elements)} elements')
 		print(f'   Final button: {"Found" if final_button else "Not found"}')
 
 		# Test clicking through each stacked layer
-		print('\n🖱️  Testing Click Functionality Through Stacked Layers:')
+		print('\n[CLICK] Testing Click Functionality Through Stacked Layers:')
 
 		async def click(index: int, element_description: str, browser_session: BrowserSession):
 			result = await tools.click(index=index, browser_session=browser_session)
@@ -416,7 +416,7 @@ class TestDOMSerializer:
 				'not available' in result.extracted_content.lower() or 'failed' in result.extracted_content.lower()
 			):
 				raise AssertionError(f'Click on {element_description} [{index}] failed: {result.extracted_content}')
-			print(f'   ✓ {element_description} [{index}] clicked successfully')
+			print(f'   [OK] {element_description} [{index}] clicked successfully')
 			return result
 
 		clicks_performed = 0
@@ -469,18 +469,18 @@ class TestDOMSerializer:
 
 		all_targets = count_targets_in_tree(browser_state_summary.dom_state._root)
 
-		print('\n📊 Cross-Origin Iframe Extraction:')
+		print('\n[CROSS-ORIGIN] Cross-Origin Iframe Extraction:')
 		print(f'   Found elements from {len(all_targets)} different CDP targets in full DOM tree')
 
 		if len(all_targets) >= 2:
-			print('   ✅ Multi-target iframe extraction IS WORKING!')
-			print('   ✓ Successfully extracted DOM from multiple CDP targets')
-			print('   ✓ CDP target switching feature is enabled and functional')
+			print('   [OK] Multi-target iframe extraction IS WORKING!')
+			print('   Successfully extracted DOM from multiple CDP targets')
+			print('   CDP target switching feature is enabled and functional')
 		else:
-			print('   ⚠️  Only found elements from 1 target (cross-origin extraction may not be working)')
+			print('   [WARN] Only found elements from 1 target (cross-origin extraction may not be working)')
 
 		if cross_origin_iframe_tag:
-			print(f'\n   📌 Found cross-origin iframe tag [{cross_origin_iframe_tag[0]}]')
+			print(f'\n   [PIN] Found cross-origin iframe tag [{cross_origin_iframe_tag[0]}]')
 			# Note: We don't increment clicks_performed since this doesn't trigger our counter
 			# await click(cross_origin_iframe_tag[0], 'Cross-origin iframe tag (scroll)', browser_session)
 
@@ -490,7 +490,7 @@ class TestDOMSerializer:
 			clicks_performed += 1
 
 		# Validate click counter
-		print('\n✅ Validating click counter...')
+		print('\n[VALIDATION] Validating click counter...')
 
 		# Get CDP session from a non-iframe element (open shadow or final button)
 		if open_shadow_elements:
@@ -517,12 +517,12 @@ class TestDOMSerializer:
 			f'Some clicks did not execute JavaScript properly.'
 		)
 
-		print('\n🎉 Stacked scenario test completed successfully!')
-		print('   ✓ Open shadow DOM clicks work')
-		print('   ✓ Closed shadow DOM clicks work')
-		print('   ✓ Same-origin iframe clicks work (can access elements inside)')
-		print('   ✓ Cross-origin iframe extraction works (CDP target switching enabled)')
-		print('   ✓ Truly nested structure works: Open Shadow → Closed Shadow → Iframe')
+		print('\nStacked scenario test completed successfully!')
+		print('   Open shadow DOM clicks work')
+		print('   Closed shadow DOM clicks work')
+		print('   Same-origin iframe clicks work (can access elements inside)')
+		print('   Cross-origin iframe extraction works (CDP target switching enabled)')
+		print('   Truly nested structure works: Open Shadow -> Closed Shadow -> Iframe')
 
 
 if __name__ == '__main__':
@@ -552,7 +552,7 @@ if __name__ == '__main__':
 		server.expect_request('/stacked-test').respond_with_data(main_page_html, content_type='text/html')
 
 		base_url = f'http://{server.host}:{server.port}'
-		print(f'\n🌐 HTTP Server running at {base_url}')
+		print(f'\n[SERVER] HTTP Server running at {base_url}')
 
 		# Set up browser session
 		from browser_use.browser import BrowserSession
@@ -568,18 +568,18 @@ if __name__ == '__main__':
 
 		try:
 			await session.start()
-			print('🚀 Browser session started\n')
+			print('Browser session started\n')
 
 			# Run the test
 			test = TestDOMSerializer()
 			await test.test_stacked_complex_scenarios(session, base_url)
 
-			print('\n✅ Test completed successfully!')
+			print('\nTest completed successfully!')
 
 		finally:
 			# Cleanup
 			await session.kill()
 			server.stop()
-			print('\n🧹 Cleanup complete')
+			print('\nCleanup complete')
 
 	asyncio.run(main())

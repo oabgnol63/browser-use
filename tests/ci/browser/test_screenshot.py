@@ -146,7 +146,7 @@ async def test_agent_screenshot_with_vision_enabled(browser_session, base_url):
 		# Check if browser state has screenshot path
 		if step.state and hasattr(step.state, 'screenshot_path') and step.state.screenshot_path:
 			screenshot_found = True
-			print(f'\n✅ Step {i + 1}: Screenshot captured at {step.state.screenshot_path}')
+			print(f'\n[OK] Step {i + 1}: Screenshot captured at {step.state.screenshot_path}')
 
 			# Verify screenshot file exists (it should be saved to disk)
 			import os
@@ -160,4 +160,4 @@ async def test_agent_screenshot_with_vision_enabled(browser_session, base_url):
 
 	assert screenshot_found, 'At least one screenshot should be captured when vision is enabled'
 
-	print('\n🎉 Integration test passed: Screenshots are captured correctly with vision enabled')
+	print('\nIntegration test passed: Screenshots are captured correctly with vision enabled')

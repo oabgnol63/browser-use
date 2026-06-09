@@ -56,3 +56,19 @@ async def test_scroll_event_raises_when_gesture_and_js_have_no_effect():
 		with patch.object(DefaultActionWatchdog, '_scroll_page_with_js', new=AsyncMock(return_value=False)):
 			with pytest.raises(BrowserError, match='no visible effect'):
 				await watchdog.on_ScrollEvent(ScrollEvent(direction='down', amount=400))
+
+
+@pytest.mark.asyncio
+async def test_scroll_page_with_js_at_boundary_returns_true():
+	session = BrowserSession(headless=True)
+	session.agent_focus_target_id = 'target-1'
+	watchdog = DefaultActionWatchdog(event_bus=session.event_bus, browser_session=session)
+
+	runtime_evaluate = AsyncMock(
+		return_value={'result': {'value': {'moved': False, 'atBoundary': True, 'scroller': 'window', 'target': 'root'}}}
+	)
+	fake_cdp_session = _build_fake_cdp_session(runtime_evaluate)
+
+	with patch.object(BrowserSession, 'get_or_create_cdp_session', new=AsyncMock(return_value=fake_cdp_session)):
+		assert await watchdog._scroll_page_with_js(400) is True
+

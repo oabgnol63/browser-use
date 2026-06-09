@@ -269,7 +269,7 @@ class BrowserSession(BaseModel):
 		# Core configuration
 		id: str | None = None,
 		cdp_url: str | None = None,
-		is_local: bool = True,
+		is_local: bool | None = None,
 		browser_profile: BrowserProfile | None = None,
 		# Cloud browser params (don't mix with local browser params)
 		cloud_profile_id: UUID | str | None = None,
@@ -629,6 +629,20 @@ class BrowserSession(BaseModel):
 		# if self._logger is None or not self._cdp_client_root:
 		# 	self._logger = logging.getLogger(f'browser_use.{self}')
 		return logging.getLogger(f'browser_use.{self}')
+
+	@property
+	def coordinate_actions_use_screenshot_space(self) -> bool:
+		"""Whether coordinate actions execute in raw screenshot/native screen space."""
+		return False
+
+	def map_screenshot_coordinates_to_action_space(self, x: int, y: int) -> tuple[int, int]:
+		"""Map screenshot/image-space coordinates into the action backend's coordinate space.
+
+		Default CDP/Selenium backends act directly in screenshot-pixel space (the screenshot is
+		the LLM's ground truth and the click basis), so this is identity. Backends whose action
+		space differs from screenshot space (e.g. Appium touch in CSS viewport px) override it.
+		"""
+		return x, y
 
 	@cached_property
 	def _id_for_logs(self) -> str:
@@ -1173,17 +1187,19 @@ class BrowserSession(BaseModel):
 		return target.target_id
 
 	async def on_CloseTabEvent(self, event: CloseTabEvent) -> None:
-		"""Handle tab closure - update focus if needed."""
+		"""Handle tab closure and rely on detach events for authoritative focus recovery."""
+		closing_focused_tab = self.agent_focus_target_id == event.target_id
 		try:
-			# Dispatch tab closed event
-			await self.event_bus.dispatch(TabClosedEvent(target_id=event.target_id))
-
 			# Try to close the target, but don't fail if it's already closed
 			try:
 				cdp_session = await self.get_or_create_cdp_session(target_id=None, focus=False)
 				await cdp_session.cdp_client.send.Target.closeTarget(params={'targetId': event.target_id})
 			except Exception as e:
 				self.logger.debug(f'Target may already be closed: {e}')
+
+			if closing_focused_tab and self.session_manager:
+				recovery_timeout = min(event.event_timeout or 10.0, 5.0)
+				await self.session_manager.ensure_valid_focus(timeout=recovery_timeout)
 		except Exception as e:
 			self.logger.warning(f'Error during tab close cleanup: {e}')
 
@@ -1210,16 +1226,9 @@ class BrowserSession(BaseModel):
 				self.logger.warning(f'Failed to set viewport for new tab {event.target_id[-8:]}: {e}')
 
 	async def on_TabClosedEvent(self, event: TabClosedEvent) -> None:
-		"""Handle tab closure - update focus if needed."""
-		if not self.agent_focus_target_id:
-			return
-
-		# Get current tab index
-		current_target_id = self.agent_focus_target_id
-
-		# If the closed tab was the current one, find a new target
-		if current_target_id == event.target_id:
-			await self.event_bus.dispatch(SwitchTabEvent(target_id=None))
+		"""Handle tab closure after detach has already updated the authoritative focus state."""
+		if self.session_manager and self.session_manager._recovery_in_progress:
+			await self.session_manager.ensure_valid_focus(timeout=min(event.event_timeout or 3.0, 3.0))
 
 	async def on_AgentFocusChangedEvent(self, event: AgentFocusChangedEvent) -> None:
 		"""Handle agent focus change - update focus and clear cache."""

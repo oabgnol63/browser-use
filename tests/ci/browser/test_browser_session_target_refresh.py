@@ -1,8 +1,9 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from browser_use.browser.events import CloseTabEvent
 from browser_use.browser.session import BrowserSession, Target
 from browser_use.browser.session_manager import SessionManager
 
@@ -126,3 +127,22 @@ async def test_dom_mode_keeps_event_driven_target_cache_behavior():
 
 	assert current_url == 'https://cached.example/old'
 	assert current_title == 'Cached Title'
+
+
+@pytest.mark.asyncio
+async def test_close_tab_relies_on_detach_recovery_for_focused_tab():
+	session = BrowserSession(headless=True)
+	session.agent_focus_target_id = 'closing-target'
+	manager = SimpleNamespace(ensure_valid_focus=AsyncMock(return_value=True))
+	object.__setattr__(session, 'session_manager', manager)
+
+	close_target = AsyncMock(return_value={'success': True})
+	fake_cdp_session = SimpleNamespace(
+		cdp_client=SimpleNamespace(send=SimpleNamespace(Target=SimpleNamespace(closeTarget=close_target)))
+	)
+
+	with patch.object(BrowserSession, 'get_or_create_cdp_session', new=AsyncMock(return_value=fake_cdp_session)):
+		await session.on_CloseTabEvent(CloseTabEvent(target_id='closing-target', event_timeout=4.0))
+
+	close_target.assert_awaited_once()
+	manager.ensure_valid_focus.assert_awaited_once_with(timeout=4.0)

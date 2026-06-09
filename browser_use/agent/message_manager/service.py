@@ -376,6 +376,8 @@ class MessageManager:
 		else:
 			history_item = HistoryItem(
 				step_number=step_number,
+				screen_assessment=getattr(model_output, 'screen_assessment', None),
+				visual_state=getattr(model_output, 'visual_state', None),
 				evaluation_previous_goal=model_output.current_state.evaluation_previous_goal,
 				memory=model_output.current_state.memory,
 				next_goal=model_output.current_state.next_goal,

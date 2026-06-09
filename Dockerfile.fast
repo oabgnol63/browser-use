@@ -23,6 +23,7 @@ COPY . /app
 
 # Install browser-use
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    python scripts/embed_external.py && \
     uv sync --all-extras --locked --no-dev --compile-bytecode
 
 USER "$BROWSERUSE_USER"

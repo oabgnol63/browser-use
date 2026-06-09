@@ -5,9 +5,11 @@ Sets up environment variables to ensure tests never connect to production servic
 """
 
 import os
+import shutil
 import socketserver
 import tempfile
 from unittest.mock import AsyncMock
+from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
@@ -36,6 +38,37 @@ from bubus import BaseEvent
 from browser_use import Agent
 from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.sync.service import CloudSync
+
+
+def cleanup_test_artifacts(repo_root: Path) -> None:
+	"""Remove repo-local pytest/runtime artifacts created during test runs."""
+	for name in ('.pytest_cache', '.runtime', '.tmp-test-artifacts'):
+		shutil.rmtree(repo_root / name, ignore_errors=True)
+
+	for pattern in ('.tmp-test-*', 'tmp-test-*'):
+		for path in repo_root.glob(pattern):
+			if path.is_dir():
+				shutil.rmtree(path, ignore_errors=True)
+
+
+def ensure_test_artifact_root(repo_root: Path) -> None:
+	"""Recreate the managed pytest temp root after cleanup."""
+	(repo_root / '.tmp-test-artifacts' / 'tmp').mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture(scope='session', autouse=True)
+def cleanup_repo_test_artifacts():
+	"""Keep repo-local test artifacts from accumulating across runs."""
+	repo_root = Path(__file__).resolve().parents[2]
+	cleanup_test_artifacts(repo_root)
+	ensure_test_artifact_root(repo_root)
+	yield
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+	"""Clean repo-local test artifacts after pytest has fully finished writing them."""
+	repo_root = Path(__file__).resolve().parents[2]
+	cleanup_test_artifacts(repo_root)
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +103,8 @@ def setup_test_environment():
 			os.environ.pop(key, None)
 		else:
 			os.environ[key] = value
+
+	shutil.rmtree(config_dir, ignore_errors=True)
 
 
 # not a fixture, mock_llm() provides this in a fixture below, this is a helper so that it can accept args

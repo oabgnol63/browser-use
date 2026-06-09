@@ -16,6 +16,8 @@ class HistoryItem(BaseModel):
 	"""Represents a single agent history item with its data and string representation"""
 
 	step_number: int | None = None
+	screen_assessment: str | None = None
+	visual_state: str | None = None
 	evaluation_previous_goal: str | None = None
 	memory: str | None = None
 	next_goal: str | None = None
@@ -41,6 +43,12 @@ class HistoryItem(BaseModel):
 			return self.system_message
 		else:
 			content_parts = []
+
+			if self.screen_assessment:
+				content_parts.append(f'Screen Assessment: {self.screen_assessment}')
+
+			if self.visual_state:
+				content_parts.append(f'Visual State: {self.visual_state}')
 
 			# Only include evaluation_previous_goal if it's not None/empty
 			if self.evaluation_previous_goal:

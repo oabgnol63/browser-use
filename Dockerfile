@@ -188,7 +188,8 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache,sharing=locked,id=cache-$TARGETARCH$TARGETVARIANT \
      echo "[+] Installing browser-use pip library from source..." \
      && ( \
-        uv sync --all-extras --locked --no-dev \
+        python scripts/embed_external.py \
+        && uv sync --all-extras --locked --no-dev \
         && python -c "import browser_use; print('browser-use installed successfully')" \
         && echo -e '\n\n' \
      ) | tee -a /VERSION.txt

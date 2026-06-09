@@ -79,11 +79,11 @@ def main():
 		name = embedder.__class__.__name__
 		try:
 			if embedder.run():
-				print(f'✅ {name}: Updated {embedder.target_path.name}')
+				print(f'[OK] {name}: Updated {embedder.target_path.name}')
 			else:
-				print(f'ℹ️ {name}: Already up to date')
+				print(f'[INFO] {name}: Already up to date')
 		except Exception as e:
-			print(f'❌ {name}: Failed to update {embedder.target_path.name}: {e}')
+			print(f'[ERROR] {name}: Failed to update {embedder.target_path.name}: {e}')
 
 
 if __name__ == '__main__':

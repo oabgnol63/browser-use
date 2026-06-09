@@ -79,7 +79,7 @@ class TestCrossOriginIframeClick:
 		assert browser_state.dom_state is not None
 		state = browser_state.dom_state
 
-		print(f'\n📊 Found {len(state.selector_map)} total elements')
+		print(f'\nFound {len(state.selector_map)} total elements')
 
 		# Find elements from different targets
 		targets_found = set()
@@ -96,43 +96,43 @@ class TestCrossOriginIframeClick:
 				element_id = element.attributes.get('id', '')
 				if element_id in ('iframe-link', 'iframe-button'):
 					iframe_elements.append((idx, element))
-					print(f'   ✅ Found iframe element: [{idx}] {element.tag_name} id={element_id}')
+					print(f'   [OK] Found iframe element: [{idx}] {element.tag_name} id={element_id}')
 				elif element_id == 'main-button':
 					main_page_elements.append((idx, element))
-
+ 
 		# Verify we found elements from at least 2 different targets
-		print(f'\n🎯 Found elements from {len(targets_found)} different CDP targets')
-
+		print(f'\n[TARGETS] Found elements from {len(targets_found)} different CDP targets')
+ 
 		# Check if iframe elements were found
 		if len(iframe_elements) == 0:
 			pytest.fail('Expected to find at least one element from iframe, but found none')
-
+ 
 		# Verify we found at least one element from the iframe
 		assert len(iframe_elements) > 0, 'Expected to find at least one element from iframe'
-
+ 
 		# Try clicking the iframe element
-		print('\n🖱️  Testing Click on Iframe Element:')
+		print('\n[CLICK] Testing Click on Iframe Element:')
 		tools = Tools()
-
+ 
 		link_idx, link_element = iframe_elements[0]
 		print(f'   Attempting to click element [{link_idx}] from iframe...')
-
+ 
 		try:
 			result = await tools.click(index=link_idx, browser_session=browser_session)
-
+ 
 			# Check for errors
 			if result.error:
 				pytest.fail(f'Click on iframe element [{link_idx}] failed with error: {result.error}')
-
+ 
 			if result.extracted_content and (
 				'not available' in result.extracted_content.lower() or 'failed' in result.extracted_content.lower()
 			):
 				pytest.fail(f'Click on iframe element [{link_idx}] failed: {result.extracted_content}')
-
-			print(f'   ✅ Click succeeded on iframe element [{link_idx}]!')
-			print('   🎉 Iframe element clicking works!')
-
+ 
+			print(f'   [OK] Click succeeded on iframe element [{link_idx}]!')
+			print('   Iframe element clicking works!')
+ 
 		except Exception as e:
 			pytest.fail(f'Exception while clicking iframe element [{link_idx}]: {e}')
-
-		print('\n✅ Test passed: Iframe elements can be clicked')
+ 
+		print('\nTest passed: Iframe elements can be clicked')

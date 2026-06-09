@@ -323,7 +323,13 @@ class AgentMessagePrompt:
 			if not self.browser_state.title.strip():
 				signals.append('Page title is empty')
 
-			if visual_state in ('blank_placeholder', 'blank_or_minimal'):
+			if visual_state == 'unknown' and any(signal == 'No screenshot available' for signal in visual_signals):
+				load_state = 'screenshot_missing'
+				recommendation = (
+					'Visual ground truth is missing. Do not guess coordinates or continue reasoning from text alone. '
+					'Wait for a recovered screenshot or stop the run.'
+				)
+			elif visual_state in ('blank_placeholder', 'blank_or_minimal'):
 				if pending_requests:
 					load_state = 'loading'
 					recommendation = (
@@ -589,9 +595,12 @@ Available tabs:
 			# Add sample images
 			content_parts.extend(self.sample_images)
 
+			# Vision-only mode: send only the current screenshot. History already narrates prior steps.
+			screenshots_to_send = self.screenshots[-1:] if self.use_native_computer_use else self.screenshots
+
 			# Add screenshots with labels
-			for i, screenshot in enumerate(self.screenshots):
-				if i == len(self.screenshots) - 1:
+			for i, screenshot in enumerate(screenshots_to_send):
+				if self.use_native_computer_use or i == len(self.screenshots) - 1:
 					label = 'Current screenshot:'
 				else:
 					# Use simple, accurate labeling since we don't have actual step timing info

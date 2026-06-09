@@ -411,6 +411,8 @@ class PlanItem(BaseModel):
 
 class AgentBrain(BaseModel):
 	thinking: str | None = None
+	screen_assessment: str | None = None
+	visual_state: str | None = None
 	evaluation_previous_goal: str
 	memory: str
 	next_goal: str
@@ -441,6 +443,8 @@ class AgentOutput(BaseModel):
 		"""For backward compatibility - returns an AgentBrain with the flattened properties"""
 		return AgentBrain(
 			thinking=self.thinking,
+			screen_assessment=getattr(self, 'screen_assessment', None),
+			visual_state=getattr(self, 'visual_state', None),
 			evaluation_previous_goal=self.evaluation_previous_goal if self.evaluation_previous_goal else '',
 			memory=self.memory if self.memory else '',
 			next_goal=self.next_goal if self.next_goal else '',
@@ -487,30 +491,100 @@ class AgentOutput(BaseModel):
 
 	@staticmethod
 	def type_with_custom_actions_flash_mode(custom_actions: type[ActionModel]) -> type[AgentOutput]:
-		"""Extend actions with custom actions for flash mode - memory and action fields only"""
+		"""Flash mode (vision-only) schema: compact memory and action only.
+
+		Drops plan/next_goal/eval/thinking. `memory` carries forward what matters; the
+		screenshot + recent history cover the rest. Backstopped by
+		Agent._normalize_flash_mode_memory (120-char cap).
+		"""
 
 		class AgentOutputFlashMode(AgentOutput):
 			@classmethod
 			def model_json_schema(cls, **kwargs):
 				schema = super().model_json_schema(**kwargs)
-				# Remove thinking, evaluation_previous_goal, next_goal, and plan fields
 				del schema['properties']['thinking']
 				del schema['properties']['evaluation_previous_goal']
 				del schema['properties']['next_goal']
 				schema['properties'].pop('current_plan_item', None)
 				schema['properties'].pop('plan_update', None)
-				# Update required fields to only include remaining properties
 				schema['required'] = ['memory', 'action']
 				return schema
 
 		model = create_model(
 			'AgentOutput',
 			__base__=AgentOutputFlashMode,
+			memory=(
+				str,
+				Field(
+					...,
+					description='Very short carry-forward memory only. Keep it to one brief line, ideally under 120 characters.',
+				),
+			),
 			action=(
 				list[custom_actions],  # type: ignore
 				Field(..., json_schema_extra={'min_items': 1}),
 			),
 			__module__=AgentOutputFlashMode.__module__,
+		)
+
+		return model
+
+	@staticmethod
+	def type_with_custom_actions_vision_only(custom_actions: type[ActionModel]) -> type[AgentOutput]:
+		"""Vision-only (non-flash) schema: screen assessment + visual state + memory + next_goal + action.
+
+		Drops thinking, evaluation_previous_goal, and plan tracking fields. `screen_assessment`
+		is a tiny decision gate; `visual_state` keeps one screenshot-grounded proof/checkpoint
+		so DOM-less mode stays smart without restoring verbose reasoning fields.
+		"""
+
+		class AgentOutputVisionOnly(AgentOutput):
+			@classmethod
+			def model_json_schema(cls, **kwargs):
+				schema = super().model_json_schema(**kwargs)
+				del schema['properties']['thinking']
+				del schema['properties']['evaluation_previous_goal']
+				schema['properties'].pop('current_plan_item', None)
+				schema['properties'].pop('plan_update', None)
+				schema['required'] = ['screen_assessment', 'visual_state', 'memory', 'next_goal', 'action']
+				return schema
+
+		model = create_model(
+			'AgentOutput',
+			__base__=AgentOutputVisionOnly,
+			screen_assessment=(
+				Literal['on_target', 'needs_more_visual_info', 'blocked', 'wrong_destination', 'loading'],
+				Field(
+					...,
+					description='Classify the current screenshot before acting: on_target, needs_more_visual_info, blocked, wrong_destination, or loading.',
+				),
+			),
+			visual_state=(
+				str,
+				Field(
+					...,
+					description='One short current screenshot-grounded visual state that justifies the action, or names the visible blocker/uncertainty.',
+				),
+			),
+			memory=(
+				str,
+				Field(
+					...,
+					description='Short carry-forward memory only. One brief line, ideally under 120 characters.',
+				),
+			),
+			next_goal=(
+				str,
+				Field(
+					...,
+					description='Immediate next visible move grounded in the current screenshot. Brief, ideally under 120 characters, but enough detail: do what, go where.',
+				),
+			),
+			action=(
+				list[custom_actions],  # type: ignore
+				Field(..., json_schema_extra={'min_items': 1}),
+			),
+			__module__=AgentOutputVisionOnly.__module__,
 		)
 
 		return model
@@ -615,6 +689,12 @@ class AgentHistory(BaseModel):
 				'next_goal': self.model_output.next_goal,
 				'action': action_dump,  # This preserves the actual action data
 			}
+			screen_assessment = getattr(self.model_output, 'screen_assessment', None)
+			if screen_assessment is not None:
+				model_output_dump['screen_assessment'] = screen_assessment
+			visual_state = getattr(self.model_output, 'visual_state', None)
+			if visual_state is not None:
+				model_output_dump['visual_state'] = visual_state
 			# Only include thinking if it's present
 			if self.model_output.thinking is not None:
 				model_output_dump['thinking'] = self.model_output.thinking

@@ -8,6 +8,7 @@ from PIL import Image
 from pydantic import PrivateAttr
 from uuid_extensions import uuid7str
 
+from browser_use.browser.python_highlights import create_highlighted_screenshot
 from browser_use.browser.events import (
 	BrowserStartEvent,
 	BrowserStateRequestEvent,
@@ -35,7 +36,6 @@ from browser_use.browser.events import (
 	TypeTextEvent,
 	_get_timeout,
 )
-from browser_use.browser.python_highlights import create_highlighted_screenshot_async
 from browser_use.browser.session import BrowserSession
 from browser_use.browser.views import BrowserError, BrowserStateSummary, TabInfo
 from browser_use.dom.views import EnhancedDOMTreeNode, SerializedDOMState
@@ -396,6 +396,21 @@ class SeleniumBrowserSession(BrowserSession):
 			pass
 		return cast(str, self.agent_focus_target_id)
 
+	def _get_screenshot_device_pixel_ratio(self) -> float:
+		"""Estimate the screenshot-to-viewport scale for Python highlight rendering."""
+		screenshot_size = getattr(self, '_actual_screenshot_size', None)
+		viewport_size = getattr(self, '_original_viewport_size', None)
+		if not screenshot_size or not viewport_size:
+			return 1.0
+
+		screenshot_width, screenshot_height = screenshot_size
+		viewport_width, viewport_height = viewport_size
+		width_scale = screenshot_width / viewport_width if viewport_width else 0.0
+		height_scale = screenshot_height / viewport_height if viewport_height else 0.0
+
+		scale = width_scale or height_scale or 1.0
+		return float(scale) if scale > 0 else 1.0
+
 	async def get_state(self, include_dom: bool = True, include_screenshot: bool = True) -> BrowserStateSummary:
 		"""Get summarized browser state."""
 		from browser_use.browser.views import PageInfo
@@ -492,32 +507,28 @@ class SeleniumBrowserSession(BrowserSession):
 			self.logger.info('Selenium screenshot pipeline: captured clean screenshot via WebDriver')
 
 		# We need a dummy DOM state if not included
+		selector_map: dict[int, EnhancedDOMTreeNode] = {}
 		if include_dom:
-			# This will draw highlights if highlight_elements=True (default)
-			dom_state, _ = await self.get_dom_state()
+			dom_state, selector_map = await self.get_dom_state()
 		else:
 			from browser_use.dom.views import SerializedDOMState
 
 			dom_state = SerializedDOMState(_root=None, selector_map={})
 
-		screenshot_b64 = None
-		if include_screenshot and clean_screenshot_b64:
-			selector_map = dom_state.selector_map if dom_state else {}
-			if selector_map:
-				self.logger.info(
-					f'Selenium screenshot pipeline: synthesizing highlighted screenshot from clean screenshot using selector_map with {len(selector_map)} elements'
-				)
-				screenshot_b64 = await create_highlighted_screenshot_async(
-					clean_screenshot_b64,
-					selector_map,
-					cdp_session=None,
-					label_mode='selector_index',
-				)
-			else:
-				self.logger.info(
-					'Selenium screenshot pipeline: selector_map is empty, using clean screenshot as highlighted output'
-				)
-				screenshot_b64 = clean_screenshot_b64
+		screenshot_b64 = clean_screenshot_b64
+		if (
+			clean_screenshot_b64
+			and selector_map
+			and self.browser_profile.highlight_elements
+			and not self.browser_profile.dom_highlight_elements
+		):
+			screenshot_b64 = await create_highlighted_screenshot(
+				clean_screenshot_b64,
+				selector_map,
+				device_pixel_ratio=self._get_screenshot_device_pixel_ratio(),
+				filter_highlight_ids=self.browser_profile.filter_highlight_ids,
+				label_mode='selector_index',
+			)
 
 		tab_info = TabInfo(
 			url=page_info_dict['url'], title=page_info_dict['title'], target_id=cast(str, self.agent_focus_target_id)

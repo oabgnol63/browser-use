@@ -542,7 +542,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 					self.logger.warning('⚠️ PDF generation failed, falling back to regular click')
 
 			# Execute click with automatic download detection
-			click_metadata = await self._execute_click_with_download_detection(self._click_element_node_impl(element_node))
+			click_metadata = await self._execute_click_with_download_detection(
+				self._click_element_node_impl(element_node),
+				download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
+			)
 
 			# Check for validation errors
 			if isinstance(click_metadata, dict) and 'validation_error' in click_metadata:
@@ -573,7 +576,8 @@ class DefaultActionWatchdog(BaseWatchdog):
 			if event.force:
 				self.logger.debug(f'Force clicking at coordinates ({event.coordinate_x}, {event.coordinate_y})')
 				return await self._execute_click_with_download_detection(
-					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=True)
+					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=True),
+					download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
 				)
 
 			# Get element at coordinates for safety checks
@@ -584,7 +588,8 @@ class DefaultActionWatchdog(BaseWatchdog):
 					f'No element found at coordinates ({event.coordinate_x}, {event.coordinate_y}), proceeding with click anyway'
 				)
 				return await self._execute_click_with_download_detection(
-					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False)
+					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False),
+					download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
 				)
 
 			# Safety check: file input
@@ -616,7 +621,8 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			# All safety checks passed, click at coordinates (with download detection)
 			return await self._execute_click_with_download_detection(
-				self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False)
+				self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False),
+				download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
 			)
 		except Exception:
 			raise
@@ -2690,6 +2696,29 @@ class DefaultActionWatchdog(BaseWatchdog):
 		return null;
 	}}
 
+	function isAtBoundary(el, dy) {{
+		if (!el) return false;
+		const scrollTop = Number(el.scrollTop || 0);
+		const clientHeight = Number(el.clientHeight || 0);
+		const scrollHeight = Number(el.scrollHeight || 0);
+		if (dy > 0) {{
+			return scrollTop + clientHeight >= scrollHeight - 10;
+		}} else {{
+			return scrollTop <= 10;
+		}}
+	}}
+
+	function isRootAtBoundary(root, dy) {{
+		const scrollTop = window.scrollY !== undefined ? Number(window.scrollY) : Number(root ? root.scrollTop || 0 : 0);
+		const scrollHeight = document.documentElement ? Number(document.documentElement.scrollHeight || 0) : Number(root ? root.scrollHeight || 0 : 0);
+		const clientHeight = window.innerHeight !== undefined ? Number(window.innerHeight) : Number(root ? root.clientHeight || 0 : 0);
+		if (dy > 0) {{
+			return scrollTop + clientHeight >= scrollHeight - 10;
+		}} else {{
+			return scrollTop <= 10;
+		}}
+	}}
+
 	const dy = {pixels};
 	const centerEl = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
 	const activeEl = document.activeElement;
@@ -2702,12 +2731,17 @@ class DefaultActionWatchdog(BaseWatchdog):
 		}}
 		const beforeTop = Number(candidate.scrollTop || 0);
 		const beforeLeft = Number(candidate.scrollLeft || 0);
+		const alreadyAtBoundary = isAtBoundary(candidate, dy);
 		candidate.scrollBy(0, dy);
 		if (Number(candidate.scrollTop || 0) !== beforeTop || Number(candidate.scrollLeft || 0) !== beforeLeft) {{
 			return {{ moved: true, scroller: candidate.tagName || 'unknown', target: 'container' }};
 		}}
+		if (alreadyAtBoundary) {{
+			return {{ moved: false, atBoundary: true, scroller: candidate.tagName || 'unknown', target: 'container' }};
+		}}
 	}}
 
+	const alreadyAtBoundary = isRootAtBoundary(root, dy);
 	const beforeRootTop = Number(root ? root.scrollTop || 0 : 0);
 	const beforeRootLeft = Number(root ? root.scrollLeft || 0 : 0);
 	if (root && typeof root.scrollBy === 'function') {{
@@ -2718,8 +2752,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 	const afterRootTop = Number(root ? root.scrollTop || 0 : 0);
 	const afterRootLeft = Number(root ? root.scrollLeft || 0 : 0);
 
+	const moved = afterRootTop !== beforeRootTop || afterRootLeft !== beforeRootLeft;
 	return {{
-		moved: afterRootTop !== beforeRootTop || afterRootLeft !== beforeRootLeft,
+		moved: moved,
+		atBoundary: !moved && alreadyAtBoundary,
 		scroller: root ? (root.tagName || 'window-root') : 'window',
 		target: 'root',
 	}};
@@ -2734,6 +2770,12 @@ class DefaultActionWatchdog(BaseWatchdog):
 			if scroll_result.get('moved'):
 				self.logger.debug(
 					f'📄 Scrolled via JS fallback: {pixels}px on {scroll_result.get("target")} {scroll_result.get("scroller")}'
+				)
+				return True
+
+			if scroll_result.get('atBoundary'):
+				self.logger.debug(
+					f'📄 Scroll via JS fallback requested {pixels}px, but scroller {scroll_result.get("scroller")} was already at the scroll boundary'
 				)
 				return True
 

@@ -616,10 +616,11 @@ class Tools(Generic[Context]):
 			"""
 			actual_x, actual_y = llm_x, llm_y
 
-			# Gemini uses normalized 0-999 coordinates regardless of image size
-			# Use actual screenshot dimensions (not viewport) since LLM sees the screenshot which may include scrollbar
+			# Gemini uses normalized 0-999 coordinates regardless of image size.
+			# We first scale against the actual screenshot because that is what the
+			# LLM saw. Backends can then map screenshot/image-space coordinates into
+			# their action coordinate space before the final viewport clamp.
 			if browser_session.llm_coordinate_system == 'normalized_1000':
-				# Prefer actual screenshot size, fall back to viewport size
 				if browser_session._actual_screenshot_size:
 					screenshot_width, screenshot_height = browser_session._actual_screenshot_size
 				elif browser_session._original_viewport_size:
@@ -634,6 +635,7 @@ class Tools(Generic[Context]):
 					f'Converting normalized coordinates: LLM ({llm_x}, {llm_y}) / 1000 '
 					f'Screen ({actual_x}, {actual_y}) @ {screenshot_width}x{screenshot_height}'
 				)
+				actual_x, actual_y = browser_session.map_screenshot_coordinates_to_action_space(actual_x, actual_y)
 
 			# Claude/others use pixel coordinates in letterboxed screenshot space
 			elif browser_session.llm_screenshot_size and browser_session._original_viewport_size:
@@ -655,8 +657,13 @@ class Tools(Generic[Context]):
 					f'(letterbox offsets {offset_x:.1f},{offset_y:.1f} scale {scale:.4f})'
 				)
 
-			# Clamp to viewport bounds to prevent out-of-bounds exceptions for all browsers
-			if browser_session._original_viewport_size:
+			# Clamp to the coordinate space used by the action backend.
+			if browser_session.coordinate_actions_use_screenshot_space and browser_session._actual_screenshot_size:
+				max_x = browser_session._actual_screenshot_size[0] - 1
+				max_y = browser_session._actual_screenshot_size[1] - 1
+				actual_x = max(0, min(actual_x, max_x))
+				actual_y = max(0, min(actual_y, max_y))
+			elif browser_session._original_viewport_size:
 				max_x = browser_session._original_viewport_size[0] - 1
 				max_y = browser_session._original_viewport_size[1] - 1
 				actual_x = max(0, min(actual_x, max_x))
@@ -706,8 +713,10 @@ class Tools(Generic[Context]):
 				# Capture tab IDs before click to detect new tabs
 				tabs_before = {t.target_id for t in await browser_session.get_tabs()}
 
-				# Highlight the coordinate being clicked (truly non-blocking)
-				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+				# Screenshot-space coordinate actions cannot be highlighted in-page
+				# because the page JS highlight API expects viewport coordinates.
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
 				# Dispatch ClickCoordinateEvent - handler will check for safety and click
 				event = browser_session.event_bus.dispatch(
@@ -722,7 +731,10 @@ class Tools(Generic[Context]):
 					error_msg = click_metadata['validation_error']
 					return ActionResult(error=error_msg)
 
-				memory = f'Clicked on coordinate {params.coordinate_x}, {params.coordinate_y}'
+				memory = (
+					f'Clicked on coordinate {params.coordinate_x}, {params.coordinate_y} '
+					f'(actual viewport: {actual_x}, {actual_y})'
+				)
 				memory += await _detect_new_tab_opened(browser_session, tabs_before)
 				logger.info(f'🖱️ {memory}')
 
@@ -814,7 +826,8 @@ class Tools(Generic[Context]):
 					params.coordinate_x, params.coordinate_y, browser_session
 				)
 
-				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
 				event = browser_session.event_bus.dispatch(
 					HoverCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y)
@@ -943,8 +956,9 @@ class Tools(Generic[Context]):
 			"""Dispatch the drag event with full metadata on both success and failure paths."""
 			base_metadata = _build_drag_base_metadata(params, start_x, start_y, end_x, end_y, browser_session)
 			try:
-				asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
-				asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
+					asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
 
 				event = browser_session.event_bus.dispatch(
 					DragAndDropCoordinateEvent(start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y)
@@ -1352,7 +1366,8 @@ class Tools(Generic[Context]):
 			actual_x: int, actual_y: int, label: str, browser_session: BrowserSession
 		) -> ActionResult:
 			try:
-				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
 				cdp_session = await browser_session.get_or_create_cdp_session()
 				session_id = cdp_session.session_id
@@ -1421,7 +1436,8 @@ class Tools(Generic[Context]):
 			actual_x, actual_y = _convert_llm_coordinates_to_viewport(params.x, params.y, browser_session)
 			
 			try:
-				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 				event = browser_session.event_bus.dispatch(
 					PressAndHoldCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y)
 				)
@@ -1554,8 +1570,9 @@ class Tools(Generic[Context]):
 				start_x, start_y = _convert_llm_coordinates_to_viewport(params.start_x, params.start_y, browser_session)
 				end_x, end_y = _convert_llm_coordinates_to_viewport(params.end_x, params.end_y, browser_session)
 
-				asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
-				asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(start_x, start_y))
+					asyncio.create_task(browser_session.highlight_coordinate_click(end_x, end_y))
 
 				event = browser_session.event_bus.dispatch(
 					SwipeCoordinateEvent(start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y)

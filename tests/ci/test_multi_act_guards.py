@@ -12,11 +12,13 @@ Usage:
 """
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_httpserver import HTTPServer
 
 from browser_use.agent.service import Agent
+from browser_use.agent.views import ActionResult
 from browser_use.browser import BrowserSession
 from browser_use.browser.profile import BrowserProfile
 from browser_use.tools.service import Tools
@@ -96,6 +98,11 @@ async def browser_session():
 @pytest.fixture(scope='function')
 def tools():
 	return Tools()
+
+
+@pytest.fixture(autouse=True)
+def enable_dev_prompt_templates(monkeypatch):
+	monkeypatch.setenv('BROWSER_USE_DEV_ENV', '1')
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +295,87 @@ class TestSafeChain:
 		# None should have errors
 		for r in results:
 			assert r.error is None, f'Unexpected error: {r.error}'
+
+
+class TestVisionEdgeTypingGuard:
+	"""Use actual viewport click coordinates when blocking clipped typing in vision-only mode."""
+
+	async def test_send_keys_blocked_after_bottom_edge_click(self, browser_session, tools, monkeypatch):
+		agent = Agent(
+			task='test',
+			llm=create_mock_llm(),
+			browser_session=browser_session,
+			tools=tools,
+			use_native_computer_use=True,
+		)
+		browser_session._original_viewport_size = (1024, 627)
+		monkeypatch.setattr(BrowserSession, 'get_current_page_url', AsyncMock(return_value='https://example.com'))
+		agent.tools.act = AsyncMock(
+			side_effect=[
+				ActionResult(
+					extracted_content='Clicked on coordinate 587, 962 (actual viewport: 601, 603)',
+					metadata={'click_x': 601, 'click_y': 603},
+				),
+				ActionResult(extracted_content='should not type'),
+			]
+		)
+
+		ActionModel = agent.tools.registry.create_action_model()
+		actions = [
+			ActionModel.model_validate({'click': {'coordinate_x': 587, 'coordinate_y': 962}}),
+			ActionModel.model_validate({'send_keys': {'keys': 'Football'}}),
+		]
+
+		results = await agent.multi_act(actions)
+
+		assert len(results) == 2
+		assert results[0].error is None
+		assert 'Blocked send_keys after edge click at actual viewport coordinates (601, 603)' in (results[1].error or '')
+		assert results[1].metadata['edge_click_guard_triggered'] is True
+		assert results[1].metadata['edge_margin'] == 30
+		agent.tools.act.assert_awaited_once()
+
+	async def test_send_keys_blocked_after_edge_click_cross_step(self, browser_session, tools, monkeypatch):
+		agent = Agent(
+			task='test',
+			llm=create_mock_llm(),
+			browser_session=browser_session,
+			tools=tools,
+			use_native_computer_use=True,
+		)
+		browser_session._original_viewport_size = (1024, 627)
+		monkeypatch.setattr(BrowserSession, 'get_current_page_url', AsyncMock(return_value='https://example.com'))
+		
+		agent.tools.act = AsyncMock(
+			side_effect=[
+				ActionResult(
+					extracted_content='Clicked on coordinate 587, 962 (actual viewport: 601, 603)',
+					metadata={'click_x': 601, 'click_y': 603},
+				),
+				ActionResult(extracted_content='should not type'),
+			]
+		)
+
+		ActionModel = agent.tools.registry.create_action_model()
+		
+		# Step 1: LLM outputs click
+		agent.state.n_steps = 1
+		actions_step_1 = [
+			ActionModel.model_validate({'click': {'coordinate_x': 587, 'coordinate_y': 962}}),
+		]
+		results_step_1 = await agent.multi_act(actions_step_1)
+		assert len(results_step_1) == 1
+		assert results_step_1[0].error is None
+
+		# Step 2: LLM outputs send_keys
+		agent.state.n_steps = 2
+		actions_step_2 = [
+			ActionModel.model_validate({'send_keys': {'keys': 'Football'}}),
+		]
+		results_step_2 = await agent.multi_act(actions_step_2)
+
+		assert len(results_step_2) == 1
+		assert 'Blocked send_keys after edge click at actual viewport coordinates (601, 603)' in (results_step_2[0].error or '')
+		assert results_step_2[0].metadata['edge_click_guard_triggered'] is True
+		assert results_step_2[0].metadata['edge_margin'] == 30
+		agent.tools.act.assert_awaited_once()

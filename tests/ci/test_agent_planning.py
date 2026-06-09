@@ -187,7 +187,7 @@ async def test_no_replan_nudge_below_threshold(browser_session, mock_llm):
 
 
 # ---------------------------------------------------------------------------
-# 8. Flash mode schema excludes plan fields
+# 8. Flash mode schema is minimal: memory + action only
 # ---------------------------------------------------------------------------
 
 
@@ -197,9 +197,16 @@ async def test_flash_mode_schema_excludes_plan_fields():
 	FlashOutput = AgentOutput.type_with_custom_actions_flash_mode(ActionModel)
 
 	schema = FlashOutput.model_json_schema()
+	assert 'plan' not in schema['properties']
 	assert 'current_plan_item' not in schema['properties']
 	assert 'plan_update' not in schema['properties']
 	assert 'thinking' not in schema['properties']
+	assert 'evaluation_previous_goal' not in schema['properties']
+	assert 'next_goal' not in schema['properties']
+	assert schema['required'] == ['memory', 'action']
+
+	output = FlashOutput(memory='menu opened', action=[{'wait': {'seconds': 1}}])
+	assert output.current_state.memory == 'menu opened'
 
 
 # ---------------------------------------------------------------------------

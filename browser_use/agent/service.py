@@ -85,7 +85,12 @@ from browser_use.utils import (
 logger = logging.getLogger(__name__)
 
 _VISION_CLICK_LOOP_TERMINATION_LIMIT = 5
+_VISION_EDGE_TYPING_GUARD_MARGIN = 30
 Browser = BrowserSession
+
+
+class MissingVisionScreenshotError(RuntimeError):
+	"""Raised when a vision-only step cannot obtain its required screenshot."""
 
 
 def log_response(response: AgentOutput, registry=None, logger=None) -> None:
@@ -477,6 +482,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# Initialize history
 		self.history = AgentHistoryList(history=[], usage=None)
 
+		# State for edge-click typing guard across steps
+		self._last_click_coordinates: dict[str, Any] | None = None
+
 		# Initialize agent directory
 		import time
 
@@ -818,22 +826,60 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		"""Setup dynamic action models from tools registry"""
 		# Initially only include actions with no filters
 		self.ActionModel = self.tools.registry.create_action_model()
-		# Create output model with the dynamic actions
-		if self.settings.flash_mode:
-			self.AgentOutput = AgentOutput.type_with_custom_actions_flash_mode(self.ActionModel)
-		elif self.settings.use_thinking:
-			self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
-		else:
-			self.AgentOutput = AgentOutput.type_with_custom_actions_no_thinking(self.ActionModel)
+		self.AgentOutput = self._select_agent_output_type(self.ActionModel)
 
 		# used to force the done action when max_steps is reached
 		self.DoneActionModel = self.tools.registry.create_action_model(include_actions=['done'])
+		self.DoneAgentOutput = self._select_agent_output_type(self.DoneActionModel)
+
+	def _normalize_flash_mode_memory(self, parsed: AgentOutput, max_chars: int = 120) -> None:
+		"""Backstop: cap flash-mode `memory` at max_chars even if the model ignores the schema description.
+
+		Flash mode runs without `next_goal`/`plan`, so a runaway narration in `memory` is the main
+		output-token bloat risk. Truncate in place and add an ellipsis marker.
+		"""
+		if not getattr(self.settings, 'flash_mode', False):
+			return
+		memory = getattr(parsed, 'memory', None)
+		if not isinstance(memory, str):
+			return
+		if len(memory) <= max_chars:
+			return
+		# Reserve room for the ellipsis so the final length is <= max_chars + 3 boundary
+		parsed.memory = memory[: max_chars - 3].rstrip() + '...'
+
+	def _normalize_vision_only_fields(self, parsed: AgentOutput) -> None:
+		"""Cap vision-only fields to prevent runaway output token bloat."""
+		if not getattr(self.settings, 'use_native_computer_use', False):
+			return
+
+		# Cap memory at 120 chars
+		memory = getattr(parsed, 'memory', None)
+		if isinstance(memory, str) and len(memory) > 120:
+			parsed.memory = memory[:117].rstrip() + '...'
+
+		# Cap next_goal at 120 chars
+		next_goal = getattr(parsed, 'next_goal', None)
+		if isinstance(next_goal, str) and len(next_goal) > 120:
+			parsed.next_goal = next_goal[:117].rstrip() + '...'
+
+		# Cap visual_state at 250 chars
+		visual_state = getattr(parsed, 'visual_state', None)
+		if isinstance(visual_state, str) and len(visual_state) > 250:
+			parsed.visual_state = visual_state[:247].rstrip() + '...'
+
+	def _select_agent_output_type(self, action_model: type) -> type[AgentOutput]:
+		"""Pick the AgentOutput variant based on mode (vision-only / flash / thinking)."""
+		vision_only = self.settings.use_native_computer_use
+		if vision_only and self.settings.flash_mode:
+			return AgentOutput.type_with_custom_actions_flash_mode(action_model)
+		if vision_only:
+			return AgentOutput.type_with_custom_actions_vision_only(action_model)
 		if self.settings.flash_mode:
-			self.DoneAgentOutput = AgentOutput.type_with_custom_actions_flash_mode(self.DoneActionModel)
-		elif self.settings.use_thinking:
-			self.DoneAgentOutput = AgentOutput.type_with_custom_actions(self.DoneActionModel)
-		else:
-			self.DoneAgentOutput = AgentOutput.type_with_custom_actions_no_thinking(self.DoneActionModel)
+			return AgentOutput.type_with_custom_actions_flash_mode(action_model)
+		if self.settings.use_thinking:
+			return AgentOutput.type_with_custom_actions(action_model)
+		return AgentOutput.type_with_custom_actions_no_thinking(action_model)
 
 	def _get_skill_slug(self, skill: 'Skill', all_skills: list['Skill']) -> str:
 		"""Generate a clean slug from skill title for action names
@@ -1135,6 +1181,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			include_recent_events=self.include_recent_events,
 			include_dom=not self.settings.use_native_computer_use,
 		)
+		browser_state_summary = await self._ensure_vision_screenshot(browser_state_summary)
 		if browser_state_summary.screenshot:
 			self.logger.debug(f'📸 Got browser state WITH screenshot, length: {len(browser_state_summary.screenshot)}')
 		else:
@@ -1196,6 +1243,52 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		await self._force_done_after_last_step(step_info)
 		await self._force_done_after_failure()
 		return browser_state_summary
+
+	def _has_vision_screenshot(self, browser_state_summary: BrowserStateSummary) -> bool:
+		"""Return True when the state includes a usable visual ground-truth image."""
+		return bool(browser_state_summary.clean_screenshot or browser_state_summary.screenshot)
+
+	def _get_vision_edge_typing_margin(self) -> int:
+		"""Use a fixed edge margin for clipped-field typing protection."""
+		return _VISION_EDGE_TYPING_GUARD_MARGIN
+
+	async def _retry_vision_screenshot_capture(self) -> BrowserStateSummary:
+		"""Retry browser-state capture once after clearing stale focus/cache state."""
+		assert self.browser_session is not None, 'BrowserSession is not set up'
+
+		self.browser_session._cached_browser_state_summary = None
+		self.browser_session._cached_selector_map.clear()
+		if self.browser_session._dom_watchdog:
+			self.browser_session._dom_watchdog.clear_cache()
+
+		if self.browser_session.session_manager:
+			await self.browser_session.session_manager.ensure_valid_focus(timeout=3.0)
+
+		return await self.browser_session.get_browser_state_summary(
+			include_screenshot=True,
+			include_recent_events=self.include_recent_events,
+			include_dom=not self.settings.use_native_computer_use,
+		)
+
+	async def _ensure_vision_screenshot(self, browser_state_summary: BrowserStateSummary) -> BrowserStateSummary:
+		"""Require a screenshot in vision-only mode, with one internal recovery attempt."""
+		if not self.settings.use_native_computer_use:
+			return browser_state_summary
+
+		if self._has_vision_screenshot(browser_state_summary):
+			return browser_state_summary
+
+		self.logger.warning(
+			f'📸 Vision-only step {self.state.n_steps}: browser state arrived without screenshot, retrying capture once'
+		)
+		retried_state = await self._retry_vision_screenshot_capture()
+		if self._has_vision_screenshot(retried_state):
+			self.logger.info(f'📸 Vision-only step {self.state.n_steps}: screenshot recovered on retry')
+			return retried_state
+
+		raise MissingVisionScreenshotError(
+			'Vision-only mode requires a current screenshot. Screenshot capture failed twice, so this step was aborted without calling the LLM.'
+		)
 
 	async def _maybe_compact_messages(self, step_info: AgentStepInfo | None = None) -> None:
 		"""Optionally compact message history to keep prompts small."""
@@ -1266,6 +1359,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		self.state.last_model_output = model_output
 
+		# Backstop trim for flash-mode memory bloat
+		self._normalize_flash_mode_memory(model_output)
+		self._normalize_vision_only_fields(model_output)
+
 		# Check again for paused/stopped state after getting model output
 		await self._check_stop_or_pause()
 
@@ -1331,6 +1428,23 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			error_msg = 'The agent was interrupted mid-step' + (f' - {str(error)}' if str(error) else '')
 			# NOTE: This is not an error, it's a normal part of the execution when the user interrupts the agent
 			self.logger.warning(f'{error_msg}')
+			return
+
+		if isinstance(error, MissingVisionScreenshotError):
+			error_msg = str(error)
+			max_total_failures = self.settings.max_failures + int(self.settings.final_response_after_failure)
+			prefix = f'Result failed {self.state.consecutive_failures + 1}/{max_total_failures} times: '
+			self.state.consecutive_failures += 1
+			self.logger.warning(f'{prefix}{error_msg}')
+			self.state.last_result = [
+				ActionResult(
+					error=error_msg,
+					include_in_memory=True,
+					metadata={'vision_screenshot_required': True},
+				)
+			]
+			if self.settings.final_response_after_failure and self.state.consecutive_failures >= self.settings.max_failures:
+				self.state.consecutive_failures = self.settings.max_failures + 1
 			return
 
 		# Handle browser closed/disconnected errors
@@ -2271,6 +2385,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			level = 'success' if 'success' in eval_text.lower() else 'warning' if 'failure' in eval_text.lower() else 'info'
 			await self._demo_mode_log(eval_text, level, step_meta)
 
+		if state.visual_state:
+			await self._demo_mode_log(f'Visual state: {state.visual_state}', 'info', step_meta)
+
 		if state.memory:
 			await self._demo_mode_log(f'Memory: {state.memory}', 'info', step_meta)
 
@@ -2897,6 +3014,45 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# Log action before execution
 				await self._log_action(action, action_name, i + 1, total_actions)
 
+				if self.settings.use_native_computer_use and action_name == 'send_keys':
+					if self._last_click_coordinates is not None:
+						if self._last_click_coordinates.get('step_index') in (self.state.n_steps, self.state.n_steps - 1):
+							actual_click_x = self._last_click_coordinates.get('click_x')
+							actual_click_y = self._last_click_coordinates.get('click_y')
+							viewport_size = self.browser_session._original_viewport_size if self.browser_session else None
+							if isinstance(actual_click_x, int) and isinstance(actual_click_y, int) and viewport_size:
+								viewport_width, viewport_height = viewport_size
+								edge_margin = self._get_vision_edge_typing_margin()
+								if (
+									actual_click_x <= edge_margin
+									or actual_click_x >= viewport_width - 1 - edge_margin
+									or actual_click_y <= edge_margin
+									or actual_click_y >= viewport_height - 1 - edge_margin
+								):
+									result = ActionResult(
+										error=(
+											f'Blocked send_keys after edge click at actual viewport coordinates '
+											f'({actual_click_x}, {actual_click_y}) within {edge_margin}px of the viewport edge. '
+											'In vision-only mode, do not type into targets that touch the screenshot edge. '
+											'Scroll some pixels to reveal the full field first, then type on a later step.'
+										),
+										metadata={
+											'edge_click_guard_triggered': True,
+											'click_x': actual_click_x,
+											'click_y': actual_click_y,
+											'edge_margin': edge_margin,
+											'viewport_width': viewport_width,
+											'viewport_height': viewport_height,
+										},
+									)
+									results.append(result)
+									await self._demo_mode_log(
+										f'Action "{action_name}" failed: {result.error}',
+										'error',
+										{'action': action_name, 'step': self.state.n_steps},
+									)
+									break
+
 				# Capture pre-action state for runtime page-change detection
 				pre_action_url = await self.browser_session.get_current_page_url()
 				pre_action_focus = self.browser_session.agent_focus_target_id
@@ -2929,6 +3085,21 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 				results.append(result)
 
+				# Record click coordinates for edge click guard
+				if result.metadata and isinstance(result.metadata, dict):
+					click_x = result.metadata.get('click_x')
+					click_y = result.metadata.get('click_y')
+					if isinstance(click_x, (int, float)) and isinstance(click_y, (int, float)):
+						self._last_click_coordinates = {
+							'click_x': int(click_x),
+							'click_y': int(click_y),
+							'step_index': self.state.n_steps,
+						}
+
+				# Clear click coordinates on layout-altering actions
+				if 'scroll' in action_name or action_name in ('navigate', 'go_back', 'refresh'):
+					self._last_click_coordinates = None
+
 				if results[-1].is_done or results[-1].error or i == total_actions - 1:
 					break
 
@@ -2945,6 +3116,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# Layer 2: Runtime detection — URL or focus target changed
 				post_action_url = await self.browser_session.get_current_page_url()
 				post_action_focus = self.browser_session.agent_focus_target_id
+
+				if post_action_url != pre_action_url:
+					self._last_click_coordinates = None
 
 				if post_action_url != pre_action_url or post_action_focus != pre_action_focus:
 					self.logger.info(f'Page changed after "{action_name}" — skipping {total_actions - i - 1} remaining action(s)')
@@ -3416,12 +3590,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					action=self.initial_actions,
 				)
 			else:
-				model_output = self.AgentOutput(
-					evaluation_previous_goal='Start',
-					memory=None,
-					next_goal='Initial navigation',
-					action=self.initial_actions,
-				)
+				model_output_kwargs = {
+					'evaluation_previous_goal': 'Start',
+					'memory': None,
+					'next_goal': 'Initial navigation',
+					'action': self.initial_actions,
+				}
+				if self.settings.use_native_computer_use:
+					model_output_kwargs['screen_assessment'] = 'needs_more_visual_info'
+					model_output_kwargs['visual_state'] = 'Initial action executed before the first screenshot.'
+				model_output = self.AgentOutput(**model_output_kwargs)
 
 			metadata = StepMetadata(step_number=0, step_start_time=time.time(), step_end_time=time.time(), step_interval=None)
 
@@ -4151,24 +4329,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 	async def _update_action_models_for_page(self, page_url: str) -> None:
 		"""Update action models with page-specific actions"""
-		# Create new action model with current page's filtered actions
 		self.ActionModel = self.tools.registry.create_action_model(page_url=page_url)
-		# Update output model with the new actions
-		if self.settings.flash_mode:
-			self.AgentOutput = AgentOutput.type_with_custom_actions_flash_mode(self.ActionModel)
-		elif self.settings.use_thinking:
-			self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
-		else:
-			self.AgentOutput = AgentOutput.type_with_custom_actions_no_thinking(self.ActionModel)
+		self.AgentOutput = self._select_agent_output_type(self.ActionModel)
 
-		# Update done action model too
 		self.DoneActionModel = self.tools.registry.create_action_model(include_actions=['done'], page_url=page_url)
-		if self.settings.flash_mode:
-			self.DoneAgentOutput = AgentOutput.type_with_custom_actions_flash_mode(self.DoneActionModel)
-		elif self.settings.use_thinking:
-			self.DoneAgentOutput = AgentOutput.type_with_custom_actions(self.DoneActionModel)
-		else:
-			self.DoneAgentOutput = AgentOutput.type_with_custom_actions_no_thinking(self.DoneActionModel)
+		self.DoneAgentOutput = self._select_agent_output_type(self.DoneActionModel)
 
 	async def authenticate_cloud_sync(self, show_instructions: bool = True) -> bool:
 		"""

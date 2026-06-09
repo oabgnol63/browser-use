@@ -31,6 +31,26 @@ Uses `cdp-use` (https://github.com/browser-use/cdp-use) for typed CDP protocol a
 
 We want our library APIs to be ergonomic, intuitive, and hard to get wrong.
 
+### Browser Backends (Fork-Specific)
+
+This fork drives browsers through three interchangeable backends, all exposing an agent-compatible session interface (`navigate`, `get_dom_state`, action service):
+
+- **CDP (default, `browser_use/browser/session.py`)**: Chrome/Chromium via cdp-use. The full event-driven watchdog architecture above applies only to this backend.
+- **Selenium (`browser_use/selenium/`)**: `SeleniumSession` wraps Selenium WebDriver (pinned `selenium==4.41.0`) for Firefox and Safari, including SauceLabs remote sessions (`saucelabs.py`) and same-/cross-origin iframe handling (`iframe_handler.py`). Has its own `dom_service.py` and `action_service.py` mirroring the CDP ones.
+- **Appium (`browser_use/appium/`)**: `AppiumSession` subclasses `SeleniumSession` for mobile web (Android `chrome`/UiAutomator2, iOS `safari`/XCUITest). The Appium driver is standard W3C WebDriver, so it reuses the Selenium runtime and swaps in `AppiumActionService`.
+
+When changing browser interaction logic (clicks, typing, drag-and-drop, coordinate math), check whether the change needs to be mirrored across `browser/`, `selenium/`, and `appium/` action services — they are kept in sync by hand, not shared.
+
+Note: `selenium/` files use 4-space indentation (Selenium upstream convention); the rest of `browser_use/` uses tabs. Match the surrounding file.
+
+### Actor Abstraction (`browser_use/actor/`)
+
+`Page`, `Mouse`, and `Element` provide an imperative, page-level wrapper over CDP targets/sessions (a `Page` is a tab or iframe). This is the lower-level API the agent and tools build on for direct browser control; see `browser_use/actor/playground/` for usage examples.
+
+### Vision-Only / No-DOM Mode
+
+Setting `use_native_computer_use=True` puts the agent in vision-only mode: it skips DOM serialization and drives the browser purely from screenshots + coordinates, using the `system_prompt_no_dom.md` system prompt and the `type_with_custom_actions_vision_only` action schema (`agent/service.py`). Vision-only is incompatible with `flash_mode`. Coordinate clicks are normalized against screenshot size, not viewport.
+
 ## Development Commands
 
 **Setup:**

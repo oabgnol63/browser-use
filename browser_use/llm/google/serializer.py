@@ -1,10 +1,11 @@
 import base64
 
-from google.genai.types import Content, ContentListUnion, Part
+from google.genai.types import Content, ContentListUnion, Part, PartMediaResolutionLevel
 
 from browser_use.llm.messages import (
 	AssistantMessage,
 	BaseMessage,
+	ContentPartImageParam,
 	SystemMessage,
 	UserMessage,
 )
@@ -13,6 +14,30 @@ from browser_use.utils import sanitize_surrogates
 
 class GoogleMessageSerializer:
 	"""Serializer for converting messages to Google Gemini format."""
+
+	@staticmethod
+	def _serialize_image_part(part: ContentPartImageParam) -> Part:
+		"""Serialize image parts for Gemini, mapping detail to Gemini media resolution."""
+		url = part.image_url.url
+
+		# Format: data:image/jpeg;base64,<data>
+		_header, data = url.split(',', 1)
+		image_bytes = base64.b64decode(data)
+
+		return Part.from_bytes(
+			data=image_bytes,
+			mime_type=part.image_url.media_type,
+			media_resolution=GoogleMessageSerializer._map_media_resolution(part.image_url.detail),
+		)
+
+	@staticmethod
+	def _map_media_resolution(detail: str) -> PartMediaResolutionLevel | None:
+		"""Map Browser Use image detail to Gemini media resolution."""
+		if detail == 'low':
+			return PartMediaResolutionLevel.MEDIA_RESOLUTION_LOW
+		if detail == 'high':
+			return PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH
+		return None
 
 	@staticmethod
 	def serialize_messages(
@@ -101,21 +126,7 @@ class GoogleMessageSerializer:
 						elif part.type == 'refusal':
 							message_parts.append(Part.from_text(text=f'[Refusal] {part.refusal}'))
 						elif part.type == 'image_url':
-							# Handle images
-							url = part.image_url.url
-
-							# Format: data:image/jpeg;base64,<data>
-							header, data = url.split(',', 1)
-							# Decode base64 to bytes
-							image_bytes = base64.b64decode(data)
-
-							# Use the media_type from ImageURL, which correctly identifies the image format
-							mime_type = part.image_url.media_type
-
-							# Add image part
-							image_part = Part.from_bytes(data=image_bytes, mime_type=mime_type)
-
-							message_parts.append(image_part)
+							message_parts.append(GoogleMessageSerializer._serialize_image_part(part))
 
 			# Create the Content object
 			if message_parts:

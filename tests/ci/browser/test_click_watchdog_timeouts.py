@@ -40,4 +40,4 @@ async def test_click_coordinate_waits_no_longer_than_event_budget():
 
 def test_click_coordinate_event_default_timeout_matches_download_wait_budget():
 	event = ClickCoordinateEvent(coordinate_x=10, coordinate_y=20)
-	assert event.event_timeout == 45.0
+	assert event.event_timeout == 15.0
