@@ -152,6 +152,20 @@ class AppiumActionService(SeleniumActionService):
         """Run a blocking WebDriver call with a bounded async wait."""
         return await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, func), timeout=timeout)
 
+    async def _click_element_natively(self, element) -> None:
+        """Run a native click without overlapping a fallback after the soft timeout."""
+        click_future = asyncio.get_running_loop().run_in_executor(None, element.click)
+        try:
+            await asyncio.wait_for(asyncio.shield(click_future), timeout=10.0)
+        except TimeoutError:
+            self.logger.warning('Appium native click is still running after 10s; waiting briefly for completion')
+            try:
+                await asyncio.wait_for(asyncio.shield(click_future), timeout=5.0)
+            except TimeoutError as timeout_error:
+                raise TimeoutError(
+                    'Appium native click did not finish within 15s; refusing to start an overlapping JS fallback'
+                ) from timeout_error
+
     async def hover_element(
         self,
         element_node: EnhancedDOMTreeNode,
@@ -204,9 +218,15 @@ class AppiumActionService(SeleniumActionService):
         await asyncio.sleep(random.uniform(0.3, 0.6))
 
         try:
-            await self._run_driver_call(lambda: element.click(), timeout=10.0)
+            await self._click_element_natively(element)
+        except TimeoutError:
+            raise
         except Exception as click_error:
-            self.logger.warning(f'Mobile click failed: {click_error}. Falling back to JS click or location.href')
+            self.logger.warning(
+                f'Mobile click failed with {type(click_error).__name__}: {click_error}. '
+                'Re-finding element before JS click or location.href fallback'
+            )
+            element, method = await self._find_element_robust(element_node)
             if element_node.node_name.lower() == 'a' and href:
                 await self._run_driver_call(
                     lambda: self.driver.execute_script('window.location.href = arguments[0].href || arguments[1];', element, href),

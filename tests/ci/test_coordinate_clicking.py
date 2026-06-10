@@ -4,8 +4,10 @@ This feature allows certain models (Claude Sonnet 4, Claude Opus 4, Gemini 3 Fla
 to use coordinate-based clicking, while other models only get index-based clicking.
 """
 
+import asyncio
 import base64
 import io
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
@@ -184,6 +186,76 @@ class TestCoordinateClickingWithPassedTools:
 
 class TestAppiumCoordinateClickCompatibility:
 	"""Appium coordinate click should honor the shared Selenium signature."""
+
+	async def test_appium_element_click_waits_for_slow_native_click_before_fallback(self):
+		driver = MagicMock()
+		element = MagicMock()
+
+		def slow_click():
+			time.sleep(0.05)
+
+		element.click.side_effect = slow_click
+
+		def execute_script(script, *args):
+			if 'scrollIntoView' in script:
+				return None
+			raise AssertionError('JS fallback must not overlap a native click that is still running')
+
+		driver.execute_script.side_effect = execute_script
+		service = AppiumActionService(driver)
+		service._find_element_robust = AsyncMock(return_value=(element, 'xpath'))
+		service._is_element_in_iframe = MagicMock(return_value=(False, None))
+		node = SimpleNamespace(
+			node_name='A',
+			attributes={'xpath': '/html/body/div[4]/div/a', 'href': '#'},
+		)
+		original_wait_for = asyncio.wait_for
+
+		async def shorten_native_click_timeout(awaitable, timeout=None):
+			effective_timeout = 0.01 if timeout == 10.0 else timeout
+			return await original_wait_for(awaitable, timeout=effective_timeout)
+
+		with patch('browser_use.appium.action_service.random.uniform', return_value=0.0):
+			with patch('browser_use.appium.action_service.asyncio.wait_for', side_effect=shorten_native_click_timeout):
+				result = await service.click_element(node)
+
+		assert result['success'] is True
+		element.click.assert_called_once_with()
+		assert driver.execute_script.call_count == 1
+
+	async def test_appium_element_click_refinds_element_before_js_fallback(self):
+		driver = MagicMock()
+		stale_element = MagicMock()
+		fresh_element = MagicMock()
+		stale_element.click.side_effect = RuntimeError('native click failed')
+
+		def execute_script(script, *args):
+			if 'scrollIntoView' in script:
+				assert args == (stale_element,)
+				return None
+			assert args[0] is fresh_element
+			return None
+
+		driver.execute_script.side_effect = execute_script
+		service = AppiumActionService(driver)
+		service._find_element_robust = AsyncMock(
+			side_effect=[
+				(stale_element, 'xpath'),
+				(fresh_element, 'xpath'),
+			]
+		)
+		service._is_element_in_iframe = MagicMock(return_value=(False, None))
+		node = SimpleNamespace(
+			node_name='A',
+			attributes={'xpath': '/html/body/div[4]/div/a', 'href': '#'},
+		)
+
+		with patch('browser_use.appium.action_service.random.uniform', return_value=0.0):
+			result = await service.click_element(node)
+
+		assert result['success'] is True
+		assert service._find_element_robust.await_count == 2
+		stale_element.click.assert_called_once_with()
 
 	async def test_appium_type_text_prevents_partial_first_entry_via_character_typing(self):
 		driver = MagicMock()

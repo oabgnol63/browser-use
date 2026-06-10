@@ -11,8 +11,6 @@ from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
 import httpx
-import websockets
-from cdp_use import CDPClient as BaseCDPClient
 from cdp_use.cdp.fetch import AuthRequiredEvent, RequestPausedEvent
 from cdp_use.cdp.network import Cookie
 from cdp_use.cdp.target import SessionID, TargetID
@@ -21,7 +19,12 @@ from cdp_use.cdp.target.types import TargetInfo
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from uuid_extensions import uuid7str
 
-from browser_use.browser._cdp_timeout import TimeoutWrappedCDPClient
+from browser_use.browser._cdp_timeout import (
+	CDP_CONNECT_TIMEOUT_S,
+	CDP_WS_OPEN_TIMEOUT_S,
+	CDPClient,
+	TimeoutWrappedCDPClient,
+)
 from browser_use.browser.cloud.cloud import CloudBrowserAuthError, CloudBrowserClient, CloudBrowserError
 
 # CDP logging is now handled by setup_logging() in logging_config.py
@@ -70,43 +73,6 @@ DEFAULT_BROWSER_PROFILE = BrowserProfile()
 _LOGGED_UNIQUE_SESSION_IDS = set()  # track unique session IDs that have been logged to make sure we always assign a unique enough id to new sessions and avoid ambiguity in logs
 red = '\033[91m'
 reset = '\033[0m'
-CDP_WS_OPEN_TIMEOUT_S = 60.0
-CDP_CONNECT_TIMEOUT_S = 60.0
-
-
-class CDPClient(BaseCDPClient):
-	"""Local wrapper that allows browser-use to tune websocket handshake timeout."""
-
-	def __init__(
-		self,
-		url: str,
-		additional_headers: dict[str, str] | None = None,
-		max_ws_frame_size: int = 100 * 1024 * 1024,
-		open_timeout: float = CDP_WS_OPEN_TIMEOUT_S,
-	):
-		super().__init__(url, additional_headers=additional_headers, max_ws_frame_size=max_ws_frame_size)
-		self.open_timeout = open_timeout
-
-	async def start(self):
-		"""Start the WebSocket connection and message handler task."""
-		if self.ws is not None:
-			raise RuntimeError('Client is already started')
-
-		logger = logging.getLogger('cdp_use.client')
-		logger.info(
-			f'Connecting to {self.url} (max frame size: {self.max_ws_frame_size / 1024 / 1024:.0f}MB, '
-			f'open timeout: {self.open_timeout:.0f}s)'
-		)
-		connect_kwargs = {
-			'max_size': self.max_ws_frame_size,
-			'ping_interval': 1800,
-			'ping_timeout': None,
-			'open_timeout': self.open_timeout,
-		}
-		if self.additional_headers:
-			connect_kwargs['additional_headers'] = self.additional_headers
-		self.ws = await websockets.connect(self.url, **connect_kwargs)
-		self._message_handler_task = asyncio.create_task(self._handle_messages())
 
 
 class Target(BaseModel):
@@ -2018,7 +1984,6 @@ class BrowserSession(BaseModel):
 			raise RuntimeError(f'Failed to establish CDP connection to browser: {e}') from e
 
 		return self
-
 
 	async def _setup_proxy_auth(self) -> None:
 		"""Enable CDP Fetch auth handling for authenticated proxy, if credentials provided.
