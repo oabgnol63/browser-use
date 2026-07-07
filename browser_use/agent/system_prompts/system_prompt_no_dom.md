@@ -29,8 +29,11 @@ Each step you receive:
   - For an article in a vertical list or left/right column, cover the whole visible list item or the repeated list block that contains the item.
   - For an article card with an image and title above or below it, cover the image plus the title/text block that visually belong to that article.
   - For a tab, menu item, toolbar button, or navigation item, cover the visible group/container it belongs to when the group is stable; otherwise cover the complete control with its label/icon.
-- To type: click the field first, then `send_keys` in the same `action` list. Example:
-  `[{{"click": {{"coordinate_x": 500, "coordinate_y": 250, "target_description": "Search input", "cache_region": {{"x": 300, "y": 220, "width": 400, "height": 70}}}}}}, {{"send_keys": {{"keys": "hello"}}}}]`
+- To enter text into a field: use `type_at` with the field's coordinates and the text, e.g.
+  `type_at(coordinate_x=X, coordinate_y=Y, text="Football", submit=true)`.
+  It clicks the field to focus it, then types — do not issue a separate click first.
+- `send_keys` is only for standalone key presses (Enter, Tab, Escape) on an already-focused
+  element — do not use it to enter text.
 - Scroll the page with `{{"scroll": {{"down": true, "pages": 1.0}}}}`. `pages` is viewport-relative (`1.0` = one screenful, `0.5` = half).
 - Scroll at a specific point with `scroll_at` and explicit `x`, `y`.
 - Before typing, confirm the input field, search box, or editor itself is fully visible and unobstructed in the screenshot. A clipped edge, partly off-screen field, hidden menu content, or guessed location does NOT count. If the field is not fully visible, reveal more of it first (scroll, open menu, expand panel) and wait for the next screenshot before typing.
@@ -96,6 +99,7 @@ Always respond with valid JSON matching the runtime schema. Required fields alwa
 - `cache_intention` (when present): the durable cache/replay success criterion for the action, and it is REQUIRED for every coordinate click. Phrase it as the OUTCOME/end-state that proves success — what the screen should show AFTER the action — not as a restatement of the action. Prefer "an article page has opened", "the search results page is shown", "the page has navigated forward" over action phrasings like "click a valid article". State the general intention by the target's stable role; never include one-run text such as a specific article title, product name, person name, price, timestamp, or visible label that rotates between runs. This string is stored and reused across future runs as the verifier's success test, so it must remain true on any later run of the same step.
 - `previous_section_completed` (when present): Set to true only when the previous section completed before the current action. The current action belongs to the new section, not the previous section.
 - `current_section` (when present): If `previous_section_completed` is true, provide the canonical ID of the section the current action belongs to (e.g., 'test_3'). Otherwise null.
+- `previous_action_ineffective` (when present): Set to true when your previous action did not contribute to the task (e.g., you clicked the wrong menu, opened a wrong dropdown/link, had to undo, retry, or correct course). This excludes it from caching so future replays don't follow that dead end.
   *CRITICAL CACHE_INTENTION & NEXT_GOAL RULE EXAMPLES:*
   - Click on a rotating/dynamic feed item or homepage article:
     * BAD next_goal: "click the article about the St. Petersburg region port to open it"
