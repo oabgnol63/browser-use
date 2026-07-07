@@ -17,6 +17,7 @@ from PIL import Image
 from browser_use.agent.service import Agent
 from browser_use.appium.action_service import AppiumActionService
 from browser_use.browser.appium_session import AppiumBrowserSession
+from browser_use.browser.events import ClickCoordinateEvent
 from browser_use.tools.registry.views import Mode
 from browser_use.tools.service import Tools
 from browser_use.tools.views import ClickElementAction, ClickElementActionIndexOnly
@@ -51,6 +52,7 @@ class TestCoordinateClickingTools:
 		assert 'index' in schema['properties']
 		assert 'coordinate_x' not in schema['properties']
 		assert 'coordinate_y' not in schema['properties']
+		assert 'target_description' not in schema['properties']
 
 	def test_enable_coordinate_clicking(self):
 		"""Enabling coordinate clicking should switch to ClickElementAction."""
@@ -75,6 +77,17 @@ class TestCoordinateClickingTools:
 		assert 'index' in schema['properties']
 		assert 'coordinate_x' in schema['properties']
 		assert 'coordinate_y' in schema['properties']
+		assert 'target_description' in schema['properties']
+
+	def test_coordinate_click_preserves_target_description(self):
+		"""Coordinate click descriptions should survive action serialization."""
+		params = ClickElementAction(
+			coordinate_x=500,
+			coordinate_y=250,
+			target_description='Top story headline',
+		)
+
+		assert params.model_dump(exclude_none=True)['target_description'] == 'Top story headline'
 
 	def test_disable_coordinate_clicking(self):
 		"""Disabling coordinate clicking should switch back to index-only."""
@@ -399,6 +412,57 @@ class TestAppiumCoordinateClickCompatibility:
 		fake_pointer.pointer_up.assert_called_once()
 		fake_builder.perform.assert_called_once()
 		driver.execute_script.assert_not_called()
+
+	async def test_appium_coordinate_click_uses_event_timeout_for_native_tap(self):
+		driver = MagicMock()
+		fake_builder = MagicMock()
+		fake_pointer = MagicMock()
+		fake_builder.pointer_action = fake_pointer
+		fake_builder.perform = MagicMock()
+		service = AppiumActionService(driver)
+		observed_timeouts: list[float | None] = []
+		original_wait_for = asyncio.wait_for
+
+		async def record_wait_for(awaitable, timeout=None):
+			observed_timeouts.append(timeout)
+			return await original_wait_for(awaitable, timeout=timeout)
+
+		with patch('browser_use.appium.action_service.asyncio.wait_for', side_effect=record_wait_for):
+			with patch('browser_use.appium.action_service.ActionBuilder', return_value=fake_builder):
+				result = await service.click_coordinates(120, 240, timeout=45.0)
+
+		assert result['success'] is True
+		assert observed_timeouts[0] > 10.0
+		driver.execute_script.assert_not_called()
+
+	async def test_appium_coordinate_click_timeout_does_not_overlap_js_fallback(self):
+		driver = MagicMock()
+		fake_builder = MagicMock()
+		fake_pointer = MagicMock()
+		fake_builder.pointer_action = fake_pointer
+		fake_builder.perform.side_effect = lambda: time.sleep(0.05)
+		service = AppiumActionService(driver)
+
+		with patch.dict('browser_use.appium.action_service.os.environ', {'TIMEOUT_APPIUM_CLICK_NATIVE': '0.01'}):
+			with patch('browser_use.appium.action_service.ActionBuilder', return_value=fake_builder):
+				with pytest.raises(TimeoutError, match='refusing to start an overlapping JS fallback'):
+					await service.click_coordinates(120, 240)
+
+		driver.execute_script.assert_not_called()
+
+	async def test_appium_browser_session_passes_event_timeout_to_coordinate_click(self):
+		selenium_session = SimpleNamespace(
+			session_id='session-1',
+			click_coordinates=AsyncMock(return_value={'success': True}),
+			action_service=SimpleNamespace(swipe_coordinate=None),
+		)
+		browser_session = AppiumBrowserSession(selenium_session=selenium_session)
+		event = ClickCoordinateEvent(coordinate_x=120, coordinate_y=240, event_timeout=45.0)
+
+		result = await browser_session.on_ClickCoordinateEvent(event)
+
+		assert result == {'success': True}
+		selenium_session.click_coordinates.assert_awaited_once_with(120, 240, timeout=45.0)
 
 	async def test_appium_take_screenshot_returns_selenium_default_when_size_matches(self):
 		"""Appium screenshot path should pass through the raw Selenium screenshot."""

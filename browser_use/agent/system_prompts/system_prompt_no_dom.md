@@ -19,9 +19,18 @@ Each step you receive:
 
 <browser_rules>
 - Use coordinate-based actions only. Aim for the center of the target.
-- `click` uses normalized 0-999 coordinates: `{{"click": {{"coordinate_x": 500, "coordinate_y": 250}}}}`.
+- `click` uses normalized 0-999 coordinates, a concise visual description, and a reusable visual context rectangle:
+  `{{"click": {{"coordinate_x": 500, "coordinate_y": 250, "target_description": "Top story headline", "cache_region": {{"x": 310, "y": 120, "width": 360, "height": 220}}}}}}`.
+- For every coordinate click, set `target_description` to the STABLE role or position of the intended target (e.g. "top article headline in the main feed", "primary search box", "first result card"). Do NOT bake in the transient words, title, or price currently shown — that content rotates between runs and makes cache replay fail. Describe what the target IS, not the exact text it happens to show now, and not only its location.
+- For every coordinate click, set `cache_region` to the stable visible container that should be matched in future screenshots. The click point must be inside it. Do not use a tiny box around only the click point, text, or button.
+- Choose `cache_region` by visual structure:
+  - For a button inside a modal, banner, cookie prompt, sign-in prompt, or overlay, cover the whole modal/banner/prompt panel.
+  - If a button sits inside a visible modal, panel, or overlay, do not return the button rectangle as `cache_region`; return the outer visible modal/panel rectangle instead and exclude dimmed page content outside the modal.
+  - For an article in a vertical list or left/right column, cover the whole visible list item or the repeated list block that contains the item.
+  - For an article card with an image and title above or below it, cover the image plus the title/text block that visually belong to that article.
+  - For a tab, menu item, toolbar button, or navigation item, cover the visible group/container it belongs to when the group is stable; otherwise cover the complete control with its label/icon.
 - To type: click the field first, then `send_keys` in the same `action` list. Example:
-  `[{{"click": {{"coordinate_x": 500, "coordinate_y": 250}}}}, {{"send_keys": {{"keys": "hello"}}}}]`
+  `[{{"click": {{"coordinate_x": 500, "coordinate_y": 250, "target_description": "Search input", "cache_region": {{"x": 300, "y": 220, "width": 400, "height": 70}}}}}}, {{"send_keys": {{"keys": "hello"}}}}]`
 - Scroll the page with `{{"scroll": {{"down": true, "pages": 1.0}}}}`. `pages` is viewport-relative (`1.0` = one screenful, `0.5` = half).
 - Scroll at a specific point with `scroll_at` and explicit `x`, `y`.
 - Before typing, confirm the input field, search box, or editor itself is fully visible and unobstructed in the screenshot. A clipped edge, partly off-screen field, hidden menu content, or guessed location does NOT count. If the field is not fully visible, reveal more of it first (scroll, open menu, expand panel) and wait for the next screenshot before typing.
@@ -83,7 +92,19 @@ At 75% of your step budget, reassess. If full completion is no longer realistic,
 - `visual_state` (when present): one short observation from the current screenshot that justifies your action, or names the visible blocker/uncertainty. Do not use URL/title/user prompt text alone as evidence.
 Always respond with valid JSON matching the runtime schema. Required fields always include `action` with at least one entry. Schemas in this mode are intentionally minimal:
 - `memory`: one short carry-forward line (under ~120 characters). Use it only for facts that must survive past this screenshot — not narration of what is currently visible.
-- `next_goal` (when present): one short line describing the immediate next visible move, grounded in the current screenshot.
+- `next_goal` (when present): one short line describing the immediate next visible move, grounded in the current screenshot. When the move is a coordinate click on a repeated or rotating content item (article, product, search result, feed card), state the goal by the target's STABLE role from the task (e.g. "click the first valid non-ad article to open it"), NOT by the specific title, name, or price it happens to show now. Mirror the task's wording for the target; do not editorialize a specific item you see.
+- `cache_intention` (when present): the durable cache/replay success criterion for the action, and it is REQUIRED for every coordinate click. Phrase it as the OUTCOME/end-state that proves success — what the screen should show AFTER the action — not as a restatement of the action. Prefer "an article page has opened", "the search results page is shown", "the page has navigated forward" over action phrasings like "click a valid article". State the general intention by the target's stable role; never include one-run text such as a specific article title, product name, person name, price, timestamp, or visible label that rotates between runs. This string is stored and reused across future runs as the verifier's success test, so it must remain true on any later run of the same step.
+- `previous_section_completed` (when present): Set to true only when the previous section completed before the current action. The current action belongs to the new section, not the previous section.
+- `current_section` (when present): If `previous_section_completed` is true, provide the canonical ID of the section the current action belongs to (e.g., 'test_3'). Otherwise null.
+  *CRITICAL CACHE_INTENTION & NEXT_GOAL RULE EXAMPLES:*
+  - Click on a rotating/dynamic feed item or homepage article:
+    * BAD next_goal: "click the article about the St. Petersburg region port to open it"
+    * BAD cache_intention: "the article page about the St. Petersburg port has opened" <-- (Breaks when homepage rotates!)
+    * GOOD next_goal: "click the first valid non-ad article under Most Popular to open it"
+    * GOOD cache_intention: "an article page has opened"
+  - Click on/interact with stable elements or explicit user-provided input keywords:
+    * GOOD next_goal: "click the search input and type Football"
+    * GOOD cache_intention: "the search results page for 'Football' is displayed" <-- ('Football' is stable across runs because it is part of the test spec)
 Never invent screen content. If the screenshot is ambiguous, prefer `wait`, `scroll`, or a reveal action over guessing coordinates.
 </output>
 

@@ -9,7 +9,9 @@ iframe handling — is the Selenium implementation unchanged.
 """
 
 import asyncio
+import os
 import random
+import time
 
 from selenium.webdriver.common.actions import interaction
 from selenium.webdriver.common.actions.action_builder import ActionBuilder
@@ -22,6 +24,21 @@ from browser_use.selenium.action_service import SeleniumActionService
 
 class AppiumActionService(SeleniumActionService):
     """Mobile-web action service tuned for Appium-backed sessions."""
+
+    def _timeout_from_env(self, name: str, default: float) -> float:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except ValueError:
+            self.logger.warning('Invalid %s=%r; using %.1fs', name, value, default)
+            return default
+
+    def _remaining_timeout(self, timeout: float | None, started_at: float, reserve: float = 0.0) -> float | None:
+        if timeout is None:
+            return None
+        return max(0.0, float(timeout) - (time.monotonic() - started_at) - reserve)
 
     async def _read_element_value(self, element) -> str:
         value = await self._run_driver_call(lambda: element.get_attribute('value'))
@@ -246,7 +263,7 @@ class AppiumActionService(SeleniumActionService):
             'tag_name': element_node.node_name,
         }
 
-    async def click_coordinates(self, x: int, y: int, human_like: bool = True) -> dict:
+    async def click_coordinates(self, x: int, y: int, human_like: bool = True, timeout: float | None = None) -> dict:
         """Click at specific coordinates using native touch coordinates first.
 
         The shared Selenium/Appium contract still accepts ``human_like`` for
@@ -263,8 +280,16 @@ class AppiumActionService(SeleniumActionService):
             actions.pointer_action.pointer_up()
             actions.perform()
 
+        started_at = time.monotonic()
+        default_native_timeout = 10.0 if timeout is None else max(1.0, float(timeout) - 1.0)
+        native_timeout = self._timeout_from_env('TIMEOUT_APPIUM_CLICK_NATIVE', default_native_timeout)
+        remaining_for_native = self._remaining_timeout(timeout, started_at, reserve=0.5)
+        if remaining_for_native is not None:
+            native_timeout = min(native_timeout, remaining_for_native)
+
         try:
-            await self._run_driver_call(do_tap, timeout=10.0)
+            tap_future = asyncio.get_running_loop().run_in_executor(None, do_tap)
+            await asyncio.wait_for(asyncio.shield(tap_future), timeout=native_timeout)
             self.logger.info(f'Appium coordinate click used native touch tap at ({x}, {y})')
             return {
                 'success': True,
@@ -272,6 +297,11 @@ class AppiumActionService(SeleniumActionService):
                 'y': y,
                 'method': 'w3c-touch-tap',
             }
+        except TimeoutError as timeout_error:
+            raise TimeoutError(
+                f'Appium native coordinate tap did not finish within {native_timeout:.1f}s; '
+                'refusing to start an overlapping JS fallback'
+            ) from timeout_error
         except Exception as tap_error:
             self.logger.warning(f'Native touch tap failed: {tap_error}. Falling back to JS elementFromPoint click.')
         script = f"""
@@ -282,7 +312,16 @@ class AppiumActionService(SeleniumActionService):
             }}
             return false;
         """
-        result = await self._run_driver_call(lambda: self.driver.execute_script(script), timeout=5.0)
+        default_fallback_timeout = self._remaining_timeout(timeout, started_at, reserve=0.25)
+        if default_fallback_timeout is None:
+            default_fallback_timeout = 5.0
+        else:
+            default_fallback_timeout = max(0.1, min(5.0, default_fallback_timeout))
+        fallback_timeout = self._timeout_from_env('TIMEOUT_APPIUM_CLICK_FALLBACK', default_fallback_timeout)
+        remaining_for_fallback = self._remaining_timeout(timeout, started_at, reserve=0.1)
+        if remaining_for_fallback is not None:
+            fallback_timeout = min(fallback_timeout, remaining_for_fallback)
+        result = await self._run_driver_call(lambda: self.driver.execute_script(script), timeout=fallback_timeout)
 
         if not result:
             self.logger.warning(f'No element found at coordinates ({x}, {y}) to click')

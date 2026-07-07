@@ -338,6 +338,15 @@ class SendKeysEvent(BaseEvent[None]):
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_SendKeysEvent', 60.0))  # seconds
 
 
+class TypeToFocusEvent(BaseEvent[None]):
+	"""Type text into the currently focused element on the page."""
+
+	text: str
+
+	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_TypeToFocusEvent', 60.0))  # seconds
+
+
+
 class UploadFileEvent(ElementSelectedEvent[None]):
 	"""Upload a file to an element."""
 

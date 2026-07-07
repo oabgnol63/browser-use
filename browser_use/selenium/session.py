@@ -333,9 +333,9 @@ class SeleniumSession:
         """Click a specific element."""
         return await self.action_service.click_element(element, self._selector_map)
 
-    async def click_coordinates(self, x: int, y: int, human_like: bool = True) -> dict:
+    async def click_coordinates(self, x: int, y: int, human_like: bool = True, timeout: float | None = None) -> dict:
         """Click at specific coordinates."""
-        return await self.action_service.click_coordinates(x, y, human_like=human_like)
+        return await self.action_service.click_coordinates(x, y, human_like=human_like, timeout=timeout)
 
     async def type_text(self, text: str, index: int | None = None) -> dict:
         """Type text into an element or the active element."""

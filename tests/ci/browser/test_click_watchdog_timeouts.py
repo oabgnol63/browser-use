@@ -41,3 +41,68 @@ async def test_click_coordinate_waits_no_longer_than_event_budget():
 def test_click_coordinate_event_default_timeout_matches_download_wait_budget():
 	event = ClickCoordinateEvent(coordinate_x=10, coordinate_y=20)
 	assert event.event_timeout == 15.0
+
+
+@pytest.mark.asyncio
+async def test_click_coordinate_deadline_wraps_click_coro(monkeypatch):
+	import asyncio
+
+	session = BrowserSession(headless=True)
+	session.agent_focus_target_id = 'target-1'
+	session._downloads_watchdog = _NoopDownloadsWatchdog()
+	watchdog = DefaultActionWatchdog(event_bus=session.event_bus, browser_session=session)
+
+	async def slow_click(*args, **kwargs):
+		await asyncio.sleep(1.0)
+
+	monkeypatch.setattr(watchdog, '_click_on_coordinate', slow_click)
+
+	event = ClickCoordinateEvent(coordinate_x=100, coordinate_y=200, force=True, event_timeout=0.01)
+
+	with pytest.raises(TimeoutError):
+		await watchdog.on_ClickCoordinateEvent(event)
+
+
+@pytest.mark.asyncio
+async def test_click_element_deadline_wraps_click_coro(monkeypatch):
+	import asyncio
+
+	from browser_use.browser.events import ClickElementEvent
+	from browser_use.dom.views import EnhancedDOMTreeNode, NodeType
+
+	session = BrowserSession(headless=True)
+	session.agent_focus_target_id = 'target-1'
+	session._downloads_watchdog = _NoopDownloadsWatchdog()
+	watchdog = DefaultActionWatchdog(event_bus=session.event_bus, browser_session=session)
+
+	async def slow_click(*args, **kwargs):
+		await asyncio.sleep(1.0)
+
+	monkeypatch.setattr(watchdog, '_click_element_node_impl', slow_click)
+
+	node = EnhancedDOMTreeNode(
+		node_id=1,
+		backend_node_id=1,
+		node_type=NodeType.ELEMENT_NODE,
+		node_name='BUTTON',
+		node_value='',
+		attributes={},
+		is_scrollable=None,
+		is_visible=True,
+		absolute_position=None,
+		target_id='target-1',
+		frame_id=None,
+		session_id=None,
+		content_document=None,
+		shadow_root_type=None,
+		shadow_roots=None,
+		parent_node=None,
+		children_nodes=None,
+		ax_node=None,
+		snapshot_node=None,
+	)
+
+	event = ClickElementEvent(node=node, event_timeout=0.01)
+
+	with pytest.raises(TimeoutError):
+		await watchdog.on_ClickElementEvent(event)

@@ -418,7 +418,7 @@ class SeleniumActionService:
         )
 
 
-    async def click_coordinates(self, x: int, y: int, human_like: bool = True) -> dict:
+    async def click_coordinates(self, x: int, y: int, human_like: bool = True, timeout: float | None = None) -> dict:
         """
         Click at specific coordinates.
         
@@ -426,10 +426,12 @@ class SeleniumActionService:
             x: X coordinate
             y: Y coordinate
             human_like: Whether to use the slower humanized pointer path
+            timeout: Optional action budget in seconds.
             
         Returns:
             Dict with click result
         """        
+        del timeout
         self.logger.debug(f'Clicking at coordinates: ({x}, {y})')
         
         try:
@@ -862,8 +864,8 @@ class SeleniumActionService:
             async def run_smooth_scroll(is_iframe_context: bool, frame_selector: str = ""):
                 success = False
                 for chunk in chunks:
-                    cx = chunk if direction in ('left', 'right') else 0
-                    cy = chunk if direction in ('up', 'down') else 0
+                    cx = chunk if direction == 'right' else -chunk if direction == 'left' else 0
+                    cy = chunk if direction == 'down' else -chunk if direction == 'up' else 0
                     
                     if element_node:
                         xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)

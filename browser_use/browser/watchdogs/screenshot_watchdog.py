@@ -103,7 +103,7 @@ class ScreenshotWatchdog(BaseWatchdog):
 			# Take screenshot using CDP
 			self.logger.debug(f'[ScreenshotWatchdog] Taking screenshot with params: {params}')
 			capture_coro = cdp_session.cdp_client.send.Page.captureScreenshot(params=params, session_id=cdp_session.session_id)
-			if self._is_vision_only_mode() and event.event_timeout is not None:
+			if event.event_timeout is not None:
 				result = await asyncio.wait_for(capture_coro, timeout=event.event_timeout)
 			else:
 				result = await capture_coro

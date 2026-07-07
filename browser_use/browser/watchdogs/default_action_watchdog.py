@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import time
 
 from cdp_use.cdp.input.commands import DispatchKeyEventParameters
 
@@ -12,6 +13,8 @@ from browser_use.actor.utils import get_key_info
 from browser_use.browser.events import (
 	ClickCoordinateEvent,
 	ClickElementEvent,
+	ClickMultipleCoordinatesEvent,
+	ClickMultipleElementsEvent,
 	DragAndDropCoordinateEvent,
 	DragAndDropElementEvent,
 	GetDropdownOptionsEvent,
@@ -19,8 +22,6 @@ from browser_use.browser.events import (
 	GoForwardEvent,
 	HoverCoordinateEvent,
 	HoverElementEvent,
-	ClickMultipleCoordinatesEvent,
-	ClickMultipleElementsEvent,
 	PressAndHoldCoordinateEvent,
 	PressAndHoldElementEvent,
 	RefreshEvent,
@@ -30,6 +31,7 @@ from browser_use.browser.events import (
 	SelectDropdownOptionEvent,
 	SendKeysEvent,
 	TypeTextEvent,
+	TypeToFocusEvent,
 	UploadFileEvent,
 	WaitEvent,
 )
@@ -48,6 +50,34 @@ SelectDropdownOptionEvent.model_rebuild()
 TypeTextEvent.model_rebuild()
 ScrollEvent.model_rebuild()
 UploadFileEvent.model_rebuild()
+
+
+def _build_timeout_deadline(timeout_seconds: float | None) -> float | None:
+	if timeout_seconds is None:
+		return None
+	return time.monotonic() + max(0.0, float(timeout_seconds))
+
+
+def _remaining_timeout(deadline: float | None) -> float | None:
+	if deadline is None:
+		return None
+	return max(0.0, deadline - time.monotonic())
+
+
+async def _await_with_deadline(awaitable, deadline: float | None, label: str):
+	remaining = _remaining_timeout(deadline)
+	if remaining is None:
+		return await awaitable
+	if remaining <= 0:
+		raise TimeoutError(f'{label} exceeded click event deadline')
+	return await asyncio.wait_for(awaitable, timeout=remaining)
+
+
+def _cap_timeout_to_deadline(timeout_seconds: float, deadline: float | None) -> float:
+	remaining = _remaining_timeout(deadline)
+	if remaining is None:
+		return timeout_seconds
+	return max(0.0, min(timeout_seconds, remaining))
 
 
 class DefaultActionWatchdog(BaseWatchdog):
@@ -85,8 +115,8 @@ class DefaultActionWatchdog(BaseWatchdog):
 			eased_t = 1 - math.pow(1 - t, 3)
 
 			# Quadratic bezier
-			x = (1 - eased_t)**2 * start_x + 2 * (1 - eased_t) * eased_t * mid_x + eased_t**2 * end_x
-			y = (1 - eased_t)**2 * start_y + 2 * (1 - eased_t) * eased_t * mid_y + eased_t**2 * end_y
+			x = (1 - eased_t) ** 2 * start_x + 2 * (1 - eased_t) * eased_t * mid_x + eased_t**2 * end_x
+			y = (1 - eased_t) ** 2 * start_y + 2 * (1 - eased_t) * eased_t * mid_y + eased_t**2 * end_y
 
 			# Add slight jitter that decreases as we approach target
 			jitter = (1 - eased_t) * random.uniform(-1.5, 1.5)
@@ -117,6 +147,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 		click_coro,
 		download_start_timeout: float = 0.5,
 		download_complete_timeout: float = 30.0,
+		deadline: float | None = None,
 	) -> dict | None:
 		"""Execute a click operation and automatically wait for any triggered download
 
@@ -189,7 +220,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 		try:
 			# Perform the click
-			click_metadata = await click_coro
+			click_started_at = time.monotonic()
+			self.logger.debug('[ClickWithDownload] click_coro start')
+			click_metadata = await _await_with_deadline(click_coro, deadline, 'coordinate click')
+			self.logger.debug('[ClickWithDownload] click_coro finished elapsed=%.2fs', time.monotonic() - click_started_at)
 
 			# Check for validation errors - return them immediately without waiting for downloads
 			if isinstance(click_metadata, dict) and 'validation_error' in click_metadata:
@@ -197,14 +231,26 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			# Wait briefly to see if a download starts
 			try:
-				await asyncio.wait_for(download_started.wait(), timeout=download_start_timeout)
+				download_wait_started_at = time.monotonic()
+				self.logger.debug('[ClickWithDownload] waiting for download start timeout=%s', download_start_timeout)
+				await asyncio.wait_for(
+					download_started.wait(),
+					timeout=_cap_timeout_to_deadline(download_start_timeout, deadline),
+				)
+				self.logger.debug(
+					'[ClickWithDownload] waiting for download start finished elapsed=%.2fs',
+					time.monotonic() - download_wait_started_at,
+				)
 
 				# Download started!
 				self.logger.info(f'📥 Download started: {download_info.get("suggested_filename", "unknown")}')
 
 				# Now wait for it to complete with longer timeout
 				try:
-					await asyncio.wait_for(download_completed.wait(), timeout=download_complete_timeout)
+					await asyncio.wait_for(
+						download_completed.wait(),
+						timeout=_cap_timeout_to_deadline(download_complete_timeout, deadline),
+					)
 
 					# Download completed successfully
 					msg = f'Downloaded file: {download_info["file_name"]} ({download_info["file_size"]} bytes) saved to {download_info["path"]}'
@@ -431,7 +477,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 					params={'type': 'mouseMoved', 'x': center_x, 'y': center_y}, session_id=session_id
 				)
-				await asyncio.sleep(0.5) # Wait for hover effects
+				await asyncio.sleep(0.5)  # Wait for hover effects
 
 				# Also dispatch JS mouseenter/mouseover events as fallback for some sites
 				try:
@@ -451,8 +497,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 						}
 						"""
 						await cdp_session.cdp_client.send.Runtime.callFunctionOn(
-							params={'functionDeclaration': hover_js, 'objectId': object_id},
-							session_id=session_id
+							params={'functionDeclaration': hover_js, 'objectId': object_id}, session_id=session_id
 						)
 				except Exception as e:
 					self.logger.debug(f'JS hover fallback failed: {e}')
@@ -475,8 +520,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 						}
 						"""
 						await cdp_session.cdp_client.send.Runtime.callFunctionOn(
-							params={'functionDeclaration': hover_js, 'objectId': object_id},
-							session_id=session_id
+							params={'functionDeclaration': hover_js, 'objectId': object_id}, session_id=session_id
 						)
 						await asyncio.sleep(0.5)
 					return None
@@ -501,7 +545,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			element_node = event.node
 			hover_metadata = await self._hover_element_node_impl(element_node)
-			
+
 			self.logger.debug(f'🖱️ Hovered element {element_node.tag_name}')
 			return hover_metadata
 		except Exception:
@@ -510,6 +554,12 @@ class DefaultActionWatchdog(BaseWatchdog):
 	@observe_debug(ignore_input=True, ignore_output=True, name='click_element_event')
 	async def on_ClickElementEvent(self, event: ClickElementEvent) -> dict | None:
 		"""Handle click request with CDP. Automatically waits for file downloads if triggered."""
+		started_at = time.monotonic()
+		self.logger.debug(
+			'ClickElementEvent start event_timeout=%s',
+			getattr(event, 'event_timeout', None),
+		)
+		deadline = _build_timeout_deadline(getattr(event, 'event_timeout', None))
 		try:
 			# Check if session is alive before attempting any operations
 			if not self.browser_session.agent_focus_target_id:
@@ -544,7 +594,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# Execute click with automatic download detection
 			click_metadata = await self._execute_click_with_download_detection(
 				self._click_element_node_impl(element_node),
-				download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
+				download_start_timeout=min(0.5, event.event_timeout)
+				if getattr(event, 'event_timeout', None) is not None
+				else 0.5,
+				deadline=deadline,
 			)
 
 			# Check for validation errors
@@ -562,9 +615,23 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 		except Exception:
 			raise
+		finally:
+			self.logger.debug(
+				'ClickElementEvent finished elapsed=%.2fs',
+				time.monotonic() - started_at,
+			)
 
 	async def on_ClickCoordinateEvent(self, event: ClickCoordinateEvent) -> dict | None:
 		"""Handle click at coordinates with CDP. Automatically waits for file downloads if triggered."""
+		started_at = time.monotonic()
+		self.logger.debug(
+			'ClickCoordinateEvent start force=%s x=%s y=%s event_timeout=%s',
+			event.force,
+			event.coordinate_x,
+			event.coordinate_y,
+			getattr(event, 'event_timeout', None),
+		)
+		deadline = _build_timeout_deadline(getattr(event, 'event_timeout', None))
 		try:
 			# Check if session is alive before attempting any operations
 			if not self.browser_session.agent_focus_target_id:
@@ -577,7 +644,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 				self.logger.debug(f'Force clicking at coordinates ({event.coordinate_x}, {event.coordinate_y})')
 				return await self._execute_click_with_download_detection(
 					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=True),
-					download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
+					download_start_timeout=min(0.5, event.event_timeout)
+					if getattr(event, 'event_timeout', None) is not None
+					else 0.5,
+					deadline=deadline,
 				)
 
 			# Get element at coordinates for safety checks
@@ -589,7 +659,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 				)
 				return await self._execute_click_with_download_detection(
 					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False),
-					download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
+					download_start_timeout=min(0.5, event.event_timeout)
+					if getattr(event, 'event_timeout', None) is not None
+					else 0.5,
+					deadline=deadline,
 				)
 
 			# Safety check: file input
@@ -622,10 +695,21 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# All safety checks passed, click at coordinates (with download detection)
 			return await self._execute_click_with_download_detection(
 				self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False),
-				download_start_timeout=min(0.5, event.event_timeout) if getattr(event, 'event_timeout', None) is not None else 0.5,
+				download_start_timeout=min(0.5, event.event_timeout)
+				if getattr(event, 'event_timeout', None) is not None
+				else 0.5,
+				deadline=deadline,
 			)
 		except Exception:
 			raise
+		finally:
+			self.logger.debug(
+				'ClickCoordinateEvent finished elapsed=%.2fs force=%s x=%s y=%s',
+				time.monotonic() - started_at,
+				event.force,
+				event.coordinate_x,
+				event.coordinate_y,
+			)
 
 	async def on_HoverCoordinateEvent(self, event: HoverCoordinateEvent) -> dict | None:
 		"""Handle hover at coordinates with CDP."""
@@ -656,7 +740,9 @@ class DefaultActionWatchdog(BaseWatchdog):
 			return {'hover_x': event.coordinate_x, 'hover_y': event.coordinate_y}
 
 		except Exception as e:
-			self.logger.error(f'Failed to hover at coordinates ({event.coordinate_x}, {event.coordinate_y}): {type(e).__name__}: {e}')
+			self.logger.error(
+				f'Failed to hover at coordinates ({event.coordinate_x}, {event.coordinate_y}): {type(e).__name__}: {e}'
+			)
 			raise BrowserError(
 				message=f'Failed to hover at coordinates: {e}',
 				long_term_memory=f'Failed to hover at coordinates ({event.coordinate_x}, {event.coordinate_y}).',
@@ -707,8 +793,8 @@ class DefaultActionWatchdog(BaseWatchdog):
 				eased_t = 1 - math.pow(1 - t, 3)
 
 				# Quadratic bezier
-				x = (1 - eased_t)**2 * event.start_x + 2 * (1 - eased_t) * eased_t * mid_x + eased_t**2 * event.end_x
-				y = (1 - eased_t)**2 * event.start_y + 2 * (1 - eased_t) * eased_t * mid_y + eased_t**2 * event.end_y
+				x = (1 - eased_t) ** 2 * event.start_x + 2 * (1 - eased_t) * eased_t * mid_x + eased_t**2 * event.end_x
+				y = (1 - eased_t) ** 2 * event.start_y + 2 * (1 - eased_t) * eased_t * mid_y + eased_t**2 * event.end_y
 
 				# Decreasing jitter
 				jitter = (1 - eased_t) * random.uniform(-2, 2)
@@ -756,7 +842,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 		try:
 			cdp_session = await self.browser_session.get_or_create_cdp_session()
 			session_id = cdp_session.session_id
-			
+
 			pixels = event.amount if event.direction == 'down' else -event.amount
 
 			# Move mouse to the coordinate first
@@ -777,8 +863,10 @@ class DefaultActionWatchdog(BaseWatchdog):
 				},
 				session_id=session_id,
 			)
-			
-			self.logger.debug(f'📜 Scrolled {event.direction} by {event.amount}px at ({event.coordinate_x}, {event.coordinate_y})')
+
+			self.logger.debug(
+				f'📜 Scrolled {event.direction} by {event.amount}px at ({event.coordinate_x}, {event.coordinate_y})'
+			)
 			return None
 		except Exception as e:
 			self.logger.error(f'Failed to scroll at coordinates: {e}')
@@ -845,6 +933,15 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# by explicitly rebuilding and comparing when needed
 		except Exception as e:
 			raise
+
+	async def on_TypeToFocusEvent(self, event: TypeToFocusEvent) -> None:
+		"""Handle active-element text input request with CDP."""
+		try:
+			await self._type_to_page(event.text)
+			self.logger.info(f'⌨️ Typed "{event.text}" to the focused element')
+		except Exception as e:
+			self.logger.error(f'Failed to type to focused element: {e}')
+			raise BrowserError(message=f'Failed to type to focused element: {e}')
 
 	async def on_ScrollEvent(self, event: ScrollEvent) -> None:
 		"""Handle scroll request with CDP."""
@@ -1423,8 +1520,11 @@ class DefaultActionWatchdog(BaseWatchdog):
 		"""
 		try:
 			# Get CDP session
+			cdp_session_started_at = time.monotonic()
+			self.logger.debug('[ClickCoordinate] Acquiring CDP session')
 			cdp_session = await self.browser_session.get_or_create_cdp_session()
 			session_id = cdp_session.session_id
+			self.logger.debug('[ClickCoordinate] CDP session acquired elapsed=%.2fs', time.monotonic() - cdp_session_started_at)
 
 			self.logger.debug(f'👆 Moving mouse to ({coordinate_x}, {coordinate_y})...')
 
@@ -1438,12 +1538,29 @@ class DefaultActionWatchdog(BaseWatchdog):
 					start_x = random.randint(0, 100)
 					start_y = random.randint(0, 100)
 
+				mouse_move_started_at = time.monotonic()
+				self.logger.debug('[ClickCoordinate] _human_mouse_move start')
 				await self._human_mouse_move(cdp_session, start_x, start_y, coordinate_x, coordinate_y)
+				self.logger.debug(
+					'[ClickCoordinate] _human_mouse_move finished elapsed=%.2fs', time.monotonic() - mouse_move_started_at
+				)
+
+				sleep_started_at = time.monotonic()
+				self.logger.debug('[ClickCoordinate] post-movement sleep start')
 				await asyncio.sleep(random.uniform(0.02, 0.05))
+				self.logger.debug(
+					'[ClickCoordinate] post-movement sleep finished elapsed=%.2fs', time.monotonic() - sleep_started_at
+				)
 			else:
+				mouse_move_started_at = time.monotonic()
+				self.logger.debug('[ClickCoordinate] dispatchMouseEvent mouseMoved start')
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 					params={'type': 'mouseMoved', 'x': coordinate_x, 'y': coordinate_y},
 					session_id=session_id,
+				)
+				self.logger.debug(
+					'[ClickCoordinate] dispatchMouseEvent mouseMoved finished elapsed=%.2fs',
+					time.monotonic() - mouse_move_started_at,
 				)
 
 			self.browser_session._last_mouse_pos = (coordinate_x, coordinate_y)
@@ -1451,6 +1568,8 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# Mouse down
 			self.logger.debug(f'👆🏾 Clicking at ({coordinate_x}, {coordinate_y})...')
 			try:
+				mouse_pressed_started_at = time.monotonic()
+				self.logger.debug('[ClickCoordinate] mousePressed start')
 				await asyncio.wait_for(
 					cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 						params={
@@ -1464,15 +1583,26 @@ class DefaultActionWatchdog(BaseWatchdog):
 					),
 					timeout=3.0,
 				)
+				self.logger.debug(
+					'[ClickCoordinate] mousePressed finished elapsed=%.2fs', time.monotonic() - mouse_pressed_started_at
+				)
+
+				post_press_sleep_started_at = time.monotonic()
+				self.logger.debug('[ClickCoordinate] post-press sleep start')
 				if human_like:
 					await asyncio.sleep(0.05)
 				else:
 					await asyncio.sleep(0.01)
+				self.logger.debug(
+					'[ClickCoordinate] post-press sleep finished elapsed=%.2fs', time.monotonic() - post_press_sleep_started_at
+				)
 			except TimeoutError:
 				self.logger.debug('⏱️ Mouse down timed out (likely due to dialog), continuing...')
 
 			# Mouse up
 			try:
+				mouse_released_started_at = time.monotonic()
+				self.logger.debug('[ClickCoordinate] mouseReleased start')
 				await asyncio.wait_for(
 					cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 						params={
@@ -1485,6 +1615,9 @@ class DefaultActionWatchdog(BaseWatchdog):
 						session_id=session_id,
 					),
 					timeout=5.0,
+				)
+				self.logger.debug(
+					'[ClickCoordinate] mouseReleased finished elapsed=%.2fs', time.monotonic() - mouse_released_started_at
 				)
 			except TimeoutError:
 				self.logger.debug('⏱️ Mouse up timed out (possibly due to lag or dialog popup), continuing...')
@@ -2556,47 +2689,47 @@ class DefaultActionWatchdog(BaseWatchdog):
 		"""Capture window/root/container scroll state for movement verification."""
 		result = await cdp_session.cdp_client.send.Runtime.evaluate(
 			params={
-				'expression': f"""
-(() => {{
-	function findScrollable(start) {{
-		for (let el = start; el; el = el.parentElement) {{
-			if (el === document.body || el === document.documentElement) {{
+				'expression': """
+(() => {
+	function findScrollable(start) {
+		for (let el = start; el; el = el.parentElement) {
+			if (el === document.body || el === document.documentElement) {
 				continue;
-			}}
+			}
 			const style = getComputedStyle(el);
 			const canScrollY = ['auto', 'scroll', 'overlay'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
 			const canScrollX = ['auto', 'scroll', 'overlay'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
-			if (canScrollY || canScrollX) {{
+			if (canScrollY || canScrollX) {
 				return el;
-			}}
-		}}
+			}
+		}
 		return null;
-	}}
+	}
 
-	function summarize(el) {{
-		if (!el) {{
+	function summarize(el) {
+		if (!el) {
 			return null;
-		}}
-		return {{
+		}
+		return {
 			tag: el.tagName || null,
 			scrollTop: Number(el.scrollTop || 0),
 			scrollLeft: Number(el.scrollLeft || 0),
-		}};
-	}}
+		};
+	}
 
 	const root = document.scrollingElement || document.documentElement || document.body;
 	const centerEl = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
 	const activeEl = document.activeElement;
 
-	return {{
+	return {
 		windowX: Number(window.scrollX || window.pageXOffset || 0),
 		windowY: Number(window.scrollY || window.pageYOffset || 0),
 		rootTop: Number(root ? root.scrollTop || 0 : 0),
 		rootLeft: Number(root ? root.scrollLeft || 0 : 0),
 		center: summarize(findScrollable(centerEl)),
 		active: summarize(findScrollable(activeEl)),
-	}};
-}})()
+	};
+})()
 """,
 				'returnByValue': True,
 				'awaitPromise': True,
@@ -4273,7 +4406,6 @@ class DefaultActionWatchdog(BaseWatchdog):
 			self.logger.error(error_msg)
 			raise ValueError(error_msg) from e
 
-
 	async def on_DragAndDropElementEvent(self, event: DragAndDropElementEvent) -> dict | None:
 		"""Handle drag and drop between elements."""
 		try:
@@ -4281,7 +4413,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				raise BrowserError('Cannot execute drag and drop: browser session is corrupted.')
 
 			cdp_session = await self.browser_session.get_or_create_cdp_session()
-			
+
 			start_node = await self.browser_session.get_element_by_index(event.start_index)
 			end_node = await self.browser_session.get_element_by_index(event.end_index)
 
@@ -4290,7 +4422,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			start_coords = await self.browser_session.get_element_coordinates(start_node.backend_node_id, cdp_session)
 			end_coords = await self.browser_session.get_element_coordinates(end_node.backend_node_id, cdp_session)
-			
+
 			if not start_coords or not end_coords:
 				raise BrowserError('Could not get element coordinates')
 
@@ -4330,7 +4462,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				if not node:
 					self.logger.warning(f'Could not find element for index {idx}')
 					continue
-				
+
 				coords = await self.browser_session.get_element_coordinates(node.backend_node_id, cdp_session)
 				if not coords:
 					self.logger.warning(f'Could not get coordinates for element index {idx}')
@@ -4352,7 +4484,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 	async def on_ClickMultipleCoordinatesEvent(self, event: ClickMultipleCoordinatesEvent) -> dict | None:
 		"""Handle multiple clicks on specific coordinates."""
 		try:
-			for (x, y) in event.coordinates:
+			for x, y in event.coordinates:
 				if event.highlight:
 					asyncio.create_task(self.browser_session.highlight_coordinate_click(x, y))
 				await self._click_on_coordinate(x, y, human_like=event.human_like)
@@ -4373,7 +4505,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			coords = await self.browser_session.get_element_coordinates(node.backend_node_id, cdp_session)
 			if not coords:
 				raise BrowserError('Could not get coordinates for press and hold')
-			
+
 			x = int(coords.x + coords.width / 2)
 			y = int(coords.y + coords.height / 2)
 

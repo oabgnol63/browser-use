@@ -66,10 +66,29 @@ class NavigateAction(BaseModel):
 GoToUrlAction = NavigateAction
 
 
+class ClickCacheRegion(BaseModel):
+	x: int = Field(ge=0, description='Left edge of the reusable visual click context rectangle')
+	y: int = Field(ge=0, description='Top edge of the reusable visual click context rectangle')
+	width: int = Field(ge=1, description='Width of the reusable visual click context rectangle')
+	height: int = Field(ge=1, description='Height of the reusable visual click context rectangle')
+
+
 class ClickElementAction(BaseModel):
 	index: int | None = Field(default=None, ge=1, description='Element index from browser_state')
 	coordinate_x: int | None = Field(default=None, description='Horizontal coordinate relative to viewport left edge')
 	coordinate_y: int | None = Field(default=None, description='Vertical coordinate relative to viewport top edge')
+	target_description: str | None = Field(
+		default=None,
+		description='Concise visual description of the intended click target for later verification or relocation',
+	)
+	cache_region: ClickCacheRegion | None = Field(
+		default=None,
+		description=(
+			'Reusable stable visual container coordinates for screenshot cache matching. '
+			'For a button inside a modal, banner, prompt, or overlay, use the outer visible '
+			'modal/container rectangle, not a tight box around the button.'
+		),
+	)
 	# expect_download: bool = Field(default=False, description='set True if expecting a download, False otherwise')  # moved to downloads_watchdog.py
 	# click_count: int = 1  # TODO
 
@@ -304,6 +323,16 @@ class ScrollCoordinateActionIndexOnly(BaseModel):
 
 class SendKeysAction(BaseModel):
 	keys: str = Field(description='keys (Escape, Enter, PageDown) or shortcuts (Control+o)')
+
+
+class TypeAtAction(BaseModel):
+	coordinate_x: int = Field(description='Horizontal coordinate (0-1000, normalized) of the input field to focus')
+	coordinate_y: int = Field(description='Vertical coordinate (0-1000, normalized) of the input field to focus')
+	text: str = Field(description='Text to type into the focused field')
+	submit: bool = Field(default=False, description='Press Enter after typing (submit the field)')
+	target_description: str | None = Field(default=None, description='Short description of the field, e.g. "search box"')
+	cache_region: dict | None = Field(default=None, description='Optional {x,y,width,height} context rect around the field, for cache anchor extraction (mirrors the click tool)')
+
 
 
 class UploadFileAction(BaseModel):

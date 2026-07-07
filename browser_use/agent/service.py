@@ -865,6 +865,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if isinstance(next_goal, str) and len(next_goal) > 120:
 			parsed.next_goal = next_goal[:117].rstrip() + '...'
 
+		# Cap cache_intention at 160 chars
+		cache_intention = getattr(parsed, 'cache_intention', None)
+		if isinstance(cache_intention, str) and len(cache_intention) > 160:
+			parsed.cache_intention = cache_intention[:157].rstrip() + '...'
+
 		# Cap visual_state at 250 chars
 		visual_state = getattr(parsed, 'visual_state', None)
 		if isinstance(visual_state, str) and len(visual_state) > 250:
@@ -2986,6 +2991,28 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 			await self.close()
 
+	async def _before_action_execution(
+		self,
+		action: ActionModel,
+		action_name: str,
+		action_index: int,
+		total_actions: int,
+	) -> Any:
+		"""Run immediately before an action is dispatched to the tools registry."""
+		return None
+
+	async def _after_action_execution(
+		self,
+		action: ActionModel,
+		action_name: str,
+		action_index: int,
+		total_actions: int,
+		result: ActionResult,
+		context: Any,
+	) -> None:
+		"""Run immediately after a dispatched action returns an ActionResult."""
+		return None
+
 	@observe_debug(ignore_input=True, ignore_output=True)
 	@time_execution_async('--multi_act')
 	async def multi_act(self, actions: list[ActionModel]) -> list[ActionResult]:
@@ -3078,6 +3105,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# Capture pre-action state for runtime page-change detection
 				pre_action_url = await self.browser_session.get_current_page_url()
 				pre_action_focus = self.browser_session.agent_focus_target_id
+				action_context = await self._before_action_execution(action, action_name, i, total_actions)
 
 				result = await self.tools.act(
 					action=action,
@@ -3089,6 +3117,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					available_file_paths=self.available_file_paths,
 					extraction_schema=self.extraction_schema,
 				)
+				await self._after_action_execution(action, action_name, i, total_actions, result, action_context)
 
 				if result.error:
 					await self._demo_mode_log(

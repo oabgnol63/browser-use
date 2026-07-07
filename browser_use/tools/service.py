@@ -43,6 +43,7 @@ from browser_use.browser.events import (
 	SwipeCoordinateEvent,
 	SwitchTabEvent,
 	TypeTextEvent,
+	TypeToFocusEvent,
 	UploadFileEvent,
 )
 from browser_use.browser.views import BrowserError
@@ -85,6 +86,7 @@ from browser_use.tools.views import (
 	SearchPageAction,
 	SelectDropdownOptionAction,
 	SendKeysAction,
+	TypeAtAction,
 	StructuredOutputAction,
 	SwipeCoordinateAction,
 	SwitchTabAction,
@@ -2384,6 +2386,52 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				logger.error(f'Failed to dispatch SendKeysEvent: {type(e).__name__}: {e}')
 				error_msg = f'Failed to send keys: {_sanitize_error_message(e)}'
 				return ActionResult(error=error_msg)
+
+		@self.registry.action(
+			(
+				'Type text into an input field at a coordinate. Clicks (coordinate_x, coordinate_y) '
+				'to focus the field, then types `text`. Set submit=true to press Enter after. '
+				'Use this for all typing in vision mode — it focuses the field for you.'
+			),
+			param_model=TypeAtAction,
+			modes={Mode.DOM, Mode.VISION},
+			backends={Backend.CDP, Backend.WEBDRIVER},
+		)
+		async def type_at(params: TypeAtAction, browser_session: BrowserSession):
+			try:
+				actual_x, actual_y = _convert_llm_coordinates_to_viewport(
+					params.coordinate_x, params.coordinate_y, browser_session
+				)
+				# Optional highlighting
+				if not browser_session.coordinate_actions_use_screenshot_space:
+					asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
+
+				# 1) focus the field
+				click_event = browser_session.event_bus.dispatch(
+					ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
+				)
+				await click_event
+				await click_event.event_result(raise_if_any=True, raise_if_none=False)
+
+				# 2) type into whatever now has focus — active-element typing, NO fabricated node
+				type_event = browser_session.event_bus.dispatch(
+					TypeToFocusEvent(text=params.text)
+				)
+				await type_event
+				await type_event.event_result(raise_if_any=True, raise_if_none=False)
+
+				# 3) optional submit
+				if params.submit:
+					enter_event = browser_session.event_bus.dispatch(SendKeysEvent(keys='Enter'))
+					await enter_event
+					await enter_event.event_result(raise_if_any=True, raise_if_none=False)
+
+				memory = f"Typed '{params.text}'" + (' and submitted' if params.submit else '')
+				memory += f' at ({params.coordinate_x}, {params.coordinate_y})'
+				logger.info(f'⌨️  {memory}')
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
+			except Exception as e:
+				return ActionResult(error=f'Failed to type at ({params.coordinate_x}, {params.coordinate_y}): {_sanitize_error_message(e)}')
 
 		@self.registry.action('Scroll to text.', modes={Mode.DOM})
 		async def find_text(text: str, browser_session: BrowserSession):  # type: ignore

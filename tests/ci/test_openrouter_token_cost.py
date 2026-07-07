@@ -76,6 +76,31 @@ async def test_token_cost_falls_back_to_openrouter_pricing(monkeypatch: pytest.M
 	assert pricing.output_cost_per_token == pytest.approx(0.20 / 1_000_000)
 
 
+async def test_gemini_flash_lite_pricing_uses_non_preview_model_id(monkeypatch: pytest.MonkeyPatch) -> None:
+	async def fail_openrouter_pricing(model_name: str) -> None:
+		raise AssertionError(f'unexpected OpenRouter fallback for {model_name}')
+
+	monkeypatch.setattr('browser_use.tokens.service.get_openrouter_model_pricing', fail_openrouter_pricing)
+
+	token_cost = TokenCost(include_cost=True)
+	token_cost._initialized = True
+	token_cost._pricing_data = {
+		'gemini/gemini-3.1-flash-lite': {
+			'input_cost_per_token': 0.25 / 1_000_000,
+			'output_cost_per_token': 1.50 / 1_000_000,
+			'cache_read_input_token_cost': 0.025 / 1_000_000,
+		}
+	}
+
+	pricing = await token_cost.get_model_pricing('gemini-3.1-flash-lite')
+
+	assert pricing is not None
+	assert pricing.model == 'gemini-3.1-flash-lite'
+	assert pricing.input_cost_per_token == pytest.approx(0.25 / 1_000_000)
+	assert pricing.output_cost_per_token == pytest.approx(1.50 / 1_000_000)
+	assert pricing.cache_read_input_token_cost == pytest.approx(0.025 / 1_000_000)
+
+
 async def test_calculate_cost_uses_openrouter_cache_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
 	async def fake_openrouter_pricing(model_name: str) -> ModelPricing:
 		return ModelPricing(

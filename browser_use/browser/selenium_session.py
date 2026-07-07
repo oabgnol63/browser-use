@@ -34,6 +34,7 @@ from browser_use.browser.events import (
 	SwipeCoordinateEvent,
 	SwitchTabEvent,
 	TypeTextEvent,
+	TypeToFocusEvent,
 	_get_timeout,
 )
 from browser_use.browser.session import BrowserSession
@@ -92,6 +93,7 @@ class SeleniumBrowserSession(BrowserSession):
 		BaseWatchdog.attach_handler_to_session(self, HoverCoordinateEvent, self.on_HoverCoordinateEvent)
 		BaseWatchdog.attach_handler_to_session(self, ScrollCoordinateEvent, self.on_ScrollCoordinateEvent)
 		BaseWatchdog.attach_handler_to_session(self, TypeTextEvent, self.on_TypeTextEvent)
+		BaseWatchdog.attach_handler_to_session(self, TypeToFocusEvent, self.on_TypeToFocusEvent)
 		BaseWatchdog.attach_handler_to_session(self, SendKeysEvent, self.on_SendKeysEvent)
 		BaseWatchdog.attach_handler_to_session(self, ScrollEvent, self.on_ScrollEvent)
 		BaseWatchdog.attach_handler_to_session(self, GoBackEvent, self.on_GoBackEvent)
@@ -123,7 +125,11 @@ class SeleniumBrowserSession(BrowserSession):
 		return await self._selenium_session.action_service.hover_element(event.node, self._cached_selector_map)
 
 	async def on_ClickCoordinateEvent(self, event: ClickCoordinateEvent) -> dict:
-		return await self._selenium_session.click_coordinates(event.coordinate_x, event.coordinate_y)
+		return await self._selenium_session.click_coordinates(
+			event.coordinate_x,
+			event.coordinate_y,
+			timeout=event.event_timeout,
+		)
 
 	async def on_ClickMultipleElementsEvent(self, event: ClickMultipleElementsEvent) -> dict | None:
 		# Override timeout dynamically since Selenium takes longer due to human-like curves
@@ -210,6 +216,11 @@ class SeleniumBrowserSession(BrowserSession):
 		# type_text now handles iframe detection internally
 		return await self._selenium_session.action_service.type_text(
 			element_node=event.node, text=event.text, clear_first=event.clear
+		)
+
+	async def on_TypeToFocusEvent(self, event: TypeToFocusEvent) -> dict:
+		return await self._selenium_session.action_service.type_text(
+			element_node=None, text=event.text, clear_first=False
 		)
 
 	async def on_SendKeysEvent(self, event: SendKeysEvent) -> dict:

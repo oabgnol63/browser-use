@@ -426,8 +426,24 @@ class AgentOutput(BaseModel):
 	evaluation_previous_goal: str | None = None
 	memory: str | None = None
 	next_goal: str | None = None
+	cache_intention: str | None = Field(
+		default=None,
+		description=(
+			'Durable, reusable success criterion for caching/replay. '
+			'Use the general intention, not one-run visible text such as a specific title, price, or article headline. '
+			'Keep it to one brief line under 160 characters.'
+		),
+	)
 	current_plan_item: int | None = None
 	plan_update: list[str] | None = None
+	previous_section_completed: bool = Field(
+		default=False,
+		description='Set to true when the previous section completed before this action.'
+	)
+	current_section: str | None = Field(
+		default=None,
+		description="The canonical ID of the section this action belongs to (e.g., 'test_3')."
+	)
 	action: list[ActionModel] = Field(
 		...,
 		json_schema_extra={'min_items': 1},  # Ensure at least one action is provided
@@ -506,6 +522,7 @@ class AgentOutput(BaseModel):
 				del schema['properties']['thinking']
 				del schema['properties']['evaluation_previous_goal']
 				del schema['properties']['next_goal']
+				schema['properties'].pop('cache_intention', None)
 				schema['properties'].pop('current_plan_item', None)
 				schema['properties'].pop('plan_update', None)
 				schema['required'] = ['memory', 'action']
@@ -547,7 +564,7 @@ class AgentOutput(BaseModel):
 				del schema['properties']['evaluation_previous_goal']
 				schema['properties'].pop('current_plan_item', None)
 				schema['properties'].pop('plan_update', None)
-				schema['required'] = ['screen_assessment', 'visual_state', 'memory', 'next_goal', 'action']
+				schema['required'] = ['screen_assessment', 'visual_state', 'memory', 'next_goal', 'cache_intention', 'action']
 				return schema
 
 		model = create_model(
@@ -579,6 +596,17 @@ class AgentOutput(BaseModel):
 				Field(
 					...,
 					description='Immediate next visible move grounded in the current screenshot. Brief, ideally under 120 characters, but enough detail: do what, go where.',
+				),
+			),
+			cache_intention=(
+				str,
+				Field(
+					...,
+					description=(
+						'Durable cache/replay success criterion for this action. '
+						'Describe the reusable intention in one brief line under 160 characters. '
+						'Never include one-run specific titles, labels, prices, or article headlines.'
+					),
 				),
 			),
 			action=(
