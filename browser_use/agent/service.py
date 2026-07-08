@@ -25,7 +25,7 @@ from browser_use.agent.cloud_events import (
 )
 from browser_use.agent.message_manager.utils import save_conversation
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.exceptions import ModelProviderError, ModelRateLimitError
+from browser_use.llm.exceptions import ModelOutputTruncatedError, ModelProviderError, ModelRateLimitError
 from browser_use.llm.messages import BaseMessage, ContentPartImageParam, ContentPartTextParam, UserMessage
 from browser_use.tokens.service import TokenCost
 
@@ -258,7 +258,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		from browser_use.llm.google.chat import GEMINI_COMPUTER_USE_MODELS
 
 		is_gemini_coord_model = any(m in model_name_lower for m in GEMINI_COMPUTER_USE_MODELS)
-		is_claude_coord_model = any(m in model_name_lower for m in ('claude-sonnet-4', 'claude-opus-4'))
+		is_claude_coord_model = any(m in model_name_lower for m in ('claude-sonnet-4', 'claude-opus-4', 'claude-fable-5'))
 
 		supports_coordinate_clicking = (
 			is_gemini_coord_model
@@ -270,8 +270,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# Auto-configure llm_screenshot_size for Claude Sonnet models (letterbox math expects this).
 		# Gemini intentionally NOT auto-resized — per docs Gemini works at any resolution and returns
 		# normalized 0-999 coords regardless of input image size.
+		# rsplit drops any gateway provider prefix (e.g. 'anthropic/claude-sonnet-4-6') before matching.
 		if llm_screenshot_size is None:
-			if isinstance(model_name, str) and model_name_lower.startswith('claude-sonnet'):
+			if model_name_lower.rsplit('/', 1)[-1].startswith('claude-sonnet'):
 				llm_screenshot_size = (1400, 850)
 				logger.info('🖼️  Auto-configured LLM screenshot size for Claude Sonnet: 1400x850')
 
@@ -372,7 +373,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		if use_vision != 'auto':
 			self.tools.exclude_action('screenshot')
 
-		# Enable coordinate clicking for models that support it
+		# Enable coordinate clicking for models that support it (detected above via supports_coordinate_clicking)
 		if supports_coordinate_clicking:
 			self.tools.set_coordinate_clicking(True)
 
@@ -2258,8 +2259,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# 402: Insufficient credits/payment required - fallback to different provider
 		# 429: Rate limit exceeded
 		# 500, 502, 503, 504: Server errors
+		# ModelOutputTruncatedError: not retryable on the same model, but a fallback may have a higher cap
 		retryable_status_codes = {401, 402, 429, 500, 502, 503, 504}
-		is_retryable = isinstance(error, ModelRateLimitError) or (
+		is_retryable = isinstance(error, (ModelRateLimitError, ModelOutputTruncatedError)) or (
 			hasattr(error, 'status_code') and error.status_code in retryable_status_codes
 		)
 

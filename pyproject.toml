@@ -2,7 +2,7 @@
 name = "browser-use"
 description = "Make websites accessible for AI agents"
 authors = [{ name = "Gregor Zunic" }]
-version = "0.13.0"
+version = "0.13.4"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 classifiers = [
@@ -46,6 +46,7 @@ dependencies = [
     "markdownify==1.2.2",
     "python-docx==1.2.0",
     "browser-use-sdk==3.4.2",
+    "browser-harness==0.1.4",
     "selenium==4.41.0",
     "opencv-python==4.13.0.92",
 ]
@@ -57,16 +58,15 @@ dependencies = [
 # openai: datalib,voice-helpers are actually NOT NEEDED but openai produces noisy errors on exit without them TODO: fix
 # rich: used for terminal formatting and styling in CLI
 # click: used for command-line argument parsing
-# textual: used for terminal UI
 
 [project.optional-dependencies]
-cli = ["textual==7.4.0"]
+cli = []
 core = [
-    "browser-use-core==0.13.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "browser-use-core==0.13.0; sys_platform == 'darwin' and platform_machine == 'x86_64'",
-    "browser-use-core==0.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "browser-use-core==0.13.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "browser-use-core==0.13.0; sys_platform == 'win32' and (platform_machine == 'AMD64' or platform_machine == 'x86_64')",
+    "browser-use-core==0.13.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "browser-use-core==0.13.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "browser-use-core==0.13.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "browser-use-core==0.13.2; sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "browser-use-core==0.13.2; sys_platform == 'win32' and (platform_machine == 'AMD64' or platform_machine == 'x86_64')",
 ]
 aws = ["boto3==1.42.37"]
 oci = ["oci==2.166.0"]
@@ -103,11 +103,11 @@ Telemetry = "https://docs.browser-use.com/development/monitoring/telemetry"
 "Privacy Policy" = "https://browser-use.com/privacy/"
 
 [project.scripts]
-browser-use = "browser_use.skill_cli.main:main"  # Fast CLI for browser automation
-browseruse = "browser_use.skill_cli.main:main"  # Alias for browser-use
-bu = "browser_use.skill_cli.main:main"  # Alias for browser-use
-browser = "browser_use.skill_cli.main:main"  # Alias for browser-use
-browser-use-tui = "browser_use.cli:main"  # Legacy TUI interface
+browser-use = "browser_use.cli:main"  # Browser Use CLI for agents
+browseruse = "browser_use.cli:main"  # Alias for browser-use
+bu = "browser_use.cli:main"  # Alias for browser-use
+browser = "browser_use.cli:main"  # Alias for browser-use
+browser-use-tui = "browser_use.cli:browser_use_tui_main"  # Deprecated alias for browser-use
 
 [build-system]
 requires = ["hatchling"]
@@ -182,6 +182,7 @@ include = [
     "!browser_use/**/tests/*.py",
     "!browser_use/**/tests.py",
     "browser_use/cli_templates/*.py",
+    "browser_use/skills/**/*.md",
     "browser_use/py.typed",
     "!tests/**/*.py",
     "!debug/*",

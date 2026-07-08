@@ -38,30 +38,19 @@
 
 </br>
 
+**[Browser Use CLI 3.0 is here.](#-cli)** Give your coding agent a browser it can use reliably.
+
 🌤️ Want to skip the setup? Use our <b>[cloud](https://cloud.browser-use.com?utm_source=github&utm_medium=readme-skip-setup)</b> for faster, scalable, stealth-enabled browser automation!
 
-# 🤖 LLM Quickstart
-
-1. Direct your favorite coding agent (Cursor, Claude Code, etc) to [Agents.md](https://docs.browser-use.com/llms-full.txt)
-2. Prompt away!
-
-<br/>
+🤖 Give our docs to your coding agent: [llms-full.txt](https://docs.browser-use.com/llms-full.txt)
 
 # 👋 Human Quickstart
 
-Browser Use 0.13 introduces a new beta agent powered by a Rust core and a browser harness built for current frontier models. It gives the model a real browser/computer action space, persistent tools, and recovery loops inspired by coding agents.
-
-```text
-Python API -> Rust core -> Browser harness -> Web task done
-```
-
-**1. Install Browser Use with the native core runtime (Python>=3.11):**
+**1. Install Browser Use (Python>=3.11):**
 ```bash
-uv add "browser-use[core]"
-# or: pip install "browser-use[core]"
+uv add browser-use
+# or: pip install browser-use
 ```
-
-The `[core]` extra installs the native Browser Use runtime for your platform.
 
 **2. [Optional] Get your API key from [Browser Use Cloud](https://cloud.browser-use.com/new-api-key?utm_source=github&utm_medium=readme-quickstart-api-key):**
 ```
@@ -72,33 +61,26 @@ BROWSER_USE_API_KEY=your-key
 ```
 
 **3. Run your first agent:**
+
+**Python Script:**
 ```python
-from browser_use.beta import Agent, BrowserProfile, ChatBrowserUse
-# from browser_use.beta import ChatOpenAI  # ChatOpenAI(model='gpt-5.5')
-# from browser_use.beta import ChatGoogle  # ChatGoogle(model='gemini-3.1-pro-preview')
-# from browser_use.beta import ChatAnthropic  # ChatAnthropic(model='claude-opus-4-8')
 import asyncio
+
+from browser_use import Agent, BrowserProfile, ChatBrowserUse
 
 async def main():
     agent = Agent(
         task="Find the number of stars of the browser-use repo",
-        llm=ChatBrowserUse(),
+        llm=ChatBrowserUse(model='openai/gpt-5.5'),
+        # llm=ChatBrowserUse(model='bu-2-0'),  # Browser Use's optimized model
         # llm=ChatOpenAI(model='gpt-5.5'),
-        # llm=ChatGoogle(model='gemini-3.1-pro-preview'),
         # llm=ChatAnthropic(model='claude-opus-4-8'),  # Sonnet also works well.
-        browser_profile=BrowserProfile(
-            headless=False,
-            allowed_domains=["*.github.com"],
-        ),
     )
     history = await agent.run()
-    print(history.final_result())
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-
-Existing Python agent users can keep using `from browser_use import Agent`. The new Rust-powered beta agent is `from browser_use.beta import Agent`.
 
 Check out the [library docs](https://docs.browser-use.com/open-source/introduction) and the [cloud docs](https://docs.cloud.browser-use.com?utm_source=github&utm_medium=readme-cloud-docs) for more!
 
@@ -153,53 +135,27 @@ https://github.com/user-attachments/assets/ac34f75c-057a-43ef-ad06-5b2c9d42bf06
 [Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/pcpartpicker.py)
 
 
-### 💡See [more examples here ↗](https://docs.browser-use.com/examples) and give us a star!
-
-<br/>
-
-# 🚀 Template Quickstart
-
-**Want to get started even faster?** Generate a ready-to-run template:
-
-```bash
-uvx browser-use init --template default
-```
-
-This creates a `browser_use_default.py` file with a working example. Available templates:
-- `default` - Minimal setup to get started quickly
-- `advanced` - All configuration options with detailed comments
-- `tools` - Examples of custom tools and extending the agent
-
-You can also specify a custom output path:
-```bash
-uvx browser-use init --template default --output my_agent.py
-```
-
 <br/>
 
 # 💻 CLI
 
-Fast, persistent browser automation from the command line:
+**Browser Use CLI 3.0** lets your agents do work for you online with our highest accuracy yet. It is powered by [Browser Harness](https://github.com/browser-use/browser-harness), and it applies what we learned about [agent harnesses](https://browser-use.com/posts/bitter-lesson-agent-harnesses) and [agent frameworks](https://browser-use.com/posts/bitter-lesson-agent-frameworks): the latest models do best when you give them freedom, rather than abstracting away complexity. We provide your agents with a direct, dependable surface for acting in the browser.
 
 ```bash
-browser-use open https://example.com    # Navigate to URL
-browser-use state                       # See clickable elements
-browser-use click 5                     # Click element by index
-browser-use type "Hello"                # Type text
-browser-use screenshot page.png         # Take screenshot
-browser-use close                       # Close browser
+browser-use <<'PY'
+new_tab("https://example.com")
+print(page_info())
+PY
 ```
 
-The CLI keeps the browser running between commands for fast iteration. See [CLI docs](browser_use/skill_cli/README.md) for all commands.
+The CLI allows your agent to control the browser via Python, and it manages the browser in the background.
 
-### Claude Code Skill
+### Agent Skill
 
-For [Claude Code](https://claude.ai/code), install the skill to enable AI-assisted browser automation:
+For Claude Code, Codex, and other agents, paste this prompt into your agent:
 
-```bash
-mkdir -p ~/.claude/skills/browser-use
-curl -o ~/.claude/skills/browser-use/SKILL.md \
-  https://raw.githubusercontent.com/browser-use/browser-use/main/skills/browser-use/SKILL.md
+```text
+Install or upgrade browser-use to the latest stable version with uv using Python 3.12, register the skill from `browser-use skill`, and connect it to my browser. Follow https://github.com/browser-use/browser-use if setup or connection fails.
 ```
 
 <br/>
@@ -215,12 +171,22 @@ curl -o ~/.claude/skills/browser-use/SKILL.md \
 
 We optimized **ChatBrowserUse()** specifically for browser automation tasks. On avg it completes tasks 3-5x faster than other models with SOTA accuracy.
 
-**Pricing (per 1M tokens):**
-- Input tokens: $0.20
-- Cached input tokens: $0.02
-- Output tokens: $2.00
+For pricing and other LLM providers, see our [supported models documentation](https://docs.browser-use.com/supported-models).
+</details>
 
-For other LLM providers, see our [supported models documentation](https://docs.browser-use.com/supported-models).
+<details>
+<summary><b>Can I use Claude / GPT / Gemini through ChatBrowserUse?</b></summary>
+
+Yes. `ChatBrowserUse` accepts provider-prefixed model ids, so a single `BROWSER_USE_API_KEY` reaches all of them — no separate OpenAI/Anthropic/Google keys required:
+
+```python
+from browser_use import Agent, ChatBrowserUse
+
+llm = ChatBrowserUse(model='anthropic/claude-sonnet-4-6')  # or 'openai/gpt-5.5', 'google/gemini-3-pro'
+agent = Agent(task='...', llm=llm)
+```
+
+For the best speed and cost we still recommend the default `bu-*` models.
 </details>
 
 <details>
