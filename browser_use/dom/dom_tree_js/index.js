@@ -1,4 +1,4 @@
-﻿/**
+/**
  * DOM Tree Extraction Script for Browser-Use
  * 
  * This script is injected into pages via Playwright's page.evaluate() to extract
@@ -57,6 +57,44 @@
 	let iframeCount = 0;
 	const iframeNodes = [];
 
+	// Popup/overlay containers collected during the main walk (was a separate
+	// full-document querySelectorAll scan).
+	const popupContainers = [];
+
+	function maybeCollectPopup(element, style, rect) {
+		// Top document only: the old processPopupContainers scanned just the top
+		// document.querySelectorAll('*'). The main walk recurses into same-origin
+		// iframe bodies, so without this guard we would newly report iframe-internal
+		// popups and change the frozen popupContainers output.
+		if (element.ownerDocument !== document) return;
+		const zIndex = parseInt(style.zIndex, 10);
+		if (!(zIndex > 9000)) return;
+		const position = style.position;
+		if (position !== 'fixed' && position !== 'absolute') return;
+		if (style.display === 'none' || style.visibility === 'hidden') return;
+		if (rect.width <= 50 || rect.height <= 50) return;
+
+		const classes = (element.className || '').toString();
+		const id = element.id || '';
+		const combined = (classes + ' ' + id).toLowerCase();
+		const role = element.getAttribute('role');
+		const isLikelyPopup =
+			combined.includes('modal') || combined.includes('popup') ||
+			combined.includes('dialog') || combined.includes('overlay') ||
+			combined.includes('signin') || combined.includes('login') ||
+			combined.includes('consent') || combined.includes('cookie') ||
+			combined.includes('banner') ||
+			role === 'dialog' || role === 'alertdialog' ||
+			element.getAttribute('aria-modal') === 'true';
+
+		if (isLikelyPopup) {
+			popupContainers.push({ element, rect, zIndex, type: 'popup-container' });
+			if (debugMode) {
+				console.log(`[Browser-Use DOM] Detected popup container: ${element.tagName}#${id} z-index=${zIndex}`);
+			}
+		}
+	}
+
 	// Iframe coordinate offset tracking
 	// When processing elements inside same-origin iframes, getBoundingClientRect()
 	// returns coordinates relative to the iframe viewport, not the main document.
@@ -108,6 +146,23 @@
 		'[aria-modal="true"]',
 	];
 
+	// Precompute one combined selector so isElementInteractive does a single
+	// matches() call instead of ~30. Drop any token a given engine rejects
+	// (validated once here, not per node).
+	const COMBINED_INTERACTIVE_SELECTOR = (function () {
+		const valid = [];
+		const probe = document.createElement('div');
+		for (const sel of INTERACTIVE_SELECTORS) {
+			try {
+				probe.matches(sel);
+				valid.push(sel);
+			} catch (e) {
+				// Unsupported selector token on this engine — skip it.
+			}
+		}
+		return valid.join(',');
+	})();
+
 	// Elements to skip completely
 	const SKIP_TAGS = new Set([
 		'SCRIPT', 'STYLE', 'NOSCRIPT', 'META', 'LINK', 'HEAD', 'BR', 'HR'
@@ -125,7 +180,7 @@
 	 * Check if an element is visible in the viewport
 	 * Enhanced to detect elements hidden via offsetParent, pointer-events, and visibility:collapse
 	 */
-	function isElementVisible(element) {
+	function isElementVisible(element, style, rect) {
 		if (!element || !element.getBoundingClientRect) return false;
 
 		// Use modern checkVisibility API if available (checks ancestors too)
@@ -135,7 +190,7 @@
 			}
 		}
 
-		const style = window.getComputedStyle(element);
+		style = style || window.getComputedStyle(element);
 		if (style.display === 'none' ||
 			style.visibility === 'hidden' ||
 			style.visibility === 'collapse' ||
@@ -155,7 +210,7 @@
 			}
 		}
 
-		const rect = element.getBoundingClientRect();
+		rect = rect || element.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) {
 			return false;
 		}
@@ -165,12 +220,12 @@
 		const centerY = rect.top + rect.height / 2;
 		let clipCurr = element.parentElement;
 		while (clipCurr && clipCurr !== document.body && clipCurr !== document.documentElement) {
-			const style = window.getComputedStyle(clipCurr);
-			if (style.display === 'contents') {
+			const clipStyle = window.getComputedStyle(clipCurr);
+			if (clipStyle.display === 'contents') {
 				clipCurr = clipCurr.parentElement;
 				continue;
 			}
-			if (style.overflow !== 'visible' || style.overflowX !== 'visible' || style.overflowY !== 'visible') {
+			if (clipStyle.overflow !== 'visible' || clipStyle.overflowX !== 'visible' || clipStyle.overflowY !== 'visible') {
 				const parentRect = clipCurr.getBoundingClientRect();
 				if (centerX < parentRect.left || centerX > parentRect.right ||
 					centerY < parentRect.top || centerY > parentRect.bottom) {
@@ -202,13 +257,11 @@
 	/**
 	 * Check if an element is in the viewport (with expansion)
 	 */
-	function isInViewport(element, expansion = 0) {
+	function isInViewport(element, expansion = 0, rect) {
 		if (!element || !element.getBoundingClientRect) return false;
-
-		const rect = element.getBoundingClientRect();
+		rect = rect || element.getBoundingClientRect();
 		const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
 		const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-
 		return (
 			rect.bottom >= -expansion &&
 			rect.top <= viewportHeight + expansion &&
@@ -220,37 +273,34 @@
 	/**
 	 * Check if an element is interactive
 	 */
-	function isElementInteractive(element) {
+	function isElementInteractive(element, style) {
 		if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
 
-		// Check if element matches interactive selectors
-		for (const selector of INTERACTIVE_SELECTORS) {
-			try {
-				if (element.matches(selector)) {
-					// Filter out empty anchor tags
-					if (element.tagName === 'A') {
-						const text = (element.textContent || '').trim();
-						const ariaLabel = element.getAttribute('aria-label')?.trim();
-						const title = element.getAttribute('title')?.trim();
-						const hasImage = element.querySelector('img, svg, [role="img"]');
-						if (!text && !ariaLabel && !title && !hasImage) {
-							return false;  // Skip empty anchors
-						}
-					}
-					return true;
-				}
-			} catch (e) {
-				// Invalid selector, skip
-			}
+		let matchesInteractive = false;
+		try {
+			matchesInteractive = COMBINED_INTERACTIVE_SELECTOR && element.matches(COMBINED_INTERACTIVE_SELECTOR);
+		} catch (e) {
+			matchesInteractive = false;
 		}
 
-		// Check for click event listeners (heuristic)
+		if (matchesInteractive) {
+			if (element.tagName === 'A') {
+				const text = (element.textContent || '').trim();
+				const ariaLabel = element.getAttribute('aria-label')?.trim();
+				const title = element.getAttribute('title')?.trim();
+				const hasImage = element.querySelector('img, svg, [role="img"]');
+				if (!text && !ariaLabel && !title && !hasImage) {
+					return false;
+				}
+			}
+			return true;
+		}
+
 		const tagName = element.tagName.toUpperCase();
 		if (tagName === 'DIV' || tagName === 'SPAN') {
-			const style = window.getComputedStyle(element);
+			style = style || window.getComputedStyle(element);
 			if (style.cursor === 'pointer') return true;
 		}
-
 		return false;
 	}
 
@@ -258,204 +308,47 @@
 	 * Check if element is the topmost element at its position - enhanced version
 	 * that handles z-index, CSS positioning, and complex overlap scenarios
 	 */
-	function isTopElement(element) {
+	/**
+	 * Is this element the one the browser would hit at its center point?
+	 * Uses the real paint stack instead of hand-rolled z-index math. Hit-tests
+	 * against the element's OWN document (element.ownerDocument): inside a
+	 * same-origin iframe, getBoundingClientRect() is relative to the iframe's
+	 * own viewport, so we must query that document, not the top one. Elements
+	 * whose center is outside their document's viewport cannot be hit-tested and
+	 * are treated as top (still indexed when viewportExpansion > 0).
+	 */
+	function isTopElement(element, rect) {
 		if (!element || !element.getBoundingClientRect) return false;
-
-		const rect = element.getBoundingClientRect();
-
-		// Skip if element has zero dimensions
+		rect = rect || element.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return false;
 
+		const doc = element.ownerDocument || document;
+		const view = doc.defaultView || window;
 		const centerX = rect.left + rect.width / 2;
 		const centerY = rect.top + rect.height / 2;
 
-		// Check if center point is within viewport
 		if (centerX < 0 || centerY < 0 ||
-			centerX > window.innerWidth || centerY > window.innerHeight) {
-			return false;
+			centerX > view.innerWidth || centerY > view.innerHeight) {
+			return true;  // outside this document's viewport: cannot hit-test
 		}
 
 		try {
-			const topElement = document.elementFromPoint(centerX, centerY);
-			if (topElement === element) return true;
-			if (element.contains(topElement)) return true;
-
-			// Handle pointer-events: none wrappers: if the top element is an
-			// ancestor of our element, the element is effectively visible and
-			// clickable through the parent.
-			if (topElement && topElement.contains(element)) return true;
-
-			// Additional check: element might still be visible under a positioned sibling
-			// Check for overlapping elements with higher stacking priority
-			return !hasOverlappingHigherElement(element, rect);
+			const stack = doc.elementsFromPoint(centerX, centerY);
+			let top = null;
+			for (const el of stack) {
+				if (el.id === 'browser-use-highlight-container') continue;
+				if (el.classList && el.classList.contains('browser-use-highlight')) continue;
+				top = el;
+				break;
+			}
+			if (!top) return false;
+			if (top === element) return true;
+			if (element.contains(top)) return true;   // hit a descendant
+			if (top.contains(element)) return true;    // pointer-events wrapper on top
+			return false;
 		} catch (e) {
 			return false;
 		}
-	}
-
-	/**
-	 * Check if there's any overlapping element that should be on top
-	 * based on z-index stacking context and positioning
-	 */
-	function hasOverlappingHigherElement(element, elementRect) {
-		const elementStyle = window.getComputedStyle(element);
-		const elementZIndex = getZIndex(elementStyle);
-		const elementPosition = elementStyle.position;
-		const elementOpacity = parseFloat(elementStyle.opacity) || 1;
-
-		// Get parent stacking context
-		const parentStackingContext = getStackingContext(element);
-		const parentZIndex = parentStackingContext ? getZIndex(window.getComputedStyle(parentStackingContext)) : 'auto';
-
-		// Check siblings and cousins for overlapping elements with higher z-index
-		let current = element;
-		while (current && current !== document.body) {
-			const siblings = getVisibleSiblings(current);
-			for (const sibling of siblings) {
-				if (sibling === element) continue;
-
-				const siblingStyle = window.getComputedStyle(sibling);
-				const siblingZIndex = getZIndex(siblingStyle);
-				const siblingPosition = siblingStyle.position;
-				const siblingOpacity = parseFloat(siblingStyle.opacity) || 1;
-
-				// Skip invisible siblings
-				if (siblingOpacity < 0.1) continue;
-				if (siblingStyle.display === 'none') continue;
-				if (siblingStyle.visibility === 'hidden') continue;
-
-				// Check visual overlap
-				const siblingRect = sibling.getBoundingClientRect();
-				if (!rectsOverlap(elementRect, siblingRect)) continue;
-
-				// Compare stacking priority:
-				// 1. Elements with explicit z-index > auto
-				// 2. Positioned elements (absolute/fixed) > non-positioned
-				// 3. Higher z-index value wins
-				const elementPriority = getStackingPriority(elementZIndex, elementPosition, parentZIndex);
-				const siblingPriority = getStackingPriority(siblingZIndex, siblingPosition, parentZIndex);
-
-				if (siblingPriority > elementPriority) {
-					return true;
-				}
-			}
-			current = current.parentElement;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Parse z-index to numeric value for comparison
-	 */
-	function getZIndex(style) {
-		const zIndex = style.zIndex;
-		if (zIndex === 'auto') return -Infinity;
-		const parsed = parseInt(zIndex, 10);
-		return isNaN(parsed) ? -Infinity : parsed;
-	}
-
-	/**
-	 * Calculate stacking priority for comparison
-	 * Returns a tuple [base, zIndex, isPositioned] for lexicographic comparison
-	 */
-	function getStackingPriority(elementZIndex, elementPosition, parentZIndex) {
-		const isPositioned = elementPosition === 'absolute' || elementPosition === 'fixed' ||
-			elementPosition === 'relative' || elementPosition === 'sticky';
-		const hasExplicitZIndex = elementZIndex > -Infinity;
-
-		// Base priority: positioned elements have higher base priority
-		// Within same base, compare z-index values
-		// If z-index is 'auto' or negative, use parent context
-		const effectiveZIndex = hasExplicitZIndex ? elementZIndex : (parentZIndex > -Infinity ? parentZIndex : 0);
-
-		return [isPositioned ? 1 : 0, effectiveZIndex, isPositioned ? 1 : 0];
-	}
-
-	/**
-	 * Get visible siblings of an element (considering parent context)
-	 */
-	function getVisibleSiblings(element) {
-		if (!element.parentElement) return [];
-
-		const siblings = [];
-		const parent = element.parentElement;
-
-		// Get parent's children
-		for (const child of parent.children) {
-			if (child === element) continue;
-
-			const style = window.getComputedStyle(child);
-			if (style.display === 'none') continue;
-			if (parseFloat(style.opacity) < 0.1) continue;
-
-			siblings.push(child);
-		}
-
-		// Also check parent's cousins (siblings of parent) for fixed/absolute positioned elements
-		if (parent.parentElement && parent.parentElement !== document.body) {
-			for (const uncle of parent.parentElement.children) {
-				if (uncle === parent) continue;
-				if (uncle.tagName === 'SCRIPT' || uncle.tagName === 'STYLE') continue;
-
-				const uncleStyle = window.getComputedStyle(uncle);
-				const unclePosition = uncleStyle.position;
-				const uncleOpacity = parseFloat(uncleStyle.opacity) || 1;
-
-				// Only consider positioned siblings
-				if (unclePosition === 'fixed' || unclePosition === 'absolute') {
-					if (uncleOpacity >= 0.1 && uncleStyle.display !== 'none') {
-						// Add children of positioned uncle that might overlap
-						for (const cousin of uncle.children) {
-							const cousinStyle = window.getComputedStyle(cousin);
-							const cousinOpacity = parseFloat(cousinStyle.opacity) || 1;
-							if (cousinOpacity >= 0.1 && cousinStyle.display !== 'none') {
-								siblings.push(cousin);
-							}
-						}
-					}
-				}
-			}
-		}
-
-		return siblings;
-	}
-
-	/**
-	 * Find the nearest ancestor that creates a stacking context
-	 */
-	function getStackingContext(element) {
-		let current = element.parentElement;
-		while (current && current !== document.documentElement) {
-			const style = window.getComputedStyle(current);
-			const zIndex = style.zIndex;
-			const position = style.position;
-			const opacity = parseFloat(style.opacity) || 1;
-
-			// Elements that create stacking contexts
-			if (opacity < 1) return current;
-			if (zIndex !== 'auto') return current;
-			if (position === 'fixed') return current;
-			if (position === 'absolute' && zIndex !== 'auto') return current;
-			if (style.transform !== 'none' && style.transform !== 'matrix(1, 0, 0, 1, 0, 0)') return current;
-			if (style.filter !== 'none') return current;
-			if (style.perspective !== 'none') return current;
-			if (style.clipPath !== 'none') return current;
-
-			current = current.parentElement;
-		}
-		return null;
-	}
-
-	/**
-	 * Check if two rectangles overlap (with small tolerance for rounding)
-	 */
-	function rectsOverlap(rect1, rect2) {
-		const tolerance = 1;
-		return !(rect1.right + tolerance < rect2.left ||
-			rect2.right + tolerance < rect1.left ||
-			rect1.bottom + tolerance < rect2.top ||
-			rect2.bottom + tolerance < rect1.top);
 	}
 
 	/**
@@ -611,15 +504,18 @@
 			return null;
 		}
 
-		const isVisible = isElementVisible(node);
-		const inViewport = isInViewport(node, viewportExpansion);
-		const isInteractive = isElementInteractive(node);
-		const isTop = isTopElement(node);
+		const style = window.getComputedStyle(node);
+		const rect = node.getBoundingClientRect();
+
+		maybeCollectPopup(node, style, rect);
+
+		const isVisible = isElementVisible(node, style, rect);
+		const inViewport = isInViewport(node, viewportExpansion, rect);
+		const isInteractive = isElementInteractive(node, style);
+		const isTop = isTopElement(node, rect);
 
 		if (isVisible) perfMetrics.nodeMetrics.visibleNodes++;
 
-		// Get element bounds
-		const rect = node.getBoundingClientRect();
 		// Apply iframe offset to convert iframe-relative coords to main document coords
 		const viewport = {
 			x: rect.left + iframeOffsetX,
@@ -683,7 +579,6 @@
 		let isActuallyScrollable = false;
 		const hasOverflowContent = node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1;
 		if (hasOverflowContent) {
-			const style = window.getComputedStyle(node);
 			const overflow = style.overflow.toLowerCase();
 			const overflowX = style.overflowX.toLowerCase();
 			const overflowY = style.overflowY.toLowerCase();
@@ -921,71 +816,7 @@
 		}
 	}
 
-	/**
-	 * Detect and process high-z-index popup/overlay containers
-	 * These are often used for modals, login popups, cookie banners, etc.
-	 */
-	function processPopupContainers() {
-		const popupContainers = [];
 
-		// Find all elements with high z-index that might be popups
-		const allElements = document.querySelectorAll('*');
-
-		for (const element of allElements) {
-			if (SKIP_TAGS.has(element.tagName)) continue;
-
-			const style = window.getComputedStyle(element);
-			const zIndex = parseInt(style.zIndex, 10);
-			const position = style.position;
-
-			// Look for elements with:
-			// 1. High z-index (> 9000, common for overlays)
-			// 2. Fixed or absolute positioning
-			// 3. Visible and has dimensions
-			if (zIndex > 9000 &&
-				(position === 'fixed' || position === 'absolute') &&
-				style.display !== 'none' &&
-				style.visibility !== 'hidden') {
-
-				const rect = element.getBoundingClientRect();
-				if (rect.width > 50 && rect.height > 50) {
-					// Check if this looks like a popup container
-					const classes = element.className || '';
-					const id = element.id || '';
-					const combined = (classes + ' ' + id).toLowerCase();
-
-					const isLikelyPopup =
-						combined.includes('modal') ||
-						combined.includes('popup') ||
-						combined.includes('dialog') ||
-						combined.includes('overlay') ||
-						combined.includes('signin') ||
-						combined.includes('login') ||
-						combined.includes('consent') ||
-						combined.includes('cookie') ||
-						combined.includes('banner') ||
-						element.getAttribute('role') === 'dialog' ||
-						element.getAttribute('role') === 'alertdialog' ||
-						element.getAttribute('aria-modal') === 'true';
-
-					if (isLikelyPopup) {
-						popupContainers.push({
-							element: element,
-							rect: rect,
-							zIndex: zIndex,
-							type: 'popup-container'
-						});
-
-						if (debugMode) {
-							console.log(`[Browser-Use DOM] Detected popup container: ${element.tagName}#${id}.${classes.substring(0, 50)} z-index=${zIndex}`);
-						}
-					}
-				}
-			}
-		}
-
-		return popupContainers;
-	}
 
 	// Main execution
 	try {
@@ -1000,8 +831,6 @@
 			}
 		}
 
-		// Detect popup containers that might be overlaying page content
-		const popupContainers = processPopupContainers();
 		if (debugMode && popupContainers.length > 0) {
 			console.log(`[Browser-Use DOM] Detected ${popupContainers.length} popup containers`);
 		}
@@ -1022,145 +851,53 @@
 		// Strategy: For each element, check if it has ANY interactive descendant - if so, skip it
 		// This keeps only the innermost interactive elements
 		// Enhanced to also filter out visually overlapping elements (not just DOM containment)
-		const filteredInteractive = [];
-		const filteredOutParents = [];
-		const filteredOutOverlaps = [];
+		// O(n·depth) dedup. For each interactive element we walk UP to its first
+		// interactive ancestor and decide with the existing target/innermost
+		// rules. Each nesting level is resolved by its own walk, so no pairwise
+		// O(n^2) scan is needed. `drop` collects elements to filter out.
+		const interactiveElementSet = new Set(interactiveElements.map(it => it.element));
+		const drop = new Set();
 
-		for (let i = 0; i < interactiveElements.length; i++) {
-			const current = interactiveElements[i];
-			let shouldFilter = false;
-			let filterReason = null;
+		function isTargetEl(el) {
+			return el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'button';
+		}
 
-			for (let j = 0; j < interactiveElements.length; j++) {
-				if (i === j) continue;
-				const other = interactiveElements[j];
-
-				// Check if this element contains ANY other interactive element
-				// (Innermost rule: parents usually filter themselves out if they have interactive children)
-				if (current.element.contains(other.element) && current.element !== other.element) {
-					// EXCEPTION: If I am a link or button and the child is NOT a link/button, 
-					// I am the primary target, so keep me.
-					const currentIsTarget = current.element.tagName === 'A' || current.element.tagName === 'BUTTON' || current.element.getAttribute('role') === 'button';
-					const otherIsTarget = other.element.tagName === 'A' || other.element.tagName === 'BUTTON' || other.element.getAttribute('role') === 'button';
-
-					if (currentIsTarget && !otherIsTarget) {
-						// Don't filter parent link/button when child is just a generic interactive element
-						continue;
-					}
-
-					shouldFilter = true;
-					filterReason = 'contains';
-					if (debugMode) {
-						filteredOutParents.push({
-							parent: current,
-							child: other
-						});
-					}
-					break;
-				}
-
-				// Check if this element is CONTAINED by another interactive element
-				if (other.element.contains(current.element) && other.element !== current.element) {
-					// If my parent is a link or button and I am NOT a link/button, 
-					// the link/button is the primary target, so filter me out.
-					const otherIsTarget = other.element.tagName === 'A' || other.element.tagName === 'BUTTON' || other.element.getAttribute('role') === 'button';
-					const currentIsTarget = current.element.tagName === 'A' || current.element.tagName === 'BUTTON' || current.element.getAttribute('role') === 'button';
-
-					if (otherIsTarget && !currentIsTarget) {
-						// Don't filter if there's an intermediate button/interactive element
-						// between the target and this element. E.g. <a><button><span>Sign In</span></button></a>
-						// The span shouldn't be filtered by the distant <a> when <button> is in between.
-						let hasIntermediateButton = false;
-						let p = current.element.parentElement;
-						while (p && p !== other.element) {
-							if (p.tagName === 'BUTTON' || p.getAttribute('role') === 'button') {
-								hasIntermediateButton = true;
-								break;
-							}
-							p = p.parentElement;
+		for (const cur of interactiveElements) {
+			const curTarget = isTargetEl(cur.element);
+			let intermediateButton = false;
+			let a = cur.element.parentElement;
+			while (a) {
+				if (interactiveElementSet.has(a)) {
+					const aTarget = isTargetEl(a);
+					if (aTarget) {
+						if (curTarget) {
+							// Outer target contains an inner target -> keep the inner one.
+							drop.add(a);
+						} else if (!intermediateButton) {
+							// Generic descendant of a link/button -> the target is the
+							// click point; drop the descendant.
+							drop.add(cur.element);
 						}
-						if (!hasIntermediateButton) {
-							shouldFilter = true;
-							filterReason = 'contained-by-link';
-							break;
-						}
+						break;  // first target ancestor decides this element
+					} else {
+						// Outer parent is NOT a target (e.g. a div/span container) -> drop the parent.
+						drop.add(a);
+						// Keep walking upward: do NOT break, so we can reach target ancestors further up
 					}
 				}
-
-				// Check for visual overlap between non-ancestor elements
-				// This handles positioned siblings, modals, tooltips, etc.
-				if (!shouldFilter) {
-					const currentRect = current.rect;
-					const otherRect = other.rect;
-
-					// Check bounding box overlap with tolerance
-					if (rectsOverlap(currentRect, otherRect)) {
-						// Elements overlap visually - keep the one that should be on top
-						// Priority: element with smaller area is likely the intended target (button inside container)
-						// OR if one is marked as top element, keep that one
-						const currentArea = currentRect.width * currentRect.height;
-						const otherArea = otherRect.width * otherRect.height;
-
-						// Keep the smaller element (usually the button/link, not the container)
-						// UNLESS the current element is specifically marked as top
-						if (currentArea > otherArea && !current.isTop) {
-							shouldFilter = true;
-							filterReason = 'overlap';
-							if (debugMode) {
-								filteredOutOverlaps.push({
-									filtered: current,
-									kept: other,
-									reason: 'larger element overlapped by smaller'
-								});
-							}
-							break;
-						}
-					}
+				if (a.tagName === 'BUTTON' || a.getAttribute('role') === 'button') {
+					intermediateButton = true;
 				}
-			}
-
-			if (!shouldFilter) {
-				filteredInteractive.push(current);
+				a = a.parentElement;
 			}
 		}
 
-		if (debugMode) {
-			console.log(`[Browser-Use DOM] ==================== FILTERING RESULTS ====================`);
-			console.log(`[Browser-Use DOM] Filtered out ${interactiveElements.length - filteredInteractive.length} parent elements`);
-			filteredOutParents.forEach(({ parent, child }) => {
-				const pEl = parent.element;
-				const cEl = child.element;
-				console.log(`[Browser-Use DOM]   ❌ ${pEl.tagName}.${pEl.className || 'no-class'} (contains ${cEl.tagName}.${cEl.className || 'no-class'})`);
-			});
-			filteredOutOverlaps.forEach(({ filtered, kept, reason }) => {
-				const fEl = filtered.element;
-				const kEl = kept.element;
-				console.log(`[Browser-Use DOM]   ❌ ${fEl.tagName}.${fEl.className || 'no-class'} (overlap: ${reason}, kept ${kEl.tagName})`);
-			});
-			console.log(`[Browser-Use DOM] Kept ${filteredInteractive.length} innermost elements:`);
-			filteredInteractive.forEach((item, idx) => {
-				const el = item.element;
-				const rect = item.rect;
-				const text = el.textContent?.trim().substring(0, 30) || '';
-				console.log(`[Browser-Use DOM]   ✓ ${idx}: ${el.tagName}.${el.className || 'no-class'} "${text}" pos=(${Math.round(rect.left)},${Math.round(rect.top)})`);
-			});
-		}
+		const filteredInteractive = interactiveElements.filter(
+			it => it.isTop !== false && !drop.has(it.element)
+		);
 
 		if (debugMode) {
-			console.log(`[Browser-Use DOM] ==================== FILTERING RESULTS ====================`);
-			console.log(`[Browser-Use DOM] Filtered out ${interactiveElements.length - filteredInteractive.length} parent elements`);
-			filteredOutParents.forEach(({ parent, child }) => {
-				const pEl = parent.element;
-				const cEl = child.element;
-				console.log(`[Browser-Use DOM]   ❌ ${pEl.tagName}.${pEl.className || 'no-class'} (contains ${cEl.tagName}.${cEl.className || 'no-class'})`);
-			});
-			console.log(`[Browser-Use DOM] Kept ${filteredInteractive.length} innermost elements:`);
-			filteredInteractive.forEach((item, idx) => {
-				const el = item.element;
-				const rect = item.rect;
-				const text = el.textContent?.trim().substring(0, 30) || '';
-				console.log(`[Browser-Use DOM]   ✓ ${idx}: ${el.tagName}.${el.className || 'no-class'} "${text}" pos=(${Math.round(rect.left)},${Math.round(rect.top)})`);
-			});
+			console.log(`[Browser-Use DOM] Kept ${filteredInteractive.length}/${interactiveElements.length} interactive elements`);
 		}
 
 		// Sort filtered interactive elements by visual position (top-to-bottom, left-to-right)
