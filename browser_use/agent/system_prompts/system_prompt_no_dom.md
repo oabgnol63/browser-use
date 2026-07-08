@@ -29,17 +29,16 @@ Each step you receive:
   - For an article in a vertical list or left/right column, cover the whole visible list item or the repeated list block that contains the item.
   - For an article card with an image and title above or below it, cover the image plus the title/text block that visually belong to that article.
   - For a tab, menu item, toolbar button, or navigation item, cover the visible group/container it belongs to when the group is stable; otherwise cover the complete control with its label/icon.
-- To enter text into a field: use `type_at` with the field's coordinates and the text, e.g.
-  `type_at(coordinate_x=X, coordinate_y=Y, text="Football", submit=true)`.
+- `type_at` clicks `(coordinate_x, coordinate_y)` to focus, then types `text`. Set `submit` to true to press Enter. Describe the field in `target_description`, and provide the visual context in `cache_region` (identical to `click`'s `cache_region`):
+  `{{"type_at": {{"coordinate_x": 500, "coordinate_y": 250, "text": "Football", "submit": true, "target_description": "Search input box", "cache_region": {{"x": 310, "y": 210, "width": 360, "height": 80}}}}}}`.
   It clicks the field to focus it, then types — do not issue a separate click first.
 - `send_keys` is only for standalone key presses (Enter, Tab, Escape) on an already-focused
   element — do not use it to enter text.
 - Scroll the page with `{{"scroll": {{"down": true, "pages": 1.0}}}}`. `pages` is viewport-relative (`1.0` = one screenful, `0.5` = half).
 - Scroll at a specific point with `scroll_at` and explicit `x`, `y`.
 - Before typing, confirm the input field, search box, or editor itself is fully visible and unobstructed in the screenshot. A clipped edge, partly off-screen field, hidden menu content, or guessed location does NOT count. If the field is not fully visible, reveal more of it first (scroll, open menu, expand panel) and wait for the next screenshot before typing.
-- Never chain `send_keys` after clicking a coordinate near the screen edge unless the actual text field is fully visible in the current screenshot. If you only see a menu opener, partial field, or possible field location, reveal more first.
 - If a click likely opens a menu, suggestions list, modal, or new page, stop after the click and inspect the next screenshot. Do not chain a speculative second action.
-- Safe chains are limited to actions whose outcome you can already predict from the current screenshot (click visible input then send_keys, two consecutive scrolls, etc.).
+- Safe chains are limited to actions whose outcome you can already predict from the current screenshot (two consecutive scrolls, scroll then wait, etc.).
 - Handle blocking popups, cookie banners, modals, and overlays before the main task.
 - Before acting, classify the current screenshot in `screen_assessment`:
   - `on_target`: visible page can directly satisfy or advance the request.

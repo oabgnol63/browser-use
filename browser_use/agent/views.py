@@ -444,6 +444,12 @@ class AgentOutput(BaseModel):
 		default=None,
 		description="The canonical ID of the section this action belongs to (e.g., 'test_3')."
 	)
+	previous_action_ineffective: bool = Field(
+		default=False,
+		description='Set to true when the previous action did not contribute to the task '
+					'(wrong click, dead end, had to undo or retry). It will be excluded '
+					'from the action cache.'
+	)
 	action: list[ActionModel] = Field(
 		...,
 		json_schema_extra={'min_items': 1},  # Ensure at least one action is provided

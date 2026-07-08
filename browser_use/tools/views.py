@@ -331,7 +331,7 @@ class TypeAtAction(BaseModel):
 	text: str = Field(description='Text to type into the focused field')
 	submit: bool = Field(default=False, description='Press Enter after typing (submit the field)')
 	target_description: str | None = Field(default=None, description='Short description of the field, e.g. "search box"')
-	cache_region: dict | None = Field(default=None, description='Optional {x,y,width,height} context rect around the field, for cache anchor extraction (mirrors the click tool)')
+	cache_region: ClickCacheRegion | None = Field(default=None, description='Optional visual click context rect around the field, for cache anchor extraction (mirrors the click tool)')
 
 
 

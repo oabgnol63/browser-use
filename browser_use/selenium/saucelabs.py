@@ -2,7 +2,7 @@
 SauceLabs integration utilities for Selenium-based browser sessions.
 
 Provides helpers for creating and connecting to SauceLabs browser sessions
-with Firefox and Safari.
+with Firefox, Safari, and Internet Explorer.
 """
 
 import base64
@@ -85,7 +85,7 @@ def get_saucelabs_credentials() -> tuple[str, str]:
 
 
 def create_saucelabs_session(
-    browser: Literal['firefox', 'safari'] = 'firefox',
+    browser: Literal['firefox', 'safari', 'internet explorer', 'ie', 'iexplore'] = 'firefox',
     browser_version: str = 'latest',
     platform: str = 'Windows 10',
     test_name: str = 'browser-use-session',
@@ -100,7 +100,7 @@ def create_saucelabs_session(
     Create a new SauceLabs browser session.
     
     Args:
-        browser: Browser type ('firefox' or 'safari')
+        browser: Browser type ('firefox', 'safari', or 'internet explorer')
         browser_version: Browser version (e.g., 'latest', '120')
         platform: Operating system (e.g., 'Windows 10', 'macOS 13')
         test_name: Name for the SauceLabs session
@@ -117,6 +117,42 @@ def create_saucelabs_session(
     if not username or not access_key:
         username, access_key = get_saucelabs_credentials()
     
+    if browser in ('ie', 'iexplore', 'internet explorer'):
+        browser = 'internet explorer'
+        platform = 'Windows 10'
+        browser_version = '11.285'
+
+    # Normalize platform and browser_version for Safari / macOS
+    if browser == 'safari':
+        platform_lower = platform.lower()
+        # Default to macOS if Windows or generic 'latest' is passed as platform for Safari
+        if 'windows' in platform_lower or 'latest' in platform_lower or 'mac' not in platform_lower:
+            platform = 'macOS 15'
+            platform_lower = 'macos 15'
+        
+        # Map macOS names or major version numbers to SauceLabs platform names and latest Safari versions
+        macos_map = {
+            'sequoia': ('macOS 15', '18'),
+            'sonoma': ('macOS 14', '17'),
+            '15': ('macOS 15', '18'),
+            '14': ('macOS 14', '17'),
+        }
+        
+        matched = False
+        for key, (resolved_platform, resolved_safari_version) in macos_map.items():
+            if key in platform_lower:
+                platform = resolved_platform
+                if browser_version == 'latest':
+                    browser_version = resolved_safari_version
+                matched = True
+                break
+                
+        if not matched:
+            # Fallback for unrecognized platforms
+            if browser_version == 'latest':
+                browser_version = '18'
+                platform = 'macOS 15'
+
     # Build hub URL
     region_code = SAUCELABS_REGIONS.get(region, 'us-west-1')
     hub_url = SAUCELABS_HUB_URL.format(region=region_code)
@@ -179,8 +215,13 @@ def create_saucelabs_session(
         options.browser_version = browser_version
         options.platform_name = platform
         options.set_capability('sauce:options', sauce_options)
+    elif browser == 'internet explorer':
+        options = webdriver.IeOptions()
+        options.browser_version = browser_version
+        options.platform_name = platform
+        options.set_capability('sauce:options', sauce_options)
     else:
-        raise ValueError(f'Unsupported browser: {browser}. Use "firefox" or "safari".')
+        raise ValueError(f'Unsupported browser: {browser}. Use "firefox", "safari" or "internet explorer".')
     
     # Add any additional capabilities
     if additional_capabilities:

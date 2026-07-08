@@ -91,7 +91,7 @@ class SeleniumSession:
     @classmethod
     async def new_saucelabs_session(
         cls,
-        browser: Literal['firefox', 'safari'] = 'firefox',
+        browser: Literal['firefox', 'safari', 'internet explorer', 'ie', 'iexplore'] = 'firefox',
         browser_version: str = 'latest',
         platform: str = 'Windows 10',
         test_name: str = 'browser-use-session',
