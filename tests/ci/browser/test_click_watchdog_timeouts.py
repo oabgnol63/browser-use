@@ -64,6 +64,69 @@ async def test_click_coordinate_deadline_wraps_click_coro(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_click_deadline_timeout_has_labeled_message(monkeypatch):
+	"""A deadline expiry must raise a non-empty, self-identifying message, not a bare TimeoutError."""
+	import asyncio
+
+	from browser_use.browser.watchdogs.default_action_watchdog import _await_with_deadline
+
+	async def slow():
+		await asyncio.sleep(1.0)
+
+	deadline = time.monotonic() + 0.01
+	with pytest.raises(TimeoutError) as exc_info:
+		await _await_with_deadline(slow(), deadline, 'coordinate click')
+
+	message = str(exc_info.value)
+	assert message  # not empty
+	assert 'coordinate click' in message
+	assert 'event deadline' in message
+
+
+@pytest.mark.asyncio
+async def test_act_preserves_inner_labeled_timeout(monkeypatch):
+	"""Tools.act must keep the inner labeled timeout (naming the real operation) instead of
+	rewriting it as the generic outer per-action budget."""
+	from types import SimpleNamespace
+
+	from browser_use.tools.service import Tools
+
+	tools = Tools()
+
+	async def raise_labeled(**kwargs):
+		raise TimeoutError('coordinate click exceeded event deadline after 45.0s')
+
+	monkeypatch.setattr(tools.registry, 'execute_action', raise_labeled)
+
+	action = SimpleNamespace(model_dump=lambda exclude_unset=True: {'click': {'index': 1}})
+	result = await tools.act(action=action, browser_session=SimpleNamespace(), action_timeout=180)
+
+	assert result.error == 'coordinate click exceeded event deadline after 45.0s'
+
+
+@pytest.mark.asyncio
+async def test_act_reports_outer_budget_on_bare_timeout(monkeypatch):
+	"""When the outer asyncio.wait_for cap fires (bare, empty TimeoutError), act reports the
+	configured per-action budget rather than an empty message."""
+	import asyncio
+	from types import SimpleNamespace
+
+	from browser_use.tools.service import Tools
+
+	tools = Tools()
+
+	async def hang(**kwargs):
+		await asyncio.sleep(1.0)
+
+	monkeypatch.setattr(tools.registry, 'execute_action', hang)
+
+	action = SimpleNamespace(model_dump=lambda exclude_unset=True: {'click': {'index': 1}})
+	result = await tools.act(action=action, browser_session=SimpleNamespace(), action_timeout=0.05)
+
+	assert 'timed out after' in result.error
+
+
+@pytest.mark.asyncio
 async def test_click_element_deadline_wraps_click_coro(monkeypatch):
 	import asyncio
 

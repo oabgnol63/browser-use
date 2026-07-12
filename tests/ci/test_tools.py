@@ -9,11 +9,24 @@ import pytest
 from pydantic import BaseModel, Field
 from pytest_httpserver import HTTPServer
 
-from browser_use.agent.views import ActionResult
+from browser_use.agent.views import ActionResult, AgentError
 from browser_use.browser import BrowserSession
 from browser_use.browser.profile import BrowserProfile
 from browser_use.filesystem.file_system import FileSystem
-from browser_use.tools.service import Tools
+from browser_use.tools.service import Tools, _sanitize_error_message
+
+
+def test_sanitize_empty_error_falls_back_to_type_name():
+	"""A bare TimeoutError (empty str) must not sanitize to an empty message."""
+	assert _sanitize_error_message(TimeoutError()) == 'TimeoutError'
+	assert _sanitize_error_message(asyncio.TimeoutError()) == 'TimeoutError'
+	# Non-empty messages are preserved.
+	assert _sanitize_error_message(ValueError('boom')) == 'boom'
+
+
+def test_agent_error_format_empty_error_uses_class_name():
+	assert AgentError.format_error(TimeoutError()) == 'TimeoutError'
+	assert AgentError.format_error(RuntimeError('nope')) == 'nope'
 
 
 @pytest.fixture(scope='session')

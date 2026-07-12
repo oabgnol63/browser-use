@@ -3658,20 +3658,28 @@ Validated Code (after quote fixing):
 					except BrowserError as e:
 						logger.error(f'❌ Action {action_name} failed with BrowserError: {str(e)}')
 						result = handle_browser_error(e)
-					except TimeoutError:
-						# Covers both the per-action asyncio.wait_for cap and any inner
-						# TimeoutError that bubbled out of the handler.
-						logger.error(
-							f'❌ Action {action_name} hit the per-action timeout ({timeout_s:.0f}s) '
-							f'— likely an unresponsive CDP connection. Returning error so the agent can recover.'
-						)
-						result = ActionResult(
-							error=(
-								f'Action {action_name} timed out after {timeout_s:.0f}s. '
-								f'The browser may be unresponsive (dead CDP WebSocket). '
-								f'Try again or a different approach.'
+					except TimeoutError as e:
+						# The outer asyncio.wait_for cap raises a bare TimeoutError whose str() is
+						# empty. An inner handler (e.g. the click watchdog's _await_with_deadline)
+						# raises a labeled TimeoutError naming the real operation and elapsed time.
+						# Preserve the labeled inner message instead of rewriting it as the outer
+						# per-action budget, so state.last_result tells the LLM what actually failed.
+						inner_msg = str(e).strip()
+						if inner_msg:
+							logger.error(f'❌ Action {action_name} failed: {inner_msg}')
+							result = ActionResult(error=inner_msg)
+						else:
+							logger.error(
+								f'❌ Action {action_name} hit the per-action timeout ({timeout_s:.0f}s) '
+								f'— likely an unresponsive CDP connection. Returning error so the agent can recover.'
 							)
-						)
+							result = ActionResult(
+								error=(
+									f'Action {action_name} timed out after {timeout_s:.0f}s. '
+									f'The browser may be unresponsive (dead CDP WebSocket). '
+									f'Try again or a different approach.'
+								)
+							)
 					except Exception as e:
 						# Log the original exception with traceback for observability
 						logger.error(f"Action '{action_name}' failed with error: {str(e)}")

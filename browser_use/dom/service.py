@@ -24,7 +24,6 @@ from browser_use.dom.views import (
 	TargetAllTrees,
 )
 from browser_use.observability import observe_debug
-from browser_use.utils import create_task_with_error_handling
 
 if TYPE_CHECKING:
 	from browser_use.browser.session import BrowserSession
@@ -370,14 +369,26 @@ class DomService:
 
 		# Collect all frame IDs recursively
 		all_frame_ids = collect_all_frame_ids(frame_tree['frameTree'])
+		discovered_frames = len(all_frame_ids)
 
 		# Optionally skip iframe frames entirely (only include the top-level document)
 		if self.skip_iframe_documents and all_frame_ids:
 			root_frame_id = frame_tree['frameTree']['frame']['id']
 			all_frame_ids = [root_frame_id]
+		elif discovered_frames > self.max_iframes:
+			# Bound TOTAL AX work, not just per-batch fanout: root (index 0) plus at most
+			# max_iframes-1 child frames. Batching alone still permitted hundreds of requests.
+			all_frame_ids = all_frame_ids[: self.max_iframes]
+
+		# Track real concurrency so the cap is observable in logs and tests.
+		in_flight = 0
+		max_in_flight = 0
 
 		# Get accessibility tree for each frame, being resilient to child frames that disappeared
 		async def _fetch_ax_tree(frame_id: str, is_root: bool = False):
+			nonlocal in_flight, max_in_flight
+			in_flight += 1
+			max_in_flight = max(max_in_flight, in_flight)
 			try:
 				return await cdp_session.cdp_client.send.Accessibility.getFullAXTree(
 					params={'frameId': frame_id}, session_id=cdp_session.session_id
@@ -393,12 +404,22 @@ class DomService:
 					return None
 				self.logger.warning(f'AX tree request failed for frame {frame_id}: {msg}')
 				return None
+			finally:
+				in_flight -= 1
 
-		# Retrieve accessibility trees (the root frame is always index 0)
-		ax_trees = await asyncio.gather(
-			_fetch_ax_tree(all_frame_ids[0], is_root=True),
-			*[ _fetch_ax_tree(fid, is_root=False) for fid in all_frame_ids[1:] ],
-			return_exceptions=False
+		# ponytail: cap remote per-frame fanout; raise the batch size only if measurements justify it.
+		ax_trees = []
+		for start in range(0, len(all_frame_ids), 8):
+			batch = all_frame_ids[start : start + 8]
+			ax_trees.extend(
+				await asyncio.gather(
+					*(_fetch_ax_tree(frame_id, is_root=start + index == 0) for index, frame_id in enumerate(batch))
+				)
+			)
+
+		self.logger.info(
+			f'AX frames discovered={discovered_frames} selected={len(all_frame_ids)} '
+			f'skipped={discovered_frames - len(all_frame_ids)} batch_size=8 max_in_flight={max_in_flight}'
 		)
 
 		# Merge all AX nodes into a single array
@@ -414,24 +435,46 @@ class DomService:
 
 		return {'nodes': merged_nodes}
 
+	async def _run_bounded_phase(self, coro_factory, *, name: str, timeout: float, default):
+		"""Run an optional, fail-open pre-capture phase under a small budget.
+
+		On timeout, asyncio.wait_for cancels and awaits the inner task, so a slow phase
+		cannot consume the outer browser-state budget. Any failure returns the safe default
+		and lets snapshot/DOM/AX collection proceed.
+		"""
+		started = time.time()
+		try:
+			return await asyncio.wait_for(coro_factory(), timeout=timeout)
+		except (TimeoutError, asyncio.TimeoutError):
+			self.logger.warning(
+				f'⏱️ Optional pre-capture phase "{name}" exceeded {timeout:.1f}s budget '
+				f'after {time.time() - started:.1f}s; continuing with default'
+			)
+			return default
+		except Exception as e:
+			self.logger.debug(f'Optional pre-capture phase "{name}" failed after {time.time() - started:.1f}s: {e}; using default')
+			return default
+
 	async def _get_all_trees(self, target_id: TargetID) -> TargetAllTrees:
 		cdp_session = await self.browser_session.get_or_create_cdp_session(target_id=target_id, focus=False)
 
-		# Wait for the page to be ready first
-		try:
-			ready_state = await cdp_session.cdp_client.send.Runtime.evaluate(
+		# Wait for the page to be ready first (optional, bounded, fail-open).
+		await self._run_bounded_phase(
+			lambda: cdp_session.cdp_client.send.Runtime.evaluate(
 				params={'expression': 'document.readyState'}, session_id=cdp_session.session_id
-			)
-		except Exception as e:
-			pass  # Page might not be ready yet
+			),
+			name='readyState evaluation',
+			timeout=3.0,
+			default=None,
+		)
 		# DEBUG: Log before capturing snapshot
 		self.logger.debug(f'🔍 DEBUG: Capturing DOM snapshot for target {target_id}')
 
-		# Get actual scroll positions for all iframes before capturing snapshot
+		# Get actual scroll positions for all iframes before capturing snapshot (optional, bounded).
 		start_iframe_scroll = time.time()
 		iframe_scroll_positions = {}
-		try:
-			scroll_result = await cdp_session.cdp_client.send.Runtime.evaluate(
+		scroll_result = await self._run_bounded_phase(
+			lambda: cdp_session.cdp_client.send.Runtime.evaluate(
 				params={
 					'expression': """
 					(() => {
@@ -456,7 +499,12 @@ class DomService:
 					'returnByValue': True,
 				},
 				session_id=cdp_session.session_id,
-			)
+			),
+			name='iframe scroll-position evaluation',
+			timeout=3.0,
+			default=None,
+		)
+		try:
 			if scroll_result and 'result' in scroll_result and 'value' in scroll_result['result']:
 				iframe_scroll_positions = scroll_result['result']['value']
 				for idx, scroll_data in iframe_scroll_positions.items():
@@ -464,7 +512,7 @@ class DomService:
 						f'🔍 DEBUG: Iframe {idx} actual scroll position - scrollTop={scroll_data.get("scrollTop", 0)}, scrollLeft={scroll_data.get("scrollLeft", 0)}'
 					)
 		except Exception as e:
-			self.logger.debug(f'Failed to get iframe scroll positions: {e}')
+			self.logger.debug(f'Failed to parse iframe scroll positions: {e}')
 		iframe_scroll_ms = (time.time() - start_iframe_scroll) * 1000
 
 		# Detect elements with JavaScript click event listeners (without mutating DOM)
@@ -473,8 +521,9 @@ class DomService:
 		# The JS expression below bails out early if the page is too heavy.
 		# Elements are still detected via the accessibility tree and ClickableElementDetector.
 		start_js_listener_detection = time.time()
-		js_click_listener_backend_ids: set[int] = set()
-		try:
+
+		async def _detect_js_click_listeners() -> set[int]:
+			detected: set[int] = set()
 			# Step 1: Run JS to find elements with click listeners and return them by reference
 			js_listener_result = await cdp_session.cdp_client.send.Runtime.evaluate(
 				params={
@@ -551,7 +600,7 @@ class DomService:
 
 				# Resolve all element object IDs to backend node IDs in parallel
 				backend_ids = await asyncio.gather(*[get_backend_node_id(oid) for oid in element_object_ids])
-				js_click_listener_backend_ids = {bid for bid in backend_ids if bid is not None}
+				detected = {bid for bid in backend_ids if bid is not None}
 
 				# Release the array object to avoid memory leaks
 				try:
@@ -562,9 +611,18 @@ class DomService:
 				except Exception:
 					pass  # Best effort cleanup
 
-				self.logger.debug(f'Detected {len(js_click_listener_backend_ids)} elements with JS click listeners')
-		except Exception as e:
-			self.logger.debug(f'Failed to detect JS event listeners: {e}')
+				self.logger.debug(f'Detected {len(detected)} elements with JS click listeners')
+			return detected
+
+		# getProperties/describeNode/cleanup share one small budget; on heavy pages this whole
+		# phase previously ran 60s+ inside the outer state budget. AX + ClickableElementDetector
+		# still identify interactive elements when this enrichment is skipped.
+		js_click_listener_backend_ids = await self._run_bounded_phase(
+			_detect_js_click_listeners,
+			name='JS click-listener discovery',
+			timeout=3.0,
+			default=set(),
+		) or set()
 		js_listener_detection_ms = (time.time() - start_js_listener_detection) * 1000
 
 		# Define CDP request factories to avoid duplication
@@ -592,30 +650,37 @@ class DomService:
 
 		# Create initial tasks
 		tasks = {
-			'snapshot': create_task_with_error_handling(create_snapshot_request(), name='get_snapshot'),
-			'dom_tree': create_task_with_error_handling(create_dom_tree_request(), name='get_dom_tree'),
-			'ax_tree': create_task_with_error_handling(self._get_ax_tree_for_all_frames(target_id), name='get_ax_tree'),
-			'device_pixel_ratio': create_task_with_error_handling(self._get_viewport_ratio(target_id), name='get_viewport_ratio'),
+			'snapshot': asyncio.create_task(create_snapshot_request(), name='get_snapshot'),
+			'dom_tree': asyncio.create_task(create_dom_tree_request(), name='get_dom_tree'),
+			'ax_tree': asyncio.create_task(self._get_ax_tree_for_all_frames(target_id), name='get_ax_tree'),
+			'device_pixel_ratio': asyncio.create_task(self._get_viewport_ratio(target_id), name='get_viewport_ratio'),
 		}
 
 		# Wait for all tasks with timeout
 		self.logger.debug(f'🔍 Starting CDP calls with {primary_timeout}s timeout')
-		done, pending = await asyncio.wait(tasks.values(), timeout=primary_timeout)
+		try:
+			done, pending = await asyncio.wait(tasks.values(), timeout=primary_timeout)
+		except BaseException:
+			for task in tasks.values():
+				task.cancel()
+			await asyncio.gather(*tasks.values(), return_exceptions=True)
+			raise
 		self.logger.debug(f'🔍 Primary timeout completed, {len(done)} tasks done, {len(pending)} pending')
 
 		# Retry any failed or timed out tasks
 		if pending:
 			for task in pending:
 				task.cancel()
+			await asyncio.gather(*pending, return_exceptions=True)
 
 			# Retry mapping for pending tasks
 			retry_map = {
-				tasks['snapshot']: lambda: create_task_with_error_handling(create_snapshot_request(), name='get_snapshot_retry'),
-				tasks['dom_tree']: lambda: create_task_with_error_handling(create_dom_tree_request(), name='get_dom_tree_retry'),
-				tasks['ax_tree']: lambda: create_task_with_error_handling(
+				tasks['snapshot']: lambda: asyncio.create_task(create_snapshot_request(), name='get_snapshot_retry'),
+				tasks['dom_tree']: lambda: asyncio.create_task(create_dom_tree_request(), name='get_dom_tree_retry'),
+				tasks['ax_tree']: lambda: asyncio.create_task(
 					self._get_ax_tree_for_all_frames(target_id), name='get_ax_tree_retry'
 				),
-				tasks['device_pixel_ratio']: lambda: create_task_with_error_handling(
+				tasks['device_pixel_ratio']: lambda: asyncio.create_task(
 					self._get_viewport_ratio(target_id), name='get_viewport_ratio_retry'
 				),
 			}
@@ -629,11 +694,19 @@ class DomService:
 
 			# Wait again with extended retry timeout
 			self.logger.debug(f'🔍 Retrying with {retry_timeout}s timeout')
-			done2, pending2 = await asyncio.wait([t for t in tasks.values() if not t.done()], timeout=retry_timeout)
+			try:
+				done2, pending2 = await asyncio.wait([t for t in tasks.values() if not t.done()], timeout=retry_timeout)
+			except BaseException:
+				for task in tasks.values():
+					if not task.done():
+						task.cancel()
+				await asyncio.gather(*tasks.values(), return_exceptions=True)
+				raise
 
 			if pending2:
 				for task in pending2:
 					task.cancel()
+				await asyncio.gather(*pending2, return_exceptions=True)
 
 		# Extract results, tracking which ones failed
 		results = {}
@@ -650,14 +723,23 @@ class DomService:
 				self.logger.warning(f'🔍 ❌ {key} timed out or was cancelled')
 				failed.append(key)
 
-		# If any required tasks failed, raise an exception
-		if failed:
-			raise TimeoutError(f'CDP requests failed or timed out: {", ".join(failed)}')
+		# Only snapshot + DOM are required. AX and device-pixel-ratio are optional enrichment;
+		# discarding a valid snapshot+DOM state because AX alone timed out is the wrong contract.
+		required_failed = [key for key in ('snapshot', 'dom_tree') if key in failed]
+		if required_failed:
+			raise TimeoutError(f'Required CDP requests failed or timed out: {", ".join(required_failed)}')
 
 		snapshot = results['snapshot']
 		dom_tree = results['dom_tree']
-		ax_tree = results['ax_tree']
-		device_pixel_ratio = results['device_pixel_ratio']
+
+		if 'ax_tree' in results:
+			ax_tree = results['ax_tree']
+		else:
+			self.logger.warning('AX unavailable after bounded retry; continuing with snapshot+DOM state')
+			ax_tree = {'nodes': []}
+
+		# Missing/failed ratio falls back to 1.0 rather than failing the whole state.
+		device_pixel_ratio = results.get('device_pixel_ratio') or 1.0
 		end_cdp_calls = time.time()
 		cdp_calls_ms = (end_cdp_calls - start_cdp_calls) * 1000
 
@@ -667,7 +749,7 @@ class DomService:
 		# DEBUG: Log snapshot info and limit documents to prevent explosion
 		if snapshot and 'documents' in snapshot:
 			strings = snapshot['strings']
-			
+
 			# Filter out irrelevant documents (about:blank, tc_frame)
 			filtered_documents = []
 			for doc in snapshot['documents']:
@@ -675,9 +757,9 @@ class DomService:
 				if doc_url == 'about:blank' or 'tc_frame' in doc_url:
 					continue
 				filtered_documents.append(doc)
-			
+
 			snapshot['documents'] = filtered_documents
-			
+
 			original_doc_count = len(snapshot['documents'])
 			# Limit to max_iframes documents to prevent iframe explosion
 			if original_doc_count > self.max_iframes:
@@ -968,7 +1050,7 @@ class DomService:
 			# only do this if the iframe is visible (otherwise it's not worth it)
 			# Skip cross-origin iframe processing when skip_iframe_documents is True
 			if (
-				not self.skip_iframe_documents and 
+				not self.skip_iframe_documents and
 				# TODO: hacky way to disable cross origin iframes for now
 				self.cross_origin_iframes and node['nodeName'].upper() == 'IFRAME' and node.get('contentDocument', None) is None
 			):  # None meaning there is no content
