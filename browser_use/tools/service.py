@@ -107,7 +107,12 @@ def _sanitize_error_message(error: Exception, max_length: int = 500) -> str:
 	This function extracts just the meaningful part of the error.
 	"""
 	error_str = str(error)
-	
+
+	# Empty exception string (e.g. bare asyncio.TimeoutError) reduces to nothing —
+	# fall back to the exception class so the failure is still self-identifying.
+	if not error_str.strip():
+		return type(error).__name__
+
 	# Check for Selenium-style embedded stacktrace (common in WebDriver exceptions)
 	stacktrace_markers = ['\nStacktrace:', '\nStacktrace\n', 'Stacktrace:']
 	for marker in stacktrace_markers:

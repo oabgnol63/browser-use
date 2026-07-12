@@ -95,6 +95,7 @@ def create_saucelabs_session(
     additional_capabilities: dict | None = None,
     extension_path: Union[str, list[str], None] = None,
     firefox_preferences: dict | None = None,
+    extended_debugging: bool = False,
 ) -> WebDriver:
     """
     Create a new SauceLabs browser session.
@@ -110,6 +111,8 @@ def create_saucelabs_session(
         additional_capabilities: Additional W3C capabilities
         extension_path: Path(s) to Firefox extension(s) to install
         firefox_preferences: Additional Firefox preferences to apply
+        extended_debugging: Enable SauceLabs extended debugging (browser console
+            logs + network HAR in the dashboard; Firefox/Chrome only)
 
     Returns:
         Selenium WebDriver connected to SauceLabs
@@ -165,7 +168,10 @@ def create_saucelabs_session(
         'build': 'browser-use',
         'idleTimeout': 300,
         'maxDuration': 1800,
+        'seleniumVersion': '4.41.0',
     }
+    if extended_debugging and browser == 'firefox':
+        sauce_options['extendedDebugging'] = True
 
     # Force always-visible scrollbars before the browser launches.
     # Keep the macOS entry as a placeholder; update the storage/URL target after upload.
@@ -194,6 +200,10 @@ def create_saucelabs_session(
         options.browser_version = browser_version
         options.platform_name = platform
         options.set_capability('sauce:options', sauce_options)
+        # Heavy lazy-loading pages flip readyState off 'complete' continuously;
+        # under the default 'normal' strategy every WebDriver command blocks on
+        # that (see comparator2 docs/2026-07-08-firefox-scroll-timeout-cascade-fix.md).
+        options.set_capability('pageLoadStrategy', 'eager')
 
         # Add default extensions
         for ext_info in DEFAULT_FIREFOX_EXTENSIONS:
@@ -209,12 +219,16 @@ def create_saucelabs_session(
         with open(os.path.join(chrome_dir, "userChrome.css"), "w") as f:
             f.write("#remote-control-box { display: none !important; }\\n")
             f.write("#urlbar-background { background-image: none !important; box-shadow: none !important; }")
+        if firefox_preferences:
+            for pref_name, pref_value in firefox_preferences.items():
+                profile.set_preference(pref_name, pref_value)
         options.profile = profile
     elif browser == 'safari':
         options = webdriver.SafariOptions()
         options.browser_version = browser_version
         options.platform_name = platform
         options.set_capability('sauce:options', sauce_options)
+        options.set_capability('pageLoadStrategy', 'eager')
     elif browser == 'internet explorer':
         options = webdriver.IeOptions()
         options.browser_version = browser_version

@@ -69,8 +69,14 @@ async def _await_with_deadline(awaitable, deadline: float | None, label: str):
 	if remaining is None:
 		return await awaitable
 	if remaining <= 0:
-		raise TimeoutError(f'{label} exceeded click event deadline')
-	return await asyncio.wait_for(awaitable, timeout=remaining)
+		raise TimeoutError(f'{label} exceeded event deadline (0.0s remaining)')
+	# asyncio.wait_for raises a bare TimeoutError whose str() is empty; relabel it so the
+	# failure names the operation and elapsed time instead of collapsing to a counter.
+	started = time.monotonic()
+	try:
+		return await asyncio.wait_for(awaitable, timeout=remaining)
+	except (TimeoutError, asyncio.TimeoutError):
+		raise TimeoutError(f'{label} exceeded event deadline after {time.monotonic() - started:.1f}s')
 
 
 def _cap_timeout_to_deadline(timeout_seconds: float, deadline: float | None) -> float:

@@ -100,6 +100,7 @@ class SeleniumSession:
         access_key: str | None = None,
         extension_path: str | list[str] | None = None,
         firefox_preferences: dict | None = None,
+        extended_debugging: bool = False,
         logger: logging.Logger | None = None,
     ) -> 'SeleniumSession':
         """
@@ -115,6 +116,7 @@ class SeleniumSession:
             access_key: SauceLabs access key (or use SAUCE_ACCESS_KEY env)
             extension_path: Path to Firefox extension to install
             firefox_preferences: Additional Firefox preferences to apply
+            extended_debugging: Enable SauceLabs extended debugging (console + HAR)
             logger: Optional logger
 
         Returns:
@@ -136,6 +138,7 @@ class SeleniumSession:
                 access_key=access_key,
                 extension_path=extension_path,
                 firefox_preferences=firefox_preferences,
+                extended_debugging=extended_debugging,
             )
         )
 

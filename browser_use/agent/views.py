@@ -1126,9 +1126,11 @@ class AgentError:
 
 			return helpful_msg
 
+		# Empty exception string (e.g. bare asyncio.TimeoutError) → use the class name.
+		error_text = str(error) or type(error).__name__
 		if include_trace:
-			return f'{str(error)}\nStacktrace:\n{traceback.format_exc()}'
-		return f'{str(error)}'
+			return f'{error_text}\nStacktrace:\n{traceback.format_exc()}'
+		return error_text
 
 
 class DetectedVariable(BaseModel):

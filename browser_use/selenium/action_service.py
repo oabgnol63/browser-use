@@ -849,16 +849,29 @@ class SeleniumActionService:
         self.logger.debug(f'Scrolling {direction} by {amount}px')
         
         try:
-            # Split the scroll amount into random chunks to simulate human scrolling
+            # Scroll in a few jittered steps to mimic human motion, but CAP the step
+            # count. Each step is a separate execute_script round-trip that re-fires the
+            # page's synchronous scroll handlers; the original unbounded split produced
+            # ~10-30 round-trips, which on heavy pages (e.g. CNN) cumulatively exceeded
+            # the bubus 30s handler timeout and then cascaded into every later scroll
+            # timing out on the serialized WebDriver session. A small cap keeps the human
+            # feel while bounding worst-case time well under the timeout.
+            # See safeview docs/2026-07-08-firefox-scroll-timeout-cascade-fix.md.
+            MAX_SCROLL_STEPS = 4
+            STEP_TARGET_PX = 250
+
             chunks = []
-            remaining = amount
             if amount != 0:
-                while abs(remaining) > 0:
-                    step = random.randint(min(20, abs(remaining)), min(100, abs(remaining)))
-                    if remaining < 0:
-                        step = -step
+                n_steps = max(1, min(MAX_SCROLL_STEPS, (abs(amount) + STEP_TARGET_PX - 1) // STEP_TARGET_PX))
+                base = amount / n_steps
+                assigned = 0
+                for i in range(n_steps):
+                    if i == n_steps - 1:
+                        step = amount - assigned  # last step absorbs rounding + jitter drift
+                    else:
+                        step = int(base * random.uniform(0.8, 1.2))
+                        assigned += step
                     chunks.append(step)
-                    remaining -= step
 
             # Helper for execution
             async def run_smooth_scroll(is_iframe_context: bool, frame_selector: str = ""):
@@ -866,11 +879,11 @@ class SeleniumActionService:
                 for chunk in chunks:
                     cx = chunk if direction == 'right' else -chunk if direction == 'left' else 0
                     cy = chunk if direction == 'down' else -chunk if direction == 'up' else 0
-                    
+
                     if element_node:
                         xpath = element_node.attributes.get('xpath') or self._generate_xpath(element_node)
                         script = f"""
-                            var element = document.evaluate('{xpath}', document, null, 
+                            var element = document.evaluate('{xpath}', document, null,
                                 XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                             if (element) {{
                                 element.scrollBy({cx}, {cy});
@@ -880,18 +893,18 @@ class SeleniumActionService:
                         """
                     else:
                         script = f"window.scrollBy({cx}, {cy}); return true;"
-                        
+
                     if is_iframe_context:
                         result = await self.iframe_handler.execute_in_frame(frame_selector, script)
                     else:
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, lambda s=script: self.driver.execute_script(s)
                         )
-                    
+
                     if not result and element_node:
                         break  # element not found
                     success = result or not element_node
-                    await asyncio.sleep(random.uniform(0.01, 0.05))
+                    await asyncio.sleep(random.uniform(0.05, 0.15))
                 return success
 
             if element_node:

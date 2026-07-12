@@ -3122,6 +3122,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				await self._after_action_execution(action, action_name, i, total_actions, result, action_context)
 
 				if result.error:
+					# Normal-run visibility: _demo_mode_log only emits in demo mode, so the
+					# real failure was previously reduced to a consecutive-failure counter.
+					self.logger.warning(f'Action {action_name} failed at step {self.state.n_steps}: {result.error}')
 					await self._demo_mode_log(
 						f'Action "{action_name}" failed: {result.error}',
 						'error',
